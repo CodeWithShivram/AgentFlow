@@ -35,9 +35,9 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
 - Node 24 / npm 11. Use npm, not pnpm. `frontend/.npmrc` saves exact versions; use `npm ci` for clean installs.
 - Next.js 16 differs from older versions: read `frontend/node_modules/next/dist/docs/` before writing Next code (see `frontend/AGENTS.md`).
 - Run all gates: `powershell -ExecutionPolicy Bypass -File scripts/check.ps1`.
-- Docker Desktop must be running for PostgreSQL/Redis:
-  `docker compose -f infrastructure/docker/docker-compose.yml up -d | ps | logs | down`
-- Never remove volumes (`down -v`) without explicit user confirmation.
+- Docker Desktop must be running for PostgreSQL/Redis. Manage them with
+  `powershell -ExecutionPolicy Bypass -File scripts/infra.ps1 <up|ps|logs|down|restart>` (reads repo-root `.env`).
+- Never remove volumes (`down -v`, `infra.ps1 destroy-data`) without explicit user confirmation.
 
 ## Quality gates
 - Backend: `uv run ruff format --check .`, `uv run ruff check .`, `uv run mypy app tests`, `uv run pytest`.

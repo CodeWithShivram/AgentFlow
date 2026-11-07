@@ -10,7 +10,8 @@ Universal multi-agent AI orchestration platform. A natural-language request is p
 |---|---|
 | `backend/` | FastAPI API (and, from Step 1.8, Celery worker). Python 3.12, managed with uv. |
 | `frontend/` | Next.js App Router UI. TypeScript strict, npm. |
-| `scripts/` | Developer scripts (`check.ps1` runs all quality gates). |
+| `infrastructure/docker/` | Docker Compose for local PostgreSQL and Redis. |
+| `scripts/` | Developer scripts (`check.ps1` runs all quality gates, `infra.ps1` manages local infrastructure). |
 | `docs/ADR/` | Architecture decision records. |
 
 ## Runtime versions
@@ -23,6 +24,9 @@ Universal multi-agent AI orchestration platform. A natural-language request is p
 | npm | 11.x (11.6.2 tested) |
 | Next.js / React | 16.4.5 / 19.3.0 |
 | FastAPI | 0.162.1 |
+| PostgreSQL (Docker) | 18.6-alpine |
+| Redis (Docker) | 8.10.3-alpine |
+| Docker / Compose | 29.8.2 / v5.6.0 tested |
 
 Exact dependency versions are locked in `backend/uv.lock` and `frontend/package-lock.json`.
 
@@ -31,6 +35,27 @@ Exact dependency versions are locked in `backend/uv.lock` and `frontend/package-
 1. [uv](https://docs.astral.sh/uv/) — then `uv python install 3.12`.
 2. Node.js 24 with npm.
 3. Docker Desktop (required from Step 1.2 for PostgreSQL and Redis).
+
+## Local infrastructure (PostgreSQL, Redis)
+
+PostgreSQL 18.6 and Redis 8.10.3 run in Docker Compose (`infrastructure/docker/docker-compose.yml`), bound to `127.0.0.1` only, with named volumes and health checks.
+
+One-time setup: copy `.env.example` to `.env` and replace each `change-me` password.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/infra.ps1 up        # start and wait until healthy
+powershell -ExecutionPolicy Bypass -File scripts/infra.ps1 ps        # status
+powershell -ExecutionPolicy Bypass -File scripts/infra.ps1 logs      # last 200 log lines
+powershell -ExecutionPolicy Bypass -File scripts/infra.ps1 down      # stop (data kept)
+powershell -ExecutionPolicy Bypass -File scripts/infra.ps1 restart   # recreate containers (data kept)
+```
+
+| Service | Host address | Credentials |
+|---|---|---|
+| PostgreSQL | `127.0.0.1:${POSTGRES_PORT}` (default 5432), database `${POSTGRES_DB}` | `POSTGRES_USER` / `POSTGRES_PASSWORD` from `.env` |
+| Redis | `127.0.0.1:${REDIS_PORT}` (default 6379) | `REDIS_PASSWORD` from `.env` |
+
+Data lives in the Docker volumes `agentflow_postgres-data` and `agentflow_redis-data`. `down` and `restart` never delete them. To wipe all local data deliberately, run `scripts/infra.ps1 destroy-data`, which asks you to type `DELETE` first. This cannot be undone.
 
 ## Backend
 

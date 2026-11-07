@@ -12,8 +12,8 @@ Phase 1 steps come directly from the handoff (§17). Phases 2–8 are numbered h
 | Step | Title | Status | Commit |
 |---|---|---|---|
 | 1.0 | Repository reconnaissance and implementation plan | DONE | `16a9b59` |
-| 1.1 | Monorepo and developer tooling | DONE | see `progress.md` |
-| 1.2 | Local infrastructure (PostgreSQL, Redis) | NOT_STARTED | |
+| 1.1 | Monorepo and developer tooling | DONE | `80e28ce` |
+| 1.2 | Local infrastructure (PostgreSQL, Redis) | DONE | see `progress.md` |
 | 1.3 | Backend foundation | NOT_STARTED | |
 | 1.4 | Database and migrations | NOT_STARTED | |
 | 1.5 | Authentication and workspace authorization | NOT_STARTED | |
@@ -34,7 +34,7 @@ Phase 1 steps come directly from the handoff (§17). Phases 2–8 are numbered h
 - Commit: `chore: initialize AgentFlow monorepo`
 
 ### 1.2 — Local infrastructure
-- Depends on: 1.1; **Docker Desktop running** (B-1).
+- Depends on: 1.1; Docker Desktop running.
 - Acceptance: `infrastructure/docker/docker-compose.yml` with PostgreSQL and Redis bound to `127.0.0.1`, named volumes, health checks; documented start/stop/logs/reset; host connection verified; routine reset does not delete volumes.
 - Commit: `infra: add local PostgreSQL and Redis`
 
