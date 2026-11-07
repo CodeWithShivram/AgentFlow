@@ -48,6 +48,8 @@ class Settings(BaseSettings):
     redis_socket_timeout_seconds: float = Field(default=2.0, gt=0, le=60)
 
     health_check_timeout_seconds: float = Field(default=2.0, gt=0, le=30)
+    # How long an idempotency key is remembered (default 24 h, max 30 days).
+    idempotency_key_ttl_seconds: int = Field(default=86_400, ge=60, le=2_592_000)
 
     @model_validator(mode="after")
     def _reject_placeholder_secrets_in_production(self) -> "Settings":

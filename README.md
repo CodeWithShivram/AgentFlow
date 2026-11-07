@@ -25,6 +25,7 @@ Universal multi-agent AI orchestration platform. A natural-language request is p
 | Next.js / React | 16.4.5 / 19.3.0 |
 | FastAPI | 0.162.1 |
 | SQLAlchemy / psycopg / redis-py | 2.1.8 / 3.3.8 / 8.1.0 |
+| Alembic | 1.20.1 |
 | PostgreSQL (Docker) | 18.6-alpine |
 | Redis (Docker) | 8.10.3-alpine |
 | Docker / Compose | 29.8.2 / v5.6.0 tested |
@@ -65,6 +66,7 @@ Requires the repo-root `.env` (see Configuration). Start the infrastructure firs
 ```powershell
 cd backend
 uv sync                                   # creates backend\.venv with Python 3.12 + dev tools
+uv run alembic upgrade head               # create or update the database schema
 uv run uvicorn app.main:create_app --factory --reload --port 8000 --loop asyncio:SelectorEventLoop
 ```
 
@@ -84,15 +86,40 @@ Each dependency check times out after `HEALTH_CHECK_TIMEOUT_SECONDS` (default 2)
 - Errors use one shape: `{"error": {"code", "message", "request_id", "details"}}`. Stack traces and exception text are never returned.
 - Logs are JSON lines on stdout. Passwords, tokens, URL credentials and configured secrets are redacted.
 
+### Database and migrations
+
+The schema is managed by Alembic (`backend/alembic/`). Migrations read the database URL from the repo-root `.env`. Run them from `backend/`:
+
+```powershell
+uv run alembic upgrade head               # apply all migrations
+uv run alembic current                    # show the applied revision
+uv run alembic downgrade -1               # revert the last migration (local databases only)
+uv run alembic check                      # fails if the models and migrations have drifted
+uv run alembic revision --autogenerate -m "describe change"   # draft a new migration, then review it by hand
+```
+
+| Table | Purpose |
+|---|---|
+| `users` | Accounts (email unique case-insensitively; only password hashes are stored) |
+| `workspaces`, `workspace_members` | Tenants and membership with roles OWNER / ADMIN / MEMBER / VIEWER |
+| `agents`, `agent_versions` | Agent definitions (`workspace_id` NULL = built-in) and immutable configuration versions |
+| `workflows`, `workflow_tasks`, `task_dependencies` | Requests, their tasks and the dependency DAG |
+| `workflow_events` | Append-only history (`UPDATE` is rejected by a trigger), ordered by `sequence` |
+| `idempotency_keys` | Stored responses for retried requests; expire after `IDEMPOTENCY_KEY_TTL_SECONDS` (default 24 h) |
+
+Workspace isolation is enforced by the database: child rows carry `workspace_id`, and composite foreign keys stop them pointing into another workspace or workflow. Deleting a workspace deletes all of its data. Conventions, deletion rules and the idempotency design are in [ADR-0006](docs/ADR/0006-core-schema-and-idempotency.md).
+
 Checks:
 
 ```powershell
 uv run ruff format --check .
 uv run ruff check .
-uv run mypy app tests
+uv run mypy app tests alembic
 uv run pytest                             # all tests; integration tests need the infrastructure running
 uv run pytest -m "not integration"        # unit tests only, no infrastructure needed
 ```
+
+Integration tests create throwaway databases named `agentflow_test_*` on the local server, migrate them, and drop them afterwards. Your development database is never touched.
 
 ## Frontend
 

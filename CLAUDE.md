@@ -21,6 +21,11 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
 - Backend layout: `app/core/` (config, logging, request_id, errors, redis), `app/db/` (engine/session), `app/services/`, `app/api/v1/`.
   Settings come only from `app.core.config.Settings`; never read `os.environ` directly. Infra objects live on `app.state` and are injected with `Depends`.
 - API database access is async (`AsyncSession` via `get_db_session`); sessions never auto-commit.
+- Schema changes only via Alembic migrations in `backend/alembic/versions/`: autogenerate a draft, review it by hand,
+  keep `uv run alembic check` clean, and add upgrade/downgrade coverage. Conventions: ADR-0006.
+- Every workspace-owned table has `workspace_id NOT NULL` plus composite FKs; every repository query takes `workspace_id`.
+- Idempotent operations use `IdempotencyService.begin()` and `complete()`/`fail()` in the same transaction as the business change.
+- Expected client errors subclass `AppError` (`app/core/errors.py`) with a status code, an error code and a safe message.
 - Errors use the standard shape in `app/core/errors.py`; never return exception text. Log through `logging` (JSON + redaction), never `print`.
 - PostgreSQL is authoritative state; Redis is transport/cache only. Dispatch uses a transactional outbox.
 - Agents submit results; only platform verification accepts a task. LLM output is untrusted until validated.
@@ -46,7 +51,7 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
 - Never remove volumes (`down -v`, `infra.ps1 destroy-data`) without explicit user confirmation.
 
 ## Quality gates
-- Backend: `uv run ruff format --check .`, `uv run ruff check .`, `uv run mypy app tests`, `uv run pytest`.
+- Backend: `uv run ruff format --check .`, `uv run ruff check .`, `uv run mypy app tests alembic`, `uv run alembic check`, `uv run pytest`.
 - Frontend: `npm run lint`, `npm run typecheck`, `npm test`, `npm run build`.
 - Never claim a check passed unless it ran and its output was inspected.
 - Never weaken or delete tests to make them pass; explain and ask instead.

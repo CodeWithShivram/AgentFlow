@@ -17,14 +17,9 @@ from app.core.config import Settings
 from app.db.session import create_engine, create_session_factory, get_db_session
 from app.main import create_app
 from tests.conftest import make_client
+from tests.integration.conftest import INFRA_HINT
 
 pytestmark = pytest.mark.integration
-
-_INFRA_HINT = (
-    "Integration tests need local PostgreSQL and Redis and the repo-root .env. "
-    "Run: powershell -ExecutionPolicy Bypass -File scripts/infra.ps1 up "
-    '(or skip them with: uv run pytest -m "not integration").'
-)
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -35,7 +30,7 @@ def _require_local_infrastructure() -> None:
         _postgres_connections(settings)
         _redis_connections(settings)
     except (ValueError, psycopg.Error, redis.RedisError, OSError) as exc:
-        pytest.fail(f"{_INFRA_HINT} ({type(exc).__name__})", pytrace=False)
+        pytest.fail(f"{INFRA_HINT} ({type(exc).__name__})", pytrace=False)
 
 
 @pytest.fixture

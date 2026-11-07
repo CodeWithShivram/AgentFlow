@@ -14,8 +14,8 @@ Phase 1 steps come directly from the handoff (§17). Phases 2–8 are numbered h
 | 1.0 | Repository reconnaissance and implementation plan | DONE | `16a9b59` |
 | 1.1 | Monorepo and developer tooling | DONE | `80e28ce` |
 | 1.2 | Local infrastructure (PostgreSQL, Redis) | DONE | `9f8a550` |
-| 1.3 | Backend foundation | DONE | see `progress.md` |
-| 1.4 | Database and migrations | NOT_STARTED | |
+| 1.3 | Backend foundation | DONE | `44eef4a` |
+| 1.4 | Database and migrations | DONE | see `progress.md` |
 | 1.5 | Authentication and workspace authorization | NOT_STARTED | |
 | 1.6 | Agent registry CRUD | NOT_STARTED | |
 | 1.7 | Workflow and task management | NOT_STARTED | |
@@ -44,8 +44,8 @@ Phase 1 steps come directly from the handoff (§17). Phases 2–8 are numbered h
 - Commit: `feat(backend): establish API and infrastructure foundation`
 
 ### 1.4 — Database and migrations
-- Depends on: 1.3; decision OD-4 (idempotency key storage).
-- Acceptance: models for users, workspaces, workspace_members, agents, agent_versions, workflows, workflow_tasks, task_dependencies, workflow_events (+ idempotency storage if decided); UUID PKs, UTC timestamps, FKs, indexes, unique constraints; Alembic upgrade and downgrade verified on a disposable test DB.
+- Depends on: 1.3; OD-4 resolved (ADR-0006).
+- Acceptance: models and an Alembic migration for users, workspaces, workspace_members, agents, agent_versions, workflows, workflow_tasks, task_dependencies, workflow_events and idempotency_keys; UUID PKs, UTC timestamps, naming convention, FKs, indexes, unique and check constraints; workspace isolation through composite FKs; append-only events trigger; idempotency service (409 on payload mismatch, exactly-once under concurrency, atomic with the business change, no secrets cached, documented expiry and cleanup); fresh upgrade, downgrade, rollback/reapply and stairway tests on disposable databases; no model/migration drift.
 - Commit: `feat(database): add core AgentFlow schema and migrations`
 
 ### 1.5 — Authentication and workspace authorization
@@ -165,10 +165,12 @@ Acceptance (phase): deterministic tests with mock model responses; invalid plans
 | OD-1 | Access token format (e.g. JWT vs opaque DB-backed) and whether refresh tokens are used | 1.5 | Handoff requires short-lived access tokens; refresh optional. |
 | OD-2 | Browser auth transport (httpOnly cookie vs bearer header) | 1.5 | Browser `EventSource` cannot set headers; SSE (§11) must be authenticated. |
 | OD-3 | Does registration auto-create a workspace with the user as Owner? | 1.5 | Not specified. |
-| OD-4 | Idempotency key storage (table/columns, TTL) | 1.4 | Required by §11 but absent from §10 schema. |
+| OD-4 | ~~Idempotency key storage~~ **Resolved 2026-11-07: `idempotency_keys` table (ADR-0006)** | 1.4 | Approved by owner. |
 | OD-5 | API `settings.max_budget` vs DB `budget_limit` naming | 1.7 | Example request and schema differ. |
 | OD-6 | Frontend component system | 1.9 | "Accessible, consistent", avoid unnecessary libraries. |
 | OD-7 | ~~Python dependency locking~~ **Resolved 2026-11-07: uv project + `uv.lock`** | 1.1 | Approved by owner. |
 | OD-8 | Outbox scope in 1.8 vs Phase 4 | 1.8 | Proposed: minimal outbox in 1.8, hardening in 4.3. |
 | OD-9 | How synchronous Celery workers access PostgreSQL (sync engine vs async inside tasks) | 1.8 | API is async per ADR-0005. |
 | OD-10 | Replace `httpx` with `httpx2` for Starlette's TestClient | before 1.10 | Starlette 1.10 deprecates `httpx` for its test client. |
+| OD-11 | Final workflow status set and transitions | 1.7 | `WorkflowStatus` in 1.4 is provisional (ADR-0006). |
+| OD-12 | Schedule periodic purge of expired idempotency keys | 1.8 | `IdempotencyService.purge_expired()` exists; needs Celery beat. |

@@ -13,7 +13,8 @@ Push-Location (Join-Path $root 'backend')
 try {
     Invoke-Step 'backend: ruff format --check' { uv run ruff format --check . }
     Invoke-Step 'backend: ruff check' { uv run ruff check . }
-    Invoke-Step 'backend: mypy' { uv run mypy app tests }
+    Invoke-Step 'backend: mypy' { uv run mypy app tests alembic }
+    Invoke-Step 'backend: alembic check (models match migrations)' { uv run alembic check }
     Invoke-Step 'backend: pytest' { uv run pytest }
 }
 finally { Pop-Location }

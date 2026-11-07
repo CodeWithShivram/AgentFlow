@@ -28,6 +28,19 @@ _HTTP_ERROR_CODES = {
 }
 
 
+class AppError(Exception):
+    """Expected, client-facing error. Subclasses set the HTTP status, code and safe message."""
+
+    status_code: int = 400
+    code: str = "BAD_REQUEST"
+    message: str = "The request could not be processed."
+
+    def __init__(self, message: str | None = None, details: dict[str, Any] | None = None) -> None:
+        super().__init__(message or self.message)
+        self.message = message or self.message
+        self.details = details or {}
+
+
 class ErrorBody(BaseModel):
     code: str
     message: str
@@ -85,6 +98,14 @@ async def validation_exception_handler(request: Request, exc: Exception) -> JSON
     )
 
 
+async def app_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    # Registered only for AppError (see register_exception_handlers).
+    app_exc = cast(AppError, exc)
+    return error_response(
+        request, app_exc.status_code, app_exc.code, app_exc.message, app_exc.details
+    )
+
+
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     # Details go to server logs only. Starlette re-raises after this handler returns,
     # so the exception is not swallowed.
@@ -101,6 +122,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 
 
 def register_exception_handlers(app: FastAPI) -> None:
+    app.add_exception_handler(AppError, app_error_handler)
     app.add_exception_handler(StarletteHTTPException, http_exception_handler)
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
     app.add_exception_handler(Exception, unhandled_exception_handler)
