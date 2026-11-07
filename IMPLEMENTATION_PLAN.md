@@ -11,8 +11,8 @@ Phase 1 steps come directly from the handoff (§17). Phases 2–8 are numbered h
 
 | Step | Title | Status | Commit |
 |---|---|---|---|
-| 1.0 | Repository reconnaissance and implementation plan | DONE | see `progress.md` |
-| 1.1 | Monorepo and developer tooling | NOT_STARTED | |
+| 1.0 | Repository reconnaissance and implementation plan | DONE | `16a9b59` |
+| 1.1 | Monorepo and developer tooling | DONE | see `progress.md` |
 | 1.2 | Local infrastructure (PostgreSQL, Redis) | NOT_STARTED | |
 | 1.3 | Backend foundation | NOT_STARTED | |
 | 1.4 | Database and migrations | NOT_STARTED | |
@@ -29,7 +29,7 @@ Phase 1 steps come directly from the handoff (§17). Phases 2–8 are numbered h
 - Commit: `docs: establish AgentFlow implementation plan`
 
 ### 1.1 — Monorepo and developer tooling
-- Depends on: 1.0; decision OD-7 (Python dependency locking).
+- Depends on: 1.0; OD-7 resolved (uv.lock).
 - Acceptance: `backend/` with `pyproject.toml` (Python 3.12, FastAPI, Ruff, pytest, pinned/locked deps) and a health-only API; `frontend/` Next.js App Router + strict TS + Vitest with a minimal shell; `.env.example`; README with exact runtime versions; lint/format/test commands work; both apps start.
 - Commit: `chore: initialize AgentFlow monorepo`
 
@@ -168,5 +168,5 @@ Acceptance (phase): deterministic tests with mock model responses; invalid plans
 | OD-4 | Idempotency key storage (table/columns, TTL) | 1.4 | Required by §11 but absent from §10 schema. |
 | OD-5 | API `settings.max_budget` vs DB `budget_limit` naming | 1.7 | Example request and schema differ. |
 | OD-6 | Frontend component system | 1.9 | "Accessible, consistent", avoid unnecessary libraries. |
-| OD-7 | Python dependency locking (uv lock vs pip-tools) | 1.1 | Handoff requires lock files; uv is installed. |
+| OD-7 | ~~Python dependency locking~~ **Resolved 2026-11-07: uv project + `uv.lock`** | 1.1 | Approved by owner. |
 | OD-8 | Outbox scope in 1.8 vs Phase 4 | 1.8 | Proposed: minimal outbox in 1.8, hardening in 4.3. |

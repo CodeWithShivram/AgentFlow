@@ -30,15 +30,17 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
 - Never return stack traces, secrets or raw exceptions to clients.
 
 ## Environment (Windows 11, PowerShell)
-- Python baseline **3.12** (installed via uv; system `py` only has 3.14). Create venv with:
-  `uv venv --python 3.12 backend\.venv` then `backend\.venv\Scripts\Activate.ps1`.
-- Node 24 / npm 11. Use npm, not pnpm.
+- Python baseline **3.12** (installed via uv; system `py` only has 3.14). Backend is a uv project:
+  `cd backend; uv sync` creates `backend\.venv`; run tools with `uv run <tool>`. Add deps with `uv add` (never edit `uv.lock` by hand).
+- Node 24 / npm 11. Use npm, not pnpm. `frontend/.npmrc` saves exact versions; use `npm ci` for clean installs.
+- Next.js 16 differs from older versions: read `frontend/node_modules/next/dist/docs/` before writing Next code (see `frontend/AGENTS.md`).
+- Run all gates: `powershell -ExecutionPolicy Bypass -File scripts/check.ps1`.
 - Docker Desktop must be running for PostgreSQL/Redis:
   `docker compose -f infrastructure/docker/docker-compose.yml up -d | ps | logs | down`
 - Never remove volumes (`down -v`) without explicit user confirmation.
 
-## Quality gates (once configured)
-- Backend: `ruff format --check .`, `ruff check .`, type check, `pytest`.
+## Quality gates
+- Backend: `uv run ruff format --check .`, `uv run ruff check .`, `uv run mypy app tests`, `uv run pytest`.
 - Frontend: `npm run lint`, `npm run typecheck`, `npm test`, `npm run build`.
 - Never claim a check passed unless it ran and its output was inspected.
 - Never weaken or delete tests to make them pass; explain and ask instead.
