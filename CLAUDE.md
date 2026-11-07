@@ -18,6 +18,10 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
 - Modular monolith: one backend codebase, separate API and Celery worker processes, one Next.js frontend.
 - API routes validate HTTP and call services. Services own business rules and transactions. Repositories own queries.
 - Every task/workflow status change goes through the central state transition service.
+- Backend layout: `app/core/` (config, logging, request_id, errors, redis), `app/db/` (engine/session), `app/services/`, `app/api/v1/`.
+  Settings come only from `app.core.config.Settings`; never read `os.environ` directly. Infra objects live on `app.state` and are injected with `Depends`.
+- API database access is async (`AsyncSession` via `get_db_session`); sessions never auto-commit.
+- Errors use the standard shape in `app/core/errors.py`; never return exception text. Log through `logging` (JSON + redaction), never `print`.
 - PostgreSQL is authoritative state; Redis is transport/cache only. Dispatch uses a transactional outbox.
 - Agents submit results; only platform verification accepts a task. LLM output is untrusted until validated.
 - All LLM calls go through one model gateway that records usage. Never label estimated cost/tokens as actual.
@@ -34,7 +38,9 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   `cd backend; uv sync` creates `backend\.venv`; run tools with `uv run <tool>`. Add deps with `uv add` (never edit `uv.lock` by hand).
 - Node 24 / npm 11. Use npm, not pnpm. `frontend/.npmrc` saves exact versions; use `npm ci` for clean installs.
 - Next.js 16 differs from older versions: read `frontend/node_modules/next/dist/docs/` before writing Next code (see `frontend/AGENTS.md`).
-- Run all gates: `powershell -ExecutionPolicy Bypass -File scripts/check.ps1`.
+- Run all gates: `powershell -ExecutionPolicy Bypass -File scripts/check.ps1` (backend integration tests need `scripts/infra.ps1 up`).
+- Run API: `cd backend; uv run uvicorn app.main:create_app --factory --reload --port 8000 --loop asyncio:SelectorEventLoop`.
+  The `--loop` option is mandatory on Windows (async psycopg; ADR-0005). There is no module-level `app`; use the factory.
 - Docker Desktop must be running for PostgreSQL/Redis. Manage them with
   `powershell -ExecutionPolicy Bypass -File scripts/infra.ps1 <up|ps|logs|down|restart>` (reads repo-root `.env`).
 - Never remove volumes (`down -v`, `infra.ps1 destroy-data`) without explicit user confirmation.

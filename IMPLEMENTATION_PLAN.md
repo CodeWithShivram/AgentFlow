@@ -13,8 +13,8 @@ Phase 1 steps come directly from the handoff (§17). Phases 2–8 are numbered h
 |---|---|---|---|
 | 1.0 | Repository reconnaissance and implementation plan | DONE | `16a9b59` |
 | 1.1 | Monorepo and developer tooling | DONE | `80e28ce` |
-| 1.2 | Local infrastructure (PostgreSQL, Redis) | DONE | see `progress.md` |
-| 1.3 | Backend foundation | NOT_STARTED | |
+| 1.2 | Local infrastructure (PostgreSQL, Redis) | DONE | `9f8a550` |
+| 1.3 | Backend foundation | DONE | see `progress.md` |
 | 1.4 | Database and migrations | NOT_STARTED | |
 | 1.5 | Authentication and workspace authorization | NOT_STARTED | |
 | 1.6 | Agent registry CRUD | NOT_STARTED | |
@@ -40,7 +40,7 @@ Phase 1 steps come directly from the handoff (§17). Phases 2–8 are numbered h
 
 ### 1.3 — Backend foundation
 - Depends on: 1.2.
-- Acceptance: Pydantic Settings; structured logging with request IDs; centralized exception handling with the standard error shape; SQLAlchemy engine/session (psycopg 3 sync); `/api/v1/health/{live,ready,database,redis}`; tests for config and health.
+- Acceptance (as revised by the owner's Step 1.3 brief): Pydantic Settings from the root `.env` with validation and dev/test/prod behaviour; JSON logging with request IDs and secret redaction; request ID middleware; centralized exception handling with the standard error shape; SQLAlchemy 2 **async** engine/session with psycopg 3 (ADR-0005); async Redis client; lifespan-managed cleanup; `/api/v1/health/{live,ready,db,redis}` (owner chose `db` over the handoff's `database`); unit and real-infrastructure integration tests.
 - Commit: `feat(backend): establish API and infrastructure foundation`
 
 ### 1.4 — Database and migrations
@@ -64,7 +64,7 @@ Phase 1 steps come directly from the handoff (§17). Phases 2–8 are numbered h
 - Commit: `feat(workflows): implement workflow and task management`
 
 ### 1.8 — Background execution foundation
-- Depends on: 1.7; ADR-0004 (Celery on Windows); decision OD-8 (outbox scope).
+- Depends on: 1.7; ADR-0004 (Celery on Windows); decisions OD-8 (outbox scope), OD-9 (worker DB access).
 - Acceptance: Celery + Redis configured; mock worker runs a harmless task; agent_executions records (migration added here); outbox-based dispatch; bounded retry and timeout; duplicate delivery produces no duplicate accepted side effects (tested).
 - Commit: `feat(execution): add mock background task execution`
 
@@ -170,3 +170,5 @@ Acceptance (phase): deterministic tests with mock model responses; invalid plans
 | OD-6 | Frontend component system | 1.9 | "Accessible, consistent", avoid unnecessary libraries. |
 | OD-7 | ~~Python dependency locking~~ **Resolved 2026-11-07: uv project + `uv.lock`** | 1.1 | Approved by owner. |
 | OD-8 | Outbox scope in 1.8 vs Phase 4 | 1.8 | Proposed: minimal outbox in 1.8, hardening in 4.3. |
+| OD-9 | How synchronous Celery workers access PostgreSQL (sync engine vs async inside tasks) | 1.8 | API is async per ADR-0005. |
+| OD-10 | Replace `httpx` with `httpx2` for Starlette's TestClient | before 1.10 | Starlette 1.10 deprecates `httpx` for its test client. |

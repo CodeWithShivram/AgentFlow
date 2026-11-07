@@ -24,6 +24,7 @@ Universal multi-agent AI orchestration platform. A natural-language request is p
 | npm | 11.x (11.6.2 tested) |
 | Next.js / React | 16.4.5 / 19.3.0 |
 | FastAPI | 0.162.1 |
+| SQLAlchemy / psycopg / redis-py | 2.1.8 / 3.3.8 / 8.1.0 |
 | PostgreSQL (Docker) | 18.6-alpine |
 | Redis (Docker) | 8.10.3-alpine |
 | Docker / Compose | 29.8.2 / v5.6.0 tested |
@@ -59,14 +60,29 @@ Data lives in the Docker volumes `agentflow_postgres-data` and `agentflow_redis-
 
 ## Backend
 
+Requires the repo-root `.env` (see Configuration). Start the infrastructure first.
+
 ```powershell
 cd backend
 uv sync                                   # creates backend\.venv with Python 3.12 + dev tools
-uv run uvicorn app.main:app --reload --port 8000
+uv run uvicorn app.main:create_app --factory --reload --port 8000 --loop asyncio:SelectorEventLoop
 ```
 
-- Liveness: http://localhost:8000/api/v1/health/live
-- OpenAPI docs: http://localhost:8000/docs
+On Windows, `--loop asyncio:SelectorEventLoop` is required. Async psycopg cannot use the default Windows event loop, and the API refuses to start without it (see [ADR-0005](docs/ADR/0005-async-sqlalchemy-psycopg.md)).
+
+| Endpoint | Purpose | Healthy | Unhealthy |
+|---|---|---|---|
+| `GET /api/v1/health/live` | Process is running; checks no dependencies | 200 `{"status":"ok"}` | — |
+| `GET /api/v1/health/ready` | PostgreSQL and Redis both reachable | 200 `{"status":"ready","checks":{…}}` | 503 `not_ready` and which check failed |
+| `GET /api/v1/health/db` | PostgreSQL reachable (`SELECT 1`) | 200 `{"status":"ok"}` | 503 `{"status":"unavailable"}` |
+| `GET /api/v1/health/redis` | Redis reachable (`PING`) | 200 `{"status":"ok"}` | 503 `{"status":"unavailable"}` |
+
+Each dependency check times out after `HEALTH_CHECK_TIMEOUT_SECONDS` (default 2). The API starts even when PostgreSQL or Redis is down; only readiness reflects it.
+
+- OpenAPI docs (development and test only): http://localhost:8000/docs
+- Every response carries an `X-Request-ID` header. A safe client-supplied value (letters, digits, `._-`, at most 64 characters) is echoed back; anything else is replaced with a new UUID.
+- Errors use one shape: `{"error": {"code", "message", "request_id", "details"}}`. Stack traces and exception text are never returned.
+- Logs are JSON lines on stdout. Passwords, tokens, URL credentials and configured secrets are redacted.
 
 Checks:
 
@@ -74,7 +90,8 @@ Checks:
 uv run ruff format --check .
 uv run ruff check .
 uv run mypy app tests
-uv run pytest
+uv run pytest                             # all tests; integration tests need the infrastructure running
+uv run pytest -m "not integration"        # unit tests only, no infrastructure needed
 ```
 
 ## Frontend
@@ -102,4 +119,4 @@ powershell -ExecutionPolicy Bypass -File scripts/check.ps1
 
 ## Configuration
 
-Copy `.env.example` to `.env` for local values. Never commit `.env` or secrets.
+Copy `.env.example` to `.env` for local values. Never commit `.env` or secrets. The backend reads the repo-root `.env`; real environment variables take precedence over it. Optional backend settings and their defaults are listed (commented) in `.env.example`. `APP_ENV=production` disables the API docs and refuses to start with placeholder passwords.
