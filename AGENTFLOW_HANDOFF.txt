@@ -1,0 +1,1312 @@
+AGENTFLOW — CLAUDE CODE PROJECT HANDOFF
+
+Document purpose
+
+This file is the primary implementation handoff for building AgentFlow
+with Claude Code. Place this file in the root of the newly created Git
+repository. Start Claude Code from that repository root and provide the
+kickoff prompt near the end of this document.
+
+Product name: AgentFlow Product type: Universal multi-agent AI
+orchestration platform Initial release: MVP / local-first Primary
+languages: Python and TypeScript Primary developer environment: Windows
+11 with PowerShell; Docker Desktop is preferred Repository model: Single
+Git repository (modular monolith) Development method: Small, verifiable
+steps; one Git commit at the end of every completed step
+
+IMPORTANT: This document is a product and engineering specification, not
+proof that any code has already been implemented. Claude must inspect
+the actual repository and environment before making changes. If the
+repository contains existing work, preserve it.
+
+=============================================================================== 1.
+PRODUCT VISION
+===============================================================================
+
+AgentFlow accepts a natural-language request and coordinates a team of
+specialized AI agents to complete it.
+
+The Main Orchestrator: - Understands the user’s request and extracts
+requirements and constraints. - Creates a structured execution plan. -
+Decomposes the plan into small, verifiable tasks. - Builds a directed
+acyclic graph (DAG) of task dependencies. - Selects preconfigured
+specialist agents based on skills, permissions, availability and
+limits. - Dispatches independent tasks concurrently and respects
+dependencies. - Collects structured agent submissions and artifacts. -
+Independently verifies submissions against acceptance criteria. -
+Decides whether to accept, request rework, reassign, replan or
+escalate. - Pauses for human clarification or approval when policy
+requires it. - Produces a final report containing the plan, task
+history, agents, artifacts, verification, issues, retries, token usage,
+costs and execution timing.
+
+The platform supports both: A. Software-oriented work: coding,
+debugging, testing, architecture and DevOps. B. General work: research,
+writing, analysis, summarization and structured information tasks.
+
+The Main Orchestrator is the workflow manager, not an all-purpose
+worker. Specialized agents perform assigned work. The workflow engine
+and database enforce state and policy. LLM output must never be treated
+as authoritative state without validation.
+
+Core product principles: - Explicit task contracts. - Controlled tool
+access. - Deterministic workflow state transitions. - Independent
+verification. - Bounded retries and spending. - Human approval for
+sensitive or ambiguous actions. - Complete execution history. - Accurate
+separation of measured cost from estimated cost. - Provider-independent
+model integration. - Secure defaults and local-first development.
+
+===============================================================================
+2. FINAL PRODUCT DECISIONS
+===============================================================================
+
+Task scope: Universal (software development and general-purpose tasks).
+Agent creation: Hybrid. - Preconfigured agents are available by
+default. - The Main Orchestrator may propose a new specialist when a
+capability is missing. - Dynamic agent proposals require administrator
+approval before activation. - Agents cannot grant themselves permissions
+or create privileged tools. Autonomy: Approval-based. - Agents can
+perform permitted low-risk tasks autonomously. - Sensitive, external,
+destructive or irreversible actions require human approval. - Repeated
+failures and unresolved ambiguity are escalated. Implementation: MVP
+first, then production-grade evolution. Deployment: Local development
+first; architecture remains cloud-ready. Architecture: Modular monolith
+with separate API and worker processes. Repository: One Git repository.
+Initial agents: Research, Analyst, Developer, Writer, QA and General.
+
+MVP exclusions: - Kubernetes and microservice deployment. - Public agent
+marketplace. - Autonomous privilege escalation. - Unrestricted shell
+execution. - Production deployment performed by agents. - Multi-region
+deployment. - Self-training or self-modifying agents. - Complex billing
+and subscription management. - Advanced organization-wide enterprise
+administration.
+
+Do not implement excluded capabilities unless the owner explicitly
+changes scope.
+
+===============================================================================
+3. TECHNOLOGY BASELINE
+===============================================================================
+
+Frontend: - Next.js App Router. - TypeScript with strict mode. -
+React. - npm (do not assume pnpm is installed). - Vitest for
+unit/component tests. - Playwright for end-to-end tests. - Use an
+accessible, consistent component system. Avoid unnecessary UI libraries.
+
+Backend: - Python 3.12 as the initial compatibility baseline. -
+FastAPI. - Pydantic v2 and Pydantic Settings. - SQLAlchemy 2.x. -
+psycopg 3 synchronous PostgreSQL driver for the initial
+implementation. - Alembic for schema migrations. - Pytest and HTTPX for
+tests. - Ruff for linting and formatting. - mypy or Pyright only where
+configured consistently; do not add redundant type tools.
+
+AI and orchestration (later phases, not Phase 1): - LangGraph for
+stateful orchestration and conditional routing. - LiteLLM as a
+provider/model gateway. - Structured outputs validated with Pydantic. -
+Model provider and model name configured via environment variables. -
+Mock model adapters for deterministic automated tests.
+
+Background execution: - Redis. - Celery workers. - PostgreSQL is the
+authoritative business-state store. - Redis is transport/cache, not the
+permanent source of workflow truth. - Use transactional outbox or an
+equivalent reliable dispatch mechanism when task dispatch is introduced,
+so database commits and queue publication cannot silently diverge.
+
+Storage: - Local filesystem for MVP artifacts, outside source-controlled
+code. - PostgreSQL stores artifact metadata, checksum, ownership and
+relative storage key. - Design an interface that can later support
+S3-compatible object storage without implementing cloud storage in the
+MVP.
+
+Local infrastructure: - Docker Compose for PostgreSQL and Redis when
+Docker is available. - Bind infrastructure ports to 127.0.0.1 only. -
+Named volumes for local persistence. - Health checks for dependencies.
+
+Observability: - Structured logs with request_id, workflow_id, task_id
+and execution_id where applicable. - Persist workflow events. - Add
+OpenTelemetry and advanced dashboards in a later phase, not as a Phase 1
+blocker.
+
+CI: - GitHub Actions. - Separate backend and frontend checks. -
+Formatting, linting, tests, type checks and build validation. - Do not
+add cloud deployment workflows for the MVP.
+
+Versioning: - Pin dependency versions using lock files where
+supported. - Avoid floating dependency versions in reproducible
+environments. - Document the exact runtime versions in README.
+
+Compatibility note: The developer uses Windows 11 and PowerShell. Verify
+installed tools before choosing commands. Do not assume Docker, pnpm, uv
+or a particular Python version is installed. If Docker is absent, report
+that clearly and offer a local PostgreSQL/Redis alternative or ask the
+developer to install Docker Desktop. Do not silently skip infrastructure
+verification.
+
+===============================================================================
+4. HIGH-LEVEL ARCHITECTURE
+===============================================================================
+
+Logical flow:
+
+USER | v NEXT.JS FRONTEND | v FASTAPI APPLICATION | +–> Authentication
+and workspace authorization +–> Workflow API +–> Task manager +–> Agent
+registry +–> Approval manager +–> Usage and cost service | v
+ORCHESTRATION LAYER (LangGraph in later phase) | +–> Prompt
+understanding / planner +–> DAG validation +–> Agent selector +–>
+Scheduler +–> Supervisor / verifier +–> Recovery manager +–> Final
+report generator | v REDIS + CELERY | +–> Research agent worker +–>
+Analyst agent worker +–> Developer agent worker +–> Writer agent worker
++–> QA agent worker +–> General agent worker | v RESULT SUBMISSION | v
+VERIFICATION | +–> PASS: accept task +–> REWORK: return corrective task
++–> REASSIGN: select another authorized agent +–> REPLAN: revise
+remaining DAG under policy +–> HUMAN: pause for approval or
+clarification +–> FAIL: terminal failure with diagnostics | v FINAL
+REPORT AND ARTIFACTS
+
+Persistence: - PostgreSQL stores users, workspaces, agents, versions,
+workflows, tasks, dependencies, executions, artifacts metadata,
+verification results, approvals, usage and events. - Redis transports
+background jobs. Do not use Redis as the sole record of task state. -
+Local artifact directory stores actual files; database stores metadata
+and checksums.
+
+Deployment shape: - One backend codebase. - API process and Celery
+worker process run separately. - One frontend process. - PostgreSQL and
+Redis are local infrastructure dependencies. - Do not split into
+microservices for MVP.
+
+Architecture ownership: - API routes validate HTTP requests and call
+application services. - Application services own business rules and
+transactions. - Repositories own persistence queries. - Orchestration
+nodes decide workflow next steps but must use services for state
+mutations. - State transition service validates every status change. -
+Agent runtime executes one task contract and returns a structured
+submission. - Verification service accepts or rejects a submission based
+on explicit criteria. - Usage service records provider-reported usage
+and pricing snapshots. - Reporting service composes persisted facts; it
+must not invent metrics.
+
+===============================================================================
+5. LOW-LEVEL DOMAIN DESIGN
+===============================================================================
+
+5.1 Workflow
+
+A workflow represents one user request and its overall execution.
+
+Required attributes: - id (UUID) - workspace_id - created_by_user_id -
+prompt - normalized_requirements (JSON) - status - autonomy_policy -
+budget_limit - currency - max_parallel_tasks - deadline (nullable) -
+created_at, updated_at, started_at, completed_at
+
+5.2 Workflow task
+
+A task is one independently assignable unit of work.
+
+Required attributes: - id (UUID) - workflow_id - parent_task_id
+(nullable) - title - description - required_skills (JSON or normalized
+representation) - input_references - expected_output_schema -
+acceptance_criteria - priority - status - assigned_agent_id (nullable) -
+attempt_count - created_at, updated_at, started_at, completed_at
+
+5.3 Task contract
+
+Every dispatched task must have: - Objective. - Context and input
+references. - Required skills. - Expected deliverables. - Output
+schema. - Acceptance criteria. - Dependencies. - Allowed tools. -
+Execution timeout. - Token/cost budget if available. - Retry policy. -
+Security classification.
+
+Agents must not mark tasks COMPLETED. They submit results. The
+platform’s verification service and authorized workflow service control
+acceptance.
+
+5.4 Agent definition
+
+Each agent definition contains: - Agent ID. - Display name and
+description. - Category. - Skills/capabilities. - System instruction
+reference/version. - Model provider and model configuration. - Tool
+permission manifest. - Input/output schema versions. - Timeout and
+resource limits. - Enabled/disabled status. - Agent version. - Whether
+it is built-in or workspace-created. - Creator and approval metadata.
+
+Never store provider API secrets in an agent definition. Store secret
+references or use environment-based configuration.
+
+5.5 Agent execution
+
+An execution represents one attempt by one agent on one task. Record: -
+Task and agent IDs. - Agent version. - Attempt number. - Execution
+status. - Started and completed timestamps. - Error classification and
+safe diagnostic details. - Output summary. - Artifact references. -
+Model usage references. - Trace/correlation identifiers.
+
+5.6 Verification
+
+Verification is separate from agent execution. Record: - Task ID and
+execution ID. - Deterministic checks performed. - Semantic evaluation
+result if used. - Pass/fail decision. - Issues with severity and
+evidence. - Verifier identity/version. - Timestamp. - Rework
+instructions.
+
+5.7 Human intervention
+
+Intervention types: - CLARIFICATION. - APPROVAL. - REJECTION. -
+MANUAL_RECOVERY.
+
+Store requester, target workflow/task, requested action, context,
+status, expiry, responder, response and timestamps. Approval decisions
+must be attributable to an authenticated user.
+
+5.8 Workflow events
+
+Append an event for every important transition: - WORKFLOW_CREATED. -
+PLAN_CREATED. - TASK_CREATED. - TASK_ASSIGNED. - TASK_QUEUED. -
+TASK_STARTED. - AGENT_SUBMITTED. - VERIFICATION_STARTED. -
+VERIFICATION_PASSED. - VERIFICATION_FAILED. - RETRY_REQUESTED. -
+TASK_REASSIGNED. - APPROVAL_REQUESTED. - APPROVAL_RESOLVED. -
+TASK_COMPLETED. - WORKFLOW_COMPLETED. - WORKFLOW_FAILED. -
+WORKFLOW_CANCELLED.
+
+Events should be append-only through application permissions. Never
+update old event records to rewrite history. Do not store secrets or
+sensitive raw prompts in logs/events unless explicitly required and
+protected.
+
+===============================================================================
+6. TASK STATES AND TRANSITIONS
+===============================================================================
+
+Initial state set: PENDING READY ASSIGNED QUEUED IN_PROGRESS SUBMITTED
+VERIFYING REWORK_REQUIRED WAITING_APPROVAL BLOCKED ESCALATED COMPLETED
+FAILED CANCELLED
+
+Rules: - PENDING: task created, dependencies may be unresolved. - READY:
+all dependencies accepted and task is eligible for assignment. -
+ASSIGNED: authorized agent selected. - QUEUED: dispatch accepted by the
+queue/outbox mechanism. - IN_PROGRESS: worker has claimed execution. -
+SUBMITTED: agent has returned a structured result. - VERIFYING:
+independent checks are running. - REWORK_REQUIRED: verification failed
+but recovery is permitted. - WAITING_APPROVAL: user action is
+required. - BLOCKED: required dependency or external condition is
+unresolved. - ESCALATED: recovery policy requires human attention. -
+COMPLETED: platform accepted the deliverable. - FAILED: terminal failure
+after allowed recovery. - CANCELLED: user or authorized operator
+cancelled the work.
+
+Rules: - Validate transitions centrally; do not let arbitrary code
+mutate status. - Use transactions and concurrency controls for task
+claiming and transitions. - A task cannot depend on itself. - Reject
+cycles in a workflow DAG. - A task cannot become READY until all
+required dependencies are COMPLETED. - A workflow cannot become
+COMPLETED while required tasks are unresolved. - Retries create new
+execution attempts; preserve previous attempts and results. - A failed
+verification does not erase the original agent submission. -
+Cancellation must be cooperative and persisted. - Duplicate queue
+delivery must not create duplicate accepted side effects. - Use
+idempotency keys for externally initiated operations.
+
+Recovery defaults (configurable): - Maximum attempts per task: 3 total
+attempts. - Maximum reassignment: 1. - Default agent timeout: 600
+seconds. - Default maximum parallel tasks: 3. - Retry transient
+infrastructure failures with bounded backoff. - Do not blindly retry
+deterministic validation failures; attach corrective instructions. -
+Escalate after retry/reassignment policy is exhausted. - Budget
+exhaustion pauses or terminates according to workflow policy. - Never
+loop indefinitely.
+
+DAG rules: - Validate acyclicity before execution. - Schedule only READY
+tasks. - Execute independent tasks concurrently up to configured
+limits. - Persist dependency relationships. - Recompute readiness after
+dependency completion. - Replanning must preserve completed task history
+and require validation of the revised DAG.
+
+===============================================================================
+7. AGENT MODEL AND INITIAL SPECIALISTS
+===============================================================================
+
+All agents implement one common interface and return structured,
+schema-validated submissions.
+
+Conceptual interface:
+
+    class BaseAgent(ABC):
+        async def execute(self, task_contract, context) -> AgentSubmission:
+            ...
+        def get_capabilities(self) -> AgentCapabilities:
+            ...
+        def validate_output(self, result) -> ValidationResult:
+            ...
+
+Initial agents:
+
+1.  Research Agent Skills: research, source extraction, comparison,
+    evidence summaries. Tools: only approved search/retrieval tools when
+    configured. Output: findings, source references, caveats and
+    artifacts.
+
+2.  Analyst Agent Skills: structured analysis, calculations, data
+    interpretation. Tools: restricted Python analysis tools only when
+    enabled. Output: analysis, assumptions, calculations and supporting
+    artifacts.
+
+3.  Developer Agent Skills: code generation, debugging, implementation.
+    Tools: controlled workspace and isolated test runner only when
+    enabled. Output: changed-file list, summary, tests and artifacts. Do
+    not grant unrestricted host shell or production access.
+
+4.  Writer Agent Skills: reports, documentation, editing and structured
+    writing. Tools: artifact writer. Output: document and content
+    summary.
+
+5.  QA Agent Skills: test design, test execution, acceptance validation.
+    Tools: approved test runner. Output: test results, failures and
+    evidence.
+
+6.  General Agent Skills: general task completion and coordination
+    support. Tools: minimal common tools. Must not bypass specialist
+    permissions or the orchestrator.
+
+Agent selection should consider: - Required skill match. - Tool
+availability and permission compatibility. - Agent enabled status. -
+Current workload. - Historical quality metrics when enough evidence
+exists. - Model suitability, latency and cost. - User/workspace policy.
+
+Do not implement a complex machine-learning ranking model for the MVP.
+Start with explainable rule-based scoring and persist the selection
+rationale.
+
+Dynamic agent creation: - The planner may emit an AgentProposal. -
+Validate proposal schema and required capabilities. - Review requested
+tools and permissions. - Reject privilege escalation or unsupported tool
+requests. - Require administrator approval. - Register a new immutable
+agent version after approval. - Never execute arbitrary code supplied in
+an agent proposal. - Agent proposals are not automatically active.
+
+===============================================================================
+8. VERIFICATION AND RECOVERY
+===============================================================================
+
+Verification has two layers.
+
+Layer A: deterministic checks - Pydantic schema validation. - Required
+fields and artifact presence. - File existence and checksums. -
+Unit/integration test results. - API contract checks. -
+Permission/policy checks. - Required evidence checks.
+
+Layer B: semantic evaluation - Does the submission satisfy the
+objective? - Does it meet every acceptance criterion? - Is it complete
+and internally consistent? - Are assumptions and limitations explicit? -
+Is supporting evidence provided? - Does the result conflict with
+requirements?
+
+An LLM evaluator may assist semantic evaluation but must return
+structured findings with criterion IDs, evidence and reasons. It is not
+a substitute for deterministic tests.
+
+Verification outcomes: - PASS: accept task. - REWORK: create corrective
+instructions and bounded new attempt. - REASSIGN: choose another
+suitable authorized agent. - REPLAN: revise remaining workflow tasks
+after DAG validation. - HUMAN: pause for clarification/approval. - FAIL:
+terminal failure with a diagnostic report.
+
+Never claim a software artifact is correct merely because an LLM says it
+is. Execute tests and inspect actual outputs where possible.
+
+===============================================================================
+9. HUMAN-IN-THE-LOOP POLICY
+===============================================================================
+
+Human intervention is a first-class workflow feature.
+
+Require approval for: - Destructive or irreversible actions. -
+Production deployment or production infrastructure changes. - Database
+migrations against non-local environments. - External communications or
+purchases. - Access to sensitive data. - New or expanded permissions. -
+Activation of dynamically proposed agents. - Actions exceeding
+configured budget or risk thresholds.
+
+Ask for clarification when: - Requirements are materially ambiguous. -
+Required inputs are missing. - Multiple interpretations lead to
+different outcomes. - The workflow cannot proceed safely.
+
+Escalate when: - Bounded retries fail. - No suitable authorized agent is
+available. - Required tools are unavailable. - Budget/time limits
+prevent completion. - Verification cannot establish correctness.
+
+The approval request must show: - What action is proposed. - Why it is
+needed. - Which agent requested it. - Risks and potential
+consequences. - Relevant evidence and artifacts. - What happens if
+approved or rejected.
+
+A user approval must be authenticated, authorized, recorded and bound to
+the specific action. Do not treat a generic approval as permission for
+unrelated future actions.
+
+===============================================================================
+10. DATABASE DESIGN
+===============================================================================
+
+Use PostgreSQL, SQLAlchemy 2.x and Alembic. Use UUID primary keys and
+UTC timestamps.
+
+Logical tables:
+
+users - id, email, password_hash, created_at, updated_at
+
+workspaces - id, owner_id, name, settings, created_at, updated_at
+
+workspace_members - id, workspace_id, user_id, role, created_at - Unique
+constraint on workspace_id + user_id.
+
+agents - id, workspace_id (nullable for built-ins), name, category,
+status, active_version_id, created_at, updated_at
+
+agent_versions - id, agent_id, version, configuration, created_at,
+created_by - Unique agent_id + version.
+
+agent_proposals - id, workspace_id, proposed_configuration, status,
+requested_by, reviewed_by, reviewed_at, created_at
+
+workflows - id, workspace_id, user_id, prompt, normalized_requirements,
+status, autonomy_policy, budget_limit, currency, max_parallel_tasks,
+deadline, created_at, updated_at, started_at, completed_at
+
+workflow_tasks - id, workflow_id, parent_task_id, title, description,
+required_skills, input_references, expected_output_schema,
+acceptance_criteria, priority, status, assigned_agent_id, attempt_count,
+created_at, updated_at, started_at, completed_at
+
+task_dependencies - task_id, depends_on_task_id - Unique pair; reject
+self-dependency and cycles.
+
+agent_executions - id, task_id, agent_id, agent_version_id,
+attempt_number, status, started_at, completed_at, error_code,
+error_summary, result_summary - Unique task_id + attempt_number.
+
+task_artifacts - id, task_id, execution_id, storage_key, artifact_type,
+filename, mime_type, size_bytes, checksum, created_at
+
+verification_results - id, task_id, execution_id, verifier_type, result,
+score, issues, evidence, verified_at
+
+human_interventions - id, workflow_id, task_id, type, status,
+requested_action, context, expires_at, requested_by, resolved_by,
+resolution, created_at, resolved_at
+
+workflow_events - id, workflow_id, task_id, event_type, payload,
+created_at
+
+llm_usage - id, workflow_id, task_id, execution_id, provider, model,
+input_tokens, output_tokens, cached_input_tokens, other_usage,
+input_cost, output_cost, total_cost, currency, pricing_version,
+provider_request_id, created_at
+
+cost_records - id, workflow_id, category, amount, currency, metadata,
+created_at
+
+tool_invocations - id, execution_id, tool_name, status, duration_ms,
+input_hash, output_reference, error_code, created_at
+
+Additional requirements: - Foreign keys and indexes on common
+lookup/filter columns. - Workspace ownership checks on every resource
+query. - Store structured flexible metadata in JSONB only when
+appropriate. - Avoid duplicating authoritative state in multiple
+tables. - Use transactions for related state changes and event
+insertion. - Use optimistic concurrency or row-level locking for task
+claiming. - Add created_at/updated_at consistently. - Add indexes for
+workflow_id, task_id, agent_id, status and timestamps as appropriate. -
+Do not add vector search/pgvector until a real retrieval use case is
+implemented. - Do not store large binary artifacts in PostgreSQL. -
+Never store plaintext passwords, API keys or refresh tokens. - Design
+retention and deletion behavior; do not claim immutable logs are legally
+immutable.
+
+===============================================================================
+11. API CONTRACTS
+===============================================================================
+
+Base path: /api/v1 Local backend: http://localhost:8000
+
+Workflow endpoints: POST /workflows GET /workflows GET
+/workflows/{workflow_id} POST /workflows/{workflow_id}/start POST
+/workflows/{workflow_id}/cancel GET /workflows/{workflow_id}/tasks GET
+/workflows/{workflow_id}/events GET /workflows/{workflow_id}/stream GET
+/workflows/{workflow_id}/report
+
+Task endpoints: GET /tasks/{task_id} GET /tasks/{task_id}/executions GET
+/tasks/{task_id}/artifacts GET /tasks/{task_id}/verification POST
+/tasks/{task_id}/retry POST /tasks/{task_id}/reassign POST
+/tasks/{task_id}/cancel
+
+Agent endpoints: POST /agents GET /agents GET /agents/{agent_id} PATCH
+/agents/{agent_id} POST /agents/{agent_id}/enable POST
+/agents/{agent_id}/disable GET /agents/{agent_id}/executions GET
+/agents/proposals POST /agents/proposals/{proposal_id}/approve POST
+/agents/proposals/{proposal_id}/reject
+
+Approval endpoints: GET /approvals GET /approvals/{approval_id} POST
+/approvals/{approval_id}/approve POST /approvals/{approval_id}/reject
+POST /interventions/{intervention_id}/respond
+
+Analytics endpoints: GET /analytics/overview GET /analytics/costs GET
+/analytics/tokens GET /analytics/agents GET
+/analytics/workflows/{workflow_id}
+
+Health endpoints: GET /health/live GET /health/ready GET
+/health/database GET /health/redis
+
+API rules: - Use Pydantic request and response schemas. - Use consistent
+HTTP status codes and structured error responses. - Paginate list
+endpoints. - Validate UUIDs and resource ownership. - Use idempotency
+keys for workflow creation and approval actions. - Do not execute
+long-running LLM work inside an HTTP request. - Return workflow ID
+promptly; execute asynchronously. - Use SSE for live updates
+initially. - SSE must enforce authentication/authorization and avoid
+leaking other workspace events. - Publish OpenAPI docs in development. -
+Version APIs under /api/v1. - Never expose stack traces, secrets or raw
+internal exceptions to clients.
+
+Example workflow creation request:
+
+{ “prompt”: “Research AI customer support platforms and prepare a
+competitive analysis.”, “settings”: { “autonomy”: “approval_required”,
+“max_budget”: 2.00, “currency”: “USD”, “max_parallel_tasks”: 3,
+“allow_dynamic_agent_proposals”: true } }
+
+Example response:
+
+{ “workflow_id”: “uuid”, “status”: “PENDING”, “message”: “Workflow
+created successfully” }
+
+Standard error shape:
+
+{ “error”: { “code”: “WORKFLOW_BUDGET_EXCEEDED”, “message”: “Workflow
+budget limit reached.”, “request_id”: “uuid”, “details”: {} } }
+
+===============================================================================
+12. TOKEN USAGE AND COST ACCOUNTING
+===============================================================================
+
+All LLM calls must eventually pass through a centralized model gateway.
+Do not let each agent implement separate untracked provider clients.
+
+Record per call: - workflow_id - task_id - execution_id - provider -
+exact model identifier - input tokens - output tokens - cached input
+tokens when reported - provider-specific usage fields -
+input/output/total cost - currency - pricing version or snapshot -
+provider request ID if available - timestamp
+
+Use provider-reported usage as the source for token counts whenever
+available. Do not estimate token counts and label them actual.
+
+Illustrative text-model formula:
+
+cost = (billable_input_tokens * input_price_per_million +
+billable_output_tokens * output_price_per_million) / 1,000,000
+
+Handle cached tokens, image/audio usage, batch discounts and
+provider-specific billing rules separately. Snapshot the applicable
+pricing data so historical cost reports remain reproducible.
+
+Separate: - LLM costs. - External tool/API costs. - Storage costs. -
+Infrastructure costs. - Estimated/unallocated costs.
+
+For local MVP, infrastructure cost may be shown as not measured or
+estimated. Never present an estimate as an actual provider charge.
+
+Track failed calls and retries too. Do not double count provider retries
+if the provider’s response already represents a single billed request.
+
+===============================================================================
+13. SECURITY REQUIREMENTS
+===============================================================================
+
+Authentication: - Use Argon2id password hashing. - Use short-lived
+access tokens. - Implement refresh token rotation if refresh tokens are
+used. - Store refresh tokens securely as hashes or equivalent protected
+representations. - Do not log credentials or tokens. - Enforce
+authorization on every resource endpoint.
+
+Authorization: - Roles: Owner, Admin, Member, Viewer. - Every workflow,
+task, artifact, agent and approval is workspace-scoped. - A user must
+not access another workspace by guessing UUIDs. - Approval permission is
+distinct from workflow execution permission. - Enforce authorization in
+backend services, not only frontend visibility.
+
+Secrets: - Keep secrets in environment variables or a secret manager. -
+Commit only .env.example with placeholders. - Never return secrets from
+APIs. - Never put provider API keys in agent prompts or model-visible
+tool results. - Redact secrets from logs and exception messages.
+
+Agent/tool security: - Explicit per-agent tool permission manifest. -
+Enforce permissions in a server-side tool gateway. - Treat user input,
+retrieved documents, web pages, tool output and agent output as
+untrusted. - Protect against prompt injection and path traversal. -
+Validate file type, size and storage path. - No unrestricted host shell
+execution. - No production database credentials available to agents. -
+No network access by default for code execution. - Require approval for
+sensitive external actions. - Do not rely on prompt instructions as a
+security boundary.
+
+Code execution: - If/when implemented, use isolated containers with
+non-root user, resource limits, restricted filesystem, restricted
+networking and timeouts. - Do not mount the developer’s home directory
+or host Docker socket. - Treat container isolation as one layer, not a
+complete security guarantee. - Keep execution disabled in Phase 1.
+
+Reliability: - Bounded retries. - Idempotent task claiming. -
+Transactional state changes. - Durable event history. - Timeouts. -
+Dead-letter handling for failed background jobs. - Graceful shutdown. -
+Health/readiness checks. - Backup/restore documentation before
+cloud/production use.
+
+===============================================================================
+14. FRONTEND REQUIREMENTS
+===============================================================================
+
+Required screens: 1. Dashboard - Active and completed workflows. -
+Recent activity. - Token/cost summary when available. - Agent status
+overview.
+
+2.  Create Workflow
+    -   Prompt input.
+    -   Autonomy policy.
+    -   Budget limit.
+    -   Parallelism limit.
+    -   Dynamic agent proposal setting.
+3.  Workflow Detail
+    -   Workflow status.
+    -   Task DAG.
+    -   Task progress.
+    -   Agent activity.
+    -   Event timeline.
+    -   Artifacts.
+4.  Task Detail
+    -   Task contract.
+    -   Assigned agent.
+    -   Execution attempts.
+    -   Submission.
+    -   Verification findings.
+    -   Rework history.
+5.  Agent Registry
+    -   Agent list.
+    -   Capabilities.
+    -   Enabled status.
+    -   Model/tool configuration.
+    -   Version history.
+6.  Agent Proposals
+    -   Proposed specialist details.
+    -   Requested skills and tools.
+    -   Permission review.
+    -   Approve/reject.
+7.  Human Intervention Center
+    -   Pending clarifications.
+    -   Approval requests.
+    -   Risk and evidence.
+    -   Approve/reject/respond.
+8.  Analytics
+    -   Token usage.
+    -   Cost by workflow/agent/model.
+    -   Execution duration.
+    -   Retry/failure rates.
+9.  Final Workflow Report
+    -   Original request.
+    -   Task decomposition.
+    -   Dependency graph.
+    -   Agent assignments.
+    -   Execution timeline.
+    -   Verification outcomes.
+    -   Failures and recovery.
+    -   Human interventions.
+    -   Artifacts.
+    -   Token and cost breakdown.
+
+UX requirements: - Responsive layout. - Accessible controls and keyboard
+navigation. - Loading, empty, success and error states. - No fake live
+data presented as real. - Mock data must be clearly identified. - SSE
+updates should reconnect safely and avoid duplicate event display. -
+Never display hidden chain-of-thought. Show concise decisions, evidence,
+tool activity and verification rationale instead.
+
+===============================================================================
+15. TESTING STRATEGY AND QUALITY GATES
+===============================================================================
+
+Backend: - Pytest. - HTTPX. - Real PostgreSQL for integration tests. -
+Redis integration tests. - Mock model adapters for deterministic tests.
+
+Frontend: - Vitest. - React Testing Library. - Playwright for E2E.
+
+Static quality: - Ruff formatting and linting. - Type checking. -
+Dependency vulnerability scanning. - Secret scanning. - Frontend lint
+and type checks.
+
+Required test categories: - Unit tests for services and state
+transitions. - API contract tests. - Database transaction and migration
+tests. - Agent contract/schema tests. - DAG acyclicity and dependency
+tests. - Queue dispatch and worker tests. - Idempotency and duplicate
+delivery tests. - Verification and retry tests. - Approval authorization
+tests. - Workspace isolation tests. - Budget enforcement tests. - Usage
+accounting tests. - Frontend component tests. - End-to-end workflow
+tests.
+
+Critical scenarios: 1. Simple request creates a workflow. 2. Complex
+request creates multiple tasks. 3. Invalid DAG cycle is rejected. 4.
+Independent tasks can run concurrently. 5. Dependent tasks remain
+blocked until prerequisites complete. 6. Malformed agent output is
+rejected. 7. Worker failure is recorded. 8. Transient failure is retried
+within policy. 9. Repeated failure is escalated. 10. Human approval
+pauses and resumes a workflow. 11. Unauthorized approval is rejected.
+12. User cancellation is persisted. 13. Budget cap prevents further
+dispatch. 14. Duplicate queue message does not create duplicate accepted
+side effects. 15. Worker restart does not lose committed tasks. 16. User
+A cannot read User B’s resources. 17. Token/cost totals reconcile with
+stored usage records. 18. Artifacts are workspace-scoped and
+checksum-verified.
+
+Never remove or weaken tests simply to make an implementation pass. If a
+test is incorrect, explain why and request review before changing the
+expected behavior.
+
+Definition of Done for every development step: - Requirements
+understood. - Existing code inspected. - Implementation is scoped to the
+step. - Tests added or updated. - Formatting and lint checks pass. -
+Relevant type checks pass. - Relevant tests pass. - No secrets or
+unrelated files are committed. - Documentation/progress updated. - Git
+diff reviewed. - A meaningful Git commit is created. - Final response
+reports commit hash and verification evidence.
+
+===============================================================================
+16. REPOSITORY STRUCTURE
+===============================================================================
+
+Use this as the target structure, but create it incrementally. Do not
+create empty folders and placeholder files for every future feature
+during Phase 1.
+
+agentflow/ frontend/ app/ (auth)/ dashboard/ workflows/ agents/
+approvals/ analytics/ settings/ components/ hooks/ lib/ services/ types/
+tests/ package.json
+
+backend/ app/ main.py api/v1/ core/ orchestration/ agents/
+implementations/ verification/ execution/ tools/ human_intervention/
+usage/ reporting/ models/ schemas/ repositories/ services/ db/ tests/
+unit/ integration/ contract/ e2e/ alembic/ pyproject.toml Dockerfile
+
+infrastructure/ docker/ docker-compose.yml monitoring/ scripts/
+
+docs/ PRD.md HLD.md LLD.md DATABASE.md API_CONTRACTS.md SECURITY.md
+TESTING.md ADR/ runbooks/
+
+.github/ workflows/ backend-ci.yml frontend-ci.yml
+
+.env.example .gitignore Makefile (or PowerShell scripts where more
+suitable) README.md CLAUDE.md progress.md IMPLEMENTATION_PLAN.md
+
+Keep frontend and backend boundaries clear. Avoid circular imports. API
+route handlers should not contain orchestration or database business
+logic. Do not create abstractions for hypothetical future needs.
+
+===============================================================================
+17. PHASED IMPLEMENTATION PLAN
+===============================================================================
+
+Overall roadmap: 8 phases. Complete and verify each phase before
+starting the next.
+
+PHASE 1 — FOUNDATION (first milestone) Goal: Runnable local application,
+infrastructure, persistence, authentication foundation, agent/workflow
+CRUD and mock background execution.
+
+Step 1.0 — Repository reconnaissance and implementation plan - Inspect
+repository, Git status, existing files and installed runtimes. - Confirm
+project root and do not access/edit parent or unrelated directories. -
+Confirm Windows/PowerShell, Python, Node, npm, Docker and Git
+availability. - Identify existing user changes and preserve them. -
+Create/refresh CLAUDE.md, progress.md and IMPLEMENTATION_PLAN.md. -
+Record decisions and blockers. - Do not implement application features
+yet. - Run any available baseline checks. - Commit: docs: establish
+AgentFlow implementation plan
+
+Step 1.1 — Monorepo and developer tooling - Create frontend/backend
+skeletons. - Add Python project configuration and npm configuration. -
+Add .gitignore, .env.example, README and basic scripts. - Configure
+lint/format/test commands. - Add minimal health-only API and minimal
+frontend shell. - Verify both can start. - Commit: chore: initialize
+AgentFlow monorepo
+
+Step 1.2 — Local infrastructure - Add Docker Compose for PostgreSQL and
+Redis. - Bind ports to localhost. - Add named volumes and health
+checks. - Document startup, stop, logs and reset commands. - Verify
+connections from host. - Do not delete volumes during routine reset. -
+Commit: infra: add local PostgreSQL and Redis
+
+Step 1.3 — Backend foundation - Configure FastAPI and Pydantic
+Settings. - Add structured logging and request IDs. - Add centralized
+exception handling. - Add SQLAlchemy engine/session. - Add
+liveness/readiness/database/Redis health endpoints. - Add tests for
+configuration and health checks. - Commit: feat(backend): establish API
+and infrastructure foundation
+
+Step 1.4 — Database and migrations - Add initial SQLAlchemy models for
+users, workspaces, members, agents, agent versions, workflows, tasks and
+workflow events. - Add Alembic migrations. - Add indexes, constraints
+and foreign keys. - Add test database setup. - Verify migration upgrade
+and downgrade in a disposable test database. - Commit: feat(database):
+add core AgentFlow schema and migrations
+
+Step 1.5 — Authentication and workspace authorization - Add
+registration/login. - Use Argon2id. - Add access token handling and
+secure refresh strategy if implemented. - Add roles Owner, Admin, Member
+and Viewer. - Enforce workspace ownership in service/repository layer. -
+Test cross-workspace access denial. - Commit: feat(auth): add
+authentication and workspace RBAC
+
+Step 1.6 — Agent registry CRUD - Add agent definitions and immutable
+versions. - Add capability and tool permission schemas. - Add
+list/detail/create/update/enable/disable APIs. - Seed only the six
+initial agent definitions as configuration, not hardcoded business
+logic. - Add authorization and validation tests. - Commit: feat(agents):
+implement agent registry and versioning
+
+Step 1.7 — Workflow and task management - Add workflow
+create/list/detail. - Add task CRUD and dependencies. - Add DAG cycle
+validation. - Add centralized state transition service. - Persist
+workflow events. - Add idempotent workflow creation. - Add tests for
+state transitions and dependencies. - Commit: feat(workflows): implement
+workflow and task management
+
+Step 1.8 — Background execution foundation - Configure Celery and
+Redis. - Add a mock worker that executes a harmless task. - Add
+execution attempt records. - Add reliable task dispatch design; use an
+outbox before relying on database+queue atomicity. - Add bounded retry
+and timeout behavior. - Verify duplicate delivery behavior. - Commit:
+feat(execution): add mock background task execution
+
+Step 1.9 — Frontend foundation - Add authentication screens. - Add
+dashboard shell and navigation. - Add workflow list/create/detail
+skeletons. - Add agent registry screen. - Connect to typed API client. -
+Use clearly labeled mock data only where APIs are not ready. - Add
+loading/error/empty states and tests. - Commit: feat(frontend): add
+AgentFlow application shell
+
+Step 1.10 — Phase 1 integration and release - Run full backend/frontend
+tests. - Run database migrations from a clean state. - Start frontend,
+API, Redis, PostgreSQL and worker. - Verify registration/login,
+workspace isolation, agent CRUD, workflow/task CRUD and mock worker. -
+Verify CI. - Update README and progress. - Create Phase 1 release
+notes. - Commit: release: complete AgentFlow foundation v0.1.0
+
+Do not combine all Phase 1 steps into one giant implementation. Each
+numbered step is a separate work unit and must end with its own verified
+commit.
+
+PHASE 2 — INTELLIGENT PLANNING - Add model gateway abstraction and mock
+model adapter. - Add structured prompt analysis. - Add planner output
+schema. - Add task decomposition and acceptance criteria generation. -
+Add DAG validation and plan preview. - Add user confirmation before
+execution where needed. - Add tests with deterministic mock responses. -
+Commit each bounded implementation step.
+
+PHASE 3 — SPECIALIZED AGENTS - Add BaseAgent contract. - Add Research,
+Analyst, Developer, Writer, QA and General agents. - Add rule-based
+agent selection with rationale. - Add tool registry and permission
+enforcement. - Add LiteLLM integration behind an adapter. - Add provider
+usage capture. - Add agent proposal workflow; approval before
+activation. - Do not enable unsafe shell/code execution.
+
+PHASE 4 — ORCHESTRATION AND SCHEDULING - Add LangGraph workflow state
+and nodes. - Add PostgreSQL checkpoint persistence. - Add Celery
+dispatch and worker lifecycle. - Add dependency-aware scheduling and
+concurrency limits. - Add cancellation and restart recovery. - Add
+transactional outbox and idempotent claims. - Test parallel and
+sequential task execution.
+
+PHASE 5 — VERIFICATION AND RECOVERY - Add deterministic verification. -
+Add semantic evaluation with structured evidence. - Add rework
+instructions. - Add bounded retries and reassignment. - Add replan logic
+with DAG validation. - Add escalation policies. - Ensure only platform
+verification can accept tasks.
+
+PHASE 6 — HUMAN INTERVENTION - Add clarification requests. - Add
+approval requests and decisions. - Add workflow pause/resume. - Add
+expiration and rejection behavior. - Add approval audit records. -
+Enforce per-action authorization.
+
+PHASE 7 — OBSERVABILITY AND COST - Add centralized usage tracker. - Add
+provider pricing snapshots. - Add cost calculation and reconciliation. -
+Add per-workflow/per-agent/per-model breakdown. - Add event timeline and
+execution report. - Add latency, retry and failure metrics. -
+Distinguish actual and estimated costs.
+
+PHASE 8 — PRODUCT COMPLETION - Complete workflow visualization. -
+Complete analytics and reporting UI. - Add artifact management. - Add
+workflow replay where safe. - Security review and load tests. -
+Backup/restore and operational runbooks. - Production deployment design
+only after local MVP is stable.
+
+===============================================================================
+18. CLAUDE CODE DEVELOPMENT OPERATING PROTOCOL
+===============================================================================
+
+Claude must behave like a senior engineer working in a carefully managed
+repository.
+
+A. Before any work 1. Run pwd and confirm repository root. 2. Inspect
+git status, git branch and recent git log. 3. Inspect CLAUDE.md,
+progress.md, IMPLEMENTATION_PLAN.md and relevant docs. 4. Inspect the
+relevant source files and tests before making claims about them. 5.
+Check existing uncommitted changes. Never overwrite, reset or commit
+unrelated user work. 6. Identify the exact implementation step being
+requested. 7. If the request is ambiguous or conflicts with
+architecture, explain the conflict and ask. 8. For non-trivial work,
+present a concise implementation plan before editing. 9. Use plan mode
+for broad or risky work when available. 10. Do not assume files,
+commands, packages or APIs exist; verify them.
+
+B. Scope discipline 1. Work on one numbered implementation step at a
+time. 2. Do not implement future phases prematurely. 3. Do not add
+unrelated features or speculative abstractions. 4. Prefer the smallest
+complete implementation that meets acceptance criteria. 5. Do not
+duplicate existing utilities, models, schemas or services. 6. Follow
+established naming and code patterns after inspecting them. 7. Do not
+silently change the technology stack. 8. Do not introduce dependencies
+without explaining why they are needed. 9. Avoid excessive
+documentation/comments for obvious code; document important contracts
+and non-obvious decisions. 10. Do not leave dead code, temporary files
+or debugging artifacts.
+
+C. Use Claude Code capabilities effectively 1. Use repository
+instructions in CLAUDE.md as persistent project guidance. 2. Use
+subagents only for genuinely independent work such as reviewing
+architecture, inspecting test coverage or researching a library. Keep
+implementation ownership clear. 3. Do not delegate tightly coupled edits
+to multiple agents that may modify the same files. 4. Parallelize
+independent read-only investigation and independent checks when useful.
+5. Keep final integration, architecture consistency and verification
+with the primary session. 6. Use focused context: read relevant files,
+not the entire repository indiscriminately. 7. Use the available project
+tools and test commands rather than guessing. 8. Use plan mode before
+broad changes; return to normal implementation only after the plan is
+understood. 9. Use permission prompts for destructive, external or
+irreversible actions. 10. Never use dangerous permission-bypass modes as
+a routine shortcut.
+
+D. Implementation strategy 1. Understand the acceptance criteria first.
+2. Inspect the existing implementation and relevant dependencies. 3.
+Define or update tests before/alongside implementation. 4. Implement in
+small coherent changes. 5. Run the narrowest relevant tests during
+development. 6. Run the full relevant test suite before completion. 7.
+Review the diff for correctness, security, maintainability and scope. 8.
+Update documentation and progress state. 9. Commit only after all
+required checks pass. 10. Report any unverified checks honestly.
+
+E. Parallel work Use parallel tool calls or subagents only when tasks
+are independent and file ownership is clear. Examples: - Read frontend
+package configuration and backend project configuration in parallel. -
+Run independent backend and frontend test suites in parallel after
+changes are complete. - Ask one subagent to review security while the
+primary session owns implementation. Do not parallelize: - Database
+migration and code that depends on the not-yet-created schema. -
+Multiple agents editing the same files. - Sequential steps with
+unresolved decisions. - Git operations that depend on previous changes.
+Never guess missing parameters to force parallel execution.
+
+F. Context and long-running work - Maintain progress.md after every
+completed implementation step. - Maintain IMPLEMENTATION_PLAN.md with
+statuses: NOT_STARTED, IN_PROGRESS, BLOCKED, DONE. - Record decisions in
+docs/ADR. - Before ending a session, leave the repository in a coherent
+state. - If context is running low, stop before creating a large
+unverified change. Update progress and commit only if the current step
+meets its Definition of Done. - On a new session, rediscover state from
+files and Git history rather than trusting chat memory. - Do not claim a
+step is complete based only on files existing; run its checks.
+
+G. Hallucination prevention - Never claim a test passed unless it was
+executed and its result inspected. - Never claim a service is running
+unless health was verified. - Never invent dependency versions, API
+fields, environment variables or file paths. - Inspect official
+documentation for version-sensitive library behavior. - If a command
+fails, inspect the error and fix the cause; do not hide it. - Do not
+replace a real implementation with hardcoded test-specific behavior. -
+Do not weaken tests or validation to make the build green. - If
+requirements are infeasible, explain why and propose a safe alternative.
+
+H. Security and destructive operations Always ask the user before: -
+Deleting data or directories that may contain user work. - Dropping or
+resetting a non-disposable database. - Removing Git branches or tags. -
+Force-pushing. - Rewriting published history. - Pushing commits to a
+remote if the user has not requested pushing. - Deploying or modifying
+shared/production infrastructure. - Sending external communications or
+making purchases. Never run git reset –hard, git clean -fd, destructive
+database resets or force-push as a shortcut. Never bypass hooks with
+–no-verify. Preserve unfamiliar user files.
+
+===============================================================================
+19. MANDATORY GIT COMMIT PROTOCOL
+===============================================================================
+
+The user explicitly requires a Git commit at the end of EACH completed
+development step.
+
+This is mandatory.
+
+A development step is one numbered work unit in the implementation plan,
+such as Step 1.2 or Step 1.3. Do not combine several numbered steps into
+one commit.
+
+At the end of each development step, Claude must:
+
+1.  Inspect git status.
+2.  Review all changed files.
+3.  Review git diff, including staged diff.
+4.  Confirm no secrets, local databases, generated artifacts, logs,
+    caches, virtual environments, node_modules, .env files or unrelated
+    user files are included.
+5.  Run formatting and lint checks.
+6.  Run type checks where configured.
+7.  Run all relevant tests.
+8.  Run a build or startup smoke test where relevant.
+9.  Confirm the step’s acceptance criteria are satisfied.
+10. Update progress.md and IMPLEMENTATION_PLAN.md.
+11. Stage only the intended files; prefer explicit paths over git add
+    -A.
+12. Create exactly one meaningful commit for that development step.
+13. Inspect the resulting commit and git status.
+14. Report the commit hash and verification evidence.
+
+Commit message convention: - docs: establish AgentFlow implementation
+plan - chore: initialize AgentFlow monorepo - infra: add local
+PostgreSQL and Redis - feat(backend): establish API foundation -
+feat(database): add core schema and migrations - feat(auth): add
+authentication and workspace RBAC - feat(agents): implement agent
+registry - feat(workflows): implement workflow management -
+feat(execution): add mock background execution - feat(frontend): add
+application shell - test: add workflow integration coverage - fix:
+correct task state transition validation
+
+Use Conventional Commit style consistently. Use one commit per completed
+development step. A step may contain several related files and tests,
+but should represent one coherent deliverable.
+
+If checks fail: - Do not create a commit that claims the step is
+complete. - Diagnose and fix within the current step if safe and in
+scope. - If blocked, leave changes intact, update progress as BLOCKED,
+explain the blocker and do not create a completion commit. - Never hide
+failing tests or stage unrelated files.
+
+If Git identity is not configured: - Do not invent name/email or change
+global Git configuration. - Ask the user to configure repository-local
+identity or provide the desired identity. - Do not claim a commit was
+created.
+
+Commit locally only. Do not push to GitHub unless the user explicitly
+asks.
+
+At the end of EVERY completed step, report: - Step ID and title. -
+Files/components changed. - Tests and commands executed. - Test
+results. - Any known limitations. - Commit hash and commit message. -
+Next recommended step.
+
+===============================================================================
+20. PROJECT MEMORY FILES
+===============================================================================
+
+CLAUDE.md: - Keep concise, persistent repository-specific rules. -
+Include architecture boundaries, commands, test rules, security rules
+and commit protocol. - Do not copy the entire handoff into CLAUDE.md. -
+This handoff remains the detailed source specification.
+
+progress.md: - Current phase and step. - Completed steps and commit
+hashes. - Current implementation state. - Commands and checks last
+executed. - Known issues and blockers. - Next exact action. - Do not
+claim unverified completion.
+
+IMPLEMENTATION_PLAN.md: - All phases and numbered steps. - Status for
+every step. - Acceptance criteria. - Commit hash for completed steps. -
+Dependencies/blockers.
+
+docs/ADR/: Record meaningful architecture decisions, alternatives
+considered and consequences. Do not create an ADR for trivial
+implementation details.
+
+===============================================================================
+21. LOCAL DEVELOPMENT COMMANDS
+===============================================================================
+
+Claude must inspect the environment and adjust commands to what is
+actually installed.
+
+Typical Windows PowerShell commands:
+
+Check tools: git –version node –version npm –version python –version
+docker –version docker compose version
+
+Python environment (if Python 3.12 is installed): py -3.12 -m venv .venv
+..venv.ps1 python -m pip install –upgrade pip
+
+Backend commands after configuration: python -m pip install -e “.[dev]”
+alembic upgrade head uvicorn app.main:app –reload –port 8000 pytest ruff
+check . ruff format –check .
+
+Frontend commands after package setup: npm install npm run dev npm run
+lint npm run typecheck npm test npm run build
+
+Infrastructure: docker compose -f
+infrastructure/docker/docker-compose.yml up -d docker compose -f
+infrastructure/docker/docker-compose.yml ps docker compose -f
+infrastructure/docker/docker-compose.yml logs docker compose -f
+infrastructure/docker/docker-compose.yml down
+
+Do not run destructive volume removal as a normal shutdown. A volume
+reset permanently deletes local database/Redis data and requires
+explicit user confirmation.
+
+If the developer’s installed Python version differs, inspect dependency
+compatibility. Prefer the documented Python 3.12 baseline for
+reproducibility; do not silently switch project requirements to an
+unverified Python version.
+
+===============================================================================
+22. DEFINITION OF MVP COMPLETE
+===============================================================================
+
+The MVP is not complete merely because a chatbot can call several
+agents.
+
+The MVP must demonstrate this end-to-end journey:
+
+1.  User authenticates and opens a workspace.
+2.  User submits a natural-language request.
+3.  Planner produces a structured plan and task DAG.
+4.  User can inspect the plan before execution.
+5.  Scheduler selects authorized specialist agents.
+6.  Independent tasks execute concurrently within configured limits.
+7.  Dependent tasks wait until prerequisites complete.
+8.  Agents return structured submissions and artifacts.
+9.  Verification checks deliverables against acceptance criteria.
+10. Failed work triggers bounded rework/reassignment.
+11. Sensitive actions pause for human approval.
+12. Human response is persisted and workflow resumes safely.
+13. Workflow can recover from worker restart without losing committed
+    state.
+14. User can inspect full event and execution history.
+15. Token usage and cost are attributed to workflow/task/agent/model
+    when available.
+16. Final report includes deliverables, decisions, failures, retries,
+    approvals and metrics.
+17. Workspace authorization prevents cross-user data access.
+18. Automated CI and test suite pass.
+19. Local setup is reproducible from README.
+20. Every completed development step has its own verified Git commit.
+
+For an MVP, implement these capabilities in a constrained, demonstrable
+way. Do not claim production scale or unrestricted autonomy.
+
+===============================================================================
+23. FIRST CLAUDE CODE SESSION — KICKOFF PROMPT
+===============================================================================
+
+After creating the repository and placing this file at the repository
+root, open a terminal in the repository root and start Claude Code.
+
+Paste the following prompt:
+
+You are the senior staff engineer and technical implementation lead for
+AgentFlow.
+
+Read the complete AGENTFLOW_HANDOFF.txt before making changes. Treat it
+as the product and engineering source of truth unless the repository
+contains an explicit, newer approved decision.
+
+We will build this project incrementally using the mandatory Git commit
+protocol in the handoff.
+
+CURRENT OBJECTIVE: Start with Phase 1, Step 1.0 only: repository
+reconnaissance and implementation planning.
+
+Instructions: 1. Confirm the current working directory is the AgentFlow
+repository root. 2. Inspect Git status, branch, recent commits and
+existing files. 3. Inspect available runtimes and tools: Git, Python,
+Node, npm, Docker and Docker Compose. 4. Identify any existing work and
+preserve all user changes. 5. Read the handoff carefully and identify
+contradictions, missing decisions or environment blockers. Do not
+silently invent answers. 6. Create a concise root CLAUDE.md containing
+persistent project rules, including the mandatory per-step Git commit
+protocol. 7. Create progress.md and IMPLEMENTATION_PLAN.md with all
+phases and numbered steps. 8. Record important architecture decisions in
+docs/ADR where appropriate. 9. Do not implement application features in
+Step 1.0. 10. Run only checks appropriate to repository reconnaissance
+and documentation. 11. Review the diff and ensure no secrets or
+unrelated files are staged. 12. At the end of Step 1.0, create its own
+Git commit if all acceptance criteria pass. 13. Do not push to the
+remote. 14. Report the environment, files created, decisions, blockers,
+checks and commit hash.
+
+Work only inside the confirmed repository root. Do not delete, reset or
+overwrite existing files without understanding their purpose. Do not use
+dangerous permission-bypass modes.
+
+Before editing, present your short plan and any blocking questions. Once
+the plan is clear, complete Step 1.0 and stop. Do not start Step 1.1
+until I explicitly ask.
+
+===============================================================================
+24. PROMPTS TO USE FOR SUBSEQUENT DEVELOPMENT STEPS
+===============================================================================
+
+After Step 1.0, use one focused prompt per step. Replace STEP_ID with
+the next step.
+
+Read AGENTFLOW_HANDOFF.txt, CLAUDE.md, progress.md and
+IMPLEMENTATION_PLAN.md.
+
+Implement only STEP_ID from the approved AgentFlow implementation plan.
+
+Before editing: - Confirm repository root and inspect Git status. -
+Review the last commit and relevant files. - Read the step’s acceptance
+criteria. - Present a concise plan and identify risks or blockers.
+
+During implementation: - Follow the approved architecture and repository
+conventions. - Inspect code before modifying it. - Add or update tests
+alongside the feature. - Use parallel subagents only for independent
+work with clear file ownership. - Do not implement future steps or
+unrelated improvements. - Do not hardcode test-specific behavior. - Do
+not weaken tests to make them pass. - Preserve all user changes and
+secrets.
+
+Before completion: - Run relevant tests, formatting, lint, type checks
+and build/smoke checks. - Inspect the complete Git diff. - Update
+progress.md and IMPLEMENTATION_PLAN.md. - Stage only files belonging to
+this step. - Create one meaningful Git commit for this completed step,
+as required by the handoff. - Verify the commit and final Git status. -
+Do not push.
+
+If acceptance criteria cannot be met, do not create a completion commit.
+Explain the blocker, preserve the work and update progress accurately.
+
+Stop after this step. Report changed files, checks and results, commit
+hash, limitations and the next recommended step.
+
+===============================================================================
+25. FINAL ENGINEERING EXPECTATIONS
+===============================================================================
+
+Quality over speed. Small verified increments over large speculative
+changes.
+
+Claude must: - Investigate before editing. - Plan before complex
+implementation. - Keep implementation scoped. - Use subagents
+selectively. - Parallelize only independent work. - Write tests for
+behavior, not implementation details. - Verify with actual commands. -
+Preserve user work. - Keep architecture and documentation aligned. -
+Maintain progress across sessions. - Commit each completed development
+step separately. - Never push without authorization. - Never claim
+unverified success.
+
+The developer is the product owner. Claude is the implementation
+partner. Explain material trade-offs and ask before changing product
+scope, security policy, infrastructure strategy or architecture.
+
+END OF AGENTFLOW HANDOFF
