@@ -127,6 +127,17 @@ class WorkflowTask(Base):
             ["workflow_id", "parent_task_id"],
             ["workflow_tasks.workflow_id", "workflow_tasks.id"],
         ),
+        # Execution references the exact agent version, which must belong to the agent.
+        ForeignKeyConstraint(
+            ["assigned_agent_id", "assigned_agent_version_id"],
+            ["agent_versions.agent_id", "agent_versions.id"],
+            ondelete="RESTRICT",
+            name="fk_workflow_tasks_assigned_agent_version",
+        ),
+        CheckConstraint(
+            "(assigned_agent_id IS NULL) = (assigned_agent_version_id IS NULL)",
+            name="agent_and_version_assigned_together",
+        ),
         CheckConstraint("attempt_count >= 0", name="attempt_count_non_negative"),
         Index("ix_workflow_tasks_workflow_id_status", "workflow_id", "status"),
         Index("ix_workflow_tasks_workspace_id_status", "workspace_id", "status"),
@@ -152,6 +163,8 @@ class WorkflowTask(Base):
     assigned_agent_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("agents.id", ondelete="RESTRICT"), index=True
     )
+    # Pinned when assigned; later publishing never changes what this task runs.
+    assigned_agent_version_id: Mapped[uuid.UUID | None] = mapped_column(index=True)
     attempt_count: Mapped[int] = mapped_column(server_default=text("0"))
     created_at: Mapped[datetime] = created_at_column()
     updated_at: Mapped[datetime] = updated_at_column()

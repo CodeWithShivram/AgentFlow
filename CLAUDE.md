@@ -32,6 +32,11 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   and `X-CSRF-Token`; tests use `make_client` (sends the allowed Origin) and send the CSRF cookie value.
 - Store only hashes of refresh, CSRF and invitation tokens. Auth endpoints must call the Redis `RateLimiter` (fails closed).
 - RLS is designed but NOT enabled (OD-13): the app DB role is a superuser. Isolation relies on `workspace_role` + scoped queries.
+- Agent registry (ADR-0008): never execute instructions or tools in the registry. Configurations go through the strict
+  `AgentConfiguration`; tools and capabilities come only from `app/agents/catalog.py`. `agent_versions` is immutable;
+  tasks pin `assigned_agent_version_id`. Mutations take the agent `revision`. HIGH-risk tools need OWNER.
+  Built-ins come only from `builtin_agents.json` via `uv run python -m app.agents.seed`.
+- No ORM relationships are defined: flush a parent row before inserting rows that reference it in the same transaction.
 - Errors use the standard shape in `app/core/errors.py`; never return exception text. Log through `logging` (JSON + redaction), never `print`.
 - PostgreSQL is authoritative state; Redis is transport/cache only. Dispatch uses a transactional outbox.
 - Agents submit results; only platform verification accepts a task. LLM output is untrusted until validated.

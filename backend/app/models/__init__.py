@@ -1,6 +1,14 @@
 """ORM models. Importing this package registers every table on `Base.metadata`."""
 
-from app.models.agent import Agent, AgentStatus, AgentVersion
+from app.models.agent import (
+    Agent,
+    AgentAuditAction,
+    AgentAuditEvent,
+    AgentProposal,
+    AgentProposalStatus,
+    AgentStatus,
+    AgentVersion,
+)
 from app.models.auth import (
     AuthSession,
     RefreshToken,
@@ -22,6 +30,10 @@ from app.models.workflow import (
 
 __all__ = [
     "Agent",
+    "AgentAuditAction",
+    "AgentAuditEvent",
+    "AgentProposal",
+    "AgentProposalStatus",
     "AgentStatus",
     "AgentVersion",
     "AuthSession",

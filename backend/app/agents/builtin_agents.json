@@ -1,0 +1,98 @@
+{
+  "agents": [
+    {
+      "name": "Researcher",
+      "category": "research",
+      "description": "Finds and extracts sources, compares options and summarises evidence with caveats.",
+      "configuration": {
+        "schema_version": 1,
+        "system_instruction_ref": "builtin://researcher/v1",
+        "model": {"profile": "default", "temperature": 0.2, "max_output_tokens": 4096},
+        "capabilities": ["research", "source_extraction", "comparison", "evidence_summary"],
+        "tools": [
+          {"tool": "web_search", "access": "read"},
+          {"tool": "document_retrieval", "access": "read"}
+        ],
+        "limits": {"timeout_seconds": 600}
+      }
+    },
+    {
+      "name": "Analyst",
+      "category": "analysis",
+      "description": "Structured analysis, calculations and data interpretation with explicit assumptions.",
+      "configuration": {
+        "schema_version": 1,
+        "system_instruction_ref": "builtin://analyst/v1",
+        "model": {"profile": "default", "temperature": 0.1, "max_output_tokens": 4096},
+        "capabilities": ["analysis", "calculation", "data_interpretation"],
+        "tools": [
+          {"tool": "document_retrieval", "access": "read"},
+          {"tool": "python_analysis", "access": "read"}
+        ],
+        "limits": {"timeout_seconds": 600}
+      }
+    },
+    {
+      "name": "Developer",
+      "category": "development",
+      "description": "Code generation, debugging and implementation in a controlled workspace.",
+      "configuration": {
+        "schema_version": 1,
+        "system_instruction_ref": "builtin://developer/v1",
+        "model": {"profile": "default", "temperature": 0.1, "max_output_tokens": 8192},
+        "capabilities": ["code_generation", "debugging", "implementation"],
+        "tools": [
+          {"tool": "workspace_files_read", "access": "read"},
+          {"tool": "workspace_files_write", "access": "write"},
+          {"tool": "test_runner", "access": "read"}
+        ],
+        "limits": {"timeout_seconds": 900}
+      }
+    },
+    {
+      "name": "Writer",
+      "category": "writing",
+      "description": "Reports, documentation and editing.",
+      "configuration": {
+        "schema_version": 1,
+        "system_instruction_ref": "builtin://writer/v1",
+        "model": {"profile": "default", "temperature": 0.4, "max_output_tokens": 8192},
+        "capabilities": ["report_writing", "documentation", "editing"],
+        "tools": [{"tool": "artifact_writer", "access": "write"}],
+        "limits": {"timeout_seconds": 600}
+      }
+    },
+    {
+      "name": "QA",
+      "category": "qa",
+      "description": "Test design, test execution and acceptance validation with evidence.",
+      "configuration": {
+        "schema_version": 1,
+        "system_instruction_ref": "builtin://qa/v1",
+        "model": {"profile": "default", "temperature": 0.1, "max_output_tokens": 4096},
+        "capabilities": ["test_design", "test_execution", "acceptance_validation"],
+        "tools": [
+          {"tool": "workspace_files_read", "access": "read"},
+          {"tool": "test_runner", "access": "read"}
+        ],
+        "limits": {"timeout_seconds": 900}
+      }
+    },
+    {
+      "name": "General",
+      "category": "general",
+      "description": "General task completion and coordination support with minimal tools.",
+      "configuration": {
+        "schema_version": 1,
+        "system_instruction_ref": "builtin://general/v1",
+        "model": {"profile": "default", "temperature": 0.3, "max_output_tokens": 4096},
+        "capabilities": ["general_task", "coordination_support"],
+        "tools": [
+          {"tool": "document_retrieval", "access": "read"},
+          {"tool": "artifact_writer", "access": "write"}
+        ],
+        "limits": {"timeout_seconds": 600}
+      }
+    }
+  ]
+}

@@ -36,7 +36,14 @@ def _require_local_infrastructure() -> None:
 @pytest.fixture
 def settings() -> Settings:
     # Credentials come from the repo-root .env; a unique name identifies this test's connections.
-    return Settings(app_env="test", service_name=f"agentflow-it-{uuid.uuid4().hex[:8]}")
+    # These tests assert "healthy when dependencies are up", not latency: a cold connection on a
+    # saturated host exceeded the 2 s production default, so allow 10 s here. The timeout path
+    # itself is covered by unit tests (1 s against closed ports).
+    return Settings(
+        app_env="test",
+        service_name=f"agentflow-it-{uuid.uuid4().hex[:8]}",
+        health_check_timeout_seconds=10.0,
+    )
 
 
 def _app(settings: Settings) -> FastAPI:

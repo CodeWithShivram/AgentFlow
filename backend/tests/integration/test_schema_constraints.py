@@ -103,6 +103,7 @@ def test_every_table_is_workspace_scoped_or_explicitly_exempt() -> None:
         "agents": "workspace_id is NULL for built-in agents",
         "auth_sessions": "belongs to a user, not a workspace",
         "refresh_tokens": "belongs to an auth session",
+        "agent_audit_events": "workspace_id is NULL for built-in agent history",
     }
     for table in Base.metadata.sorted_tables:
         if table.name in exempt:
@@ -204,11 +205,12 @@ async def test_active_version_must_belong_to_the_same_agent(session: AsyncSessio
 
 
 async def test_deleting_agent_removes_versions_even_when_active(session: AsyncSession) -> None:
-    agent = Agent(name="Analyst", category="analysis", status=AgentStatus.ENABLED)
+    agent = Agent(name="Analyst", category="analysis")
     await _add(session, agent)
     version = AgentVersion(agent_id=agent.id, version=1, configuration={"skills": ["analysis"]})
     await _add(session, version)
     agent.active_version_id = version.id
+    agent.status = AgentStatus.ACTIVE
     await session.flush()
 
     await session.execute(text("DELETE FROM agents WHERE id = :id"), {"id": agent.id})

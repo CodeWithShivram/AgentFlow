@@ -4,22 +4,29 @@ Each database is created on the local server under a random name and dropped aft
 the development database is never touched.
 """
 
+import asyncio
 import uuid
 from collections.abc import AsyncIterator, Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
+from typing import Annotated
 
 import psycopg
 import pytest
 from alembic import command
 from alembic.config import Config
+from fastapi import Depends, WebSocket
+from fastapi.testclient import TestClient
 from psycopg import sql
 from sqlalchemy import URL, create_engine, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 
+from app.api.deps import Principal, get_websocket_principal
 from app.core.config import Settings
+from app.main import create_app
 from app.models import Base
-from tests.conftest import ALLOWED_ORIGIN, UNIT_JWT_KEY, UNIT_JWT_KEY_ID
+from tests.conftest import ALLOWED_ORIGIN, UNIT_JWT_KEY, UNIT_JWT_KEY_ID, make_client
+from tests.integration.api_helpers import ClientFactory
 
 INFRA_HINT = (
     "Integration tests need local PostgreSQL and Redis and the repo-root .env. "
@@ -125,3 +132,49 @@ async def session(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
             yield session
         finally:
             await session.rollback()
+
+
+@pytest.fixture
+def new_client(api_settings: Settings) -> Iterator[ClientFactory]:
+    """Each client is a separate browser (its own cookie jar) against its own app instance."""
+    with ExitStack() as stack:
+
+        def factory(settings: Settings | None = None, *, raise_errors: bool = True) -> TestClient:
+            app = create_app(settings or api_settings)
+
+            @app.websocket("/test/ws")
+            async def whoami(
+                websocket: WebSocket,
+                principal: Annotated[Principal, Depends(get_websocket_principal)],
+            ) -> None:
+                await websocket.accept()
+                await websocket.send_text(str(principal.user_id))
+                await websocket.close()
+
+            return stack.enter_context(make_client(app, raise_server_exceptions=raise_errors))
+
+        yield factory
+
+
+@pytest.fixture
+def client(new_client: ClientFactory) -> TestClient:
+    return new_client()
+
+
+@pytest.fixture
+def seeded_builtins(api_settings: Settings) -> Settings:
+    """Seeds the six built-in agents into the test database (emptied after each test)."""
+    from app.agents.seed import seed_builtin_agents
+    from app.db.session import create_engine as create_app_engine
+    from tests.conftest import LOOP_FACTORY
+
+    async def seed() -> None:
+        engine = create_app_engine(api_settings)
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                await seed_builtin_agents(session)
+        finally:
+            await engine.dispose()
+
+    asyncio.run(seed(), loop_factory=LOOP_FACTORY)
+    return api_settings

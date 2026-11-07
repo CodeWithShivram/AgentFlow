@@ -16,8 +16,8 @@ Phase 1 steps come directly from the handoff (§17). Phases 2–8 are numbered h
 | 1.2 | Local infrastructure (PostgreSQL, Redis) | DONE | `9f8a550` |
 | 1.3 | Backend foundation | DONE | `44eef4a` |
 | 1.4 | Database and migrations | DONE | `9543279` |
-| 1.5 | Authentication and workspace authorization | DONE | see `progress.md` |
-| 1.6 | Agent registry CRUD | NOT_STARTED | |
+| 1.5 | Authentication and workspace authorization | DONE | `7eded85` |
+| 1.6 | Agent registry CRUD | DONE | see `progress.md` |
 | 1.7 | Workflow and task management | NOT_STARTED | |
 | 1.8 | Background execution foundation | NOT_STARTED | |
 | 1.9 | Frontend foundation | NOT_STARTED | |
@@ -55,7 +55,7 @@ Phase 1 steps come directly from the handoff (§17). Phases 2–8 are numbered h
 
 ### 1.6 — Agent registry CRUD
 - Depends on: 1.5.
-- Acceptance: agent definitions with immutable versions; capability and tool-permission schemas; list/detail/create/update/enable/disable APIs; six initial agents seeded from configuration; authorization and validation tests.
+- Acceptance (as revised by the owner's Step 1.6 brief): agent definitions with draft, revision and immutable published versions; strict configuration schema (instruction and model references, catalog capabilities and tools, secret references only); six built-ins seeded from configuration; list/create/get/update-draft/publish/activate/deactivate/versions APIs; dynamic proposals with separate storage, frozen content, authorized approval (not by the author), approval not activating; OWNER required for HIGH-risk tools; tasks pin exact agent versions; append-only audit; tests for CRUD, isolation, RBAC, immutability, version pinning, validation, proposals, tool permissions, concurrency and audit (ADR-0008).
 - Commit: `feat(agents): implement agent registry and versioning`
 
 ### 1.7 — Workflow and task management

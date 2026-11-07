@@ -4,141 +4,40 @@ Runs against a migrated throwaway PostgreSQL database and the local Redis (rate 
 """
 
 import uuid
-from collections.abc import Callable, Iterator
-from contextlib import ExitStack
 from datetime import UTC, datetime, timedelta
-from typing import Annotated, Any
+from types import SimpleNamespace
+from typing import Any
 
-import httpx
 import pytest
-from fastapi import Depends, WebSocket
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, text
 from starlette.websockets import WebSocketDisconnect
 
-from app.api.deps import Principal, get_websocket_principal
 from app.core.config import Settings
 from app.core.tokens import create_access_token, decode_access_token
-from app.main import create_app
 from app.services.auth import AuthService
-from tests.conftest import ALLOWED_ORIGIN, json_log_lines, make_client
+from tests.conftest import ALLOWED_ORIGIN, json_log_lines
+from tests.integration.api_helpers import (
+    ACCESS,
+    API,
+    CSRF,
+    PASSWORD,
+    REFRESH,
+    ClientFactory,
+    accept,
+    csrf,
+    invite,
+    login,
+    member,
+    my_workspace,
+    new_email,
+    refresh,
+    register,
+    set_cookie_headers,
+    sql,
+    use_only_cookies,
+)
 
 pytestmark = pytest.mark.integration
-
-PASSWORD = "correct-horse-battery-staple"
-ACCESS, REFRESH, CSRF = "agentflow_access", "agentflow_refresh", "agentflow_csrf"
-API = "/api/v1"
-
-ClientFactory = Callable[..., TestClient]
-
-
-@pytest.fixture
-def new_client(api_settings: Settings) -> Iterator[ClientFactory]:
-    """Each client is a separate browser (its own cookie jar) against its own app instance."""
-    with ExitStack() as stack:
-
-        def factory(settings: Settings | None = None, *, raise_errors: bool = True) -> TestClient:
-            app = create_app(settings or api_settings)
-
-            @app.websocket("/test/ws")
-            async def whoami(
-                websocket: WebSocket,
-                principal: Annotated[Principal, Depends(get_websocket_principal)],
-            ) -> None:
-                await websocket.accept()
-                await websocket.send_text(str(principal.user_id))
-                await websocket.close()
-
-            return stack.enter_context(make_client(app, raise_server_exceptions=raise_errors))
-
-        yield factory
-
-
-@pytest.fixture
-def client(new_client: ClientFactory) -> TestClient:
-    return new_client()
-
-
-def _email() -> str:
-    return f"user-{uuid.uuid4().hex[:10]}@example.com"
-
-
-def register(
-    client: TestClient, email: str, password: str = PASSWORD, **extra: Any
-) -> httpx.Response:
-    response: httpx.Response = client.post(
-        f"{API}/auth/register", json={"email": email, "password": password, **extra}
-    )
-    return response
-
-
-def login(client: TestClient, email: str, password: str = PASSWORD) -> httpx.Response:
-    response: httpx.Response = client.post(
-        f"{API}/auth/login", json={"email": email, "password": password}
-    )
-    return response
-
-
-def csrf(client: TestClient) -> dict[str, str]:
-    return {"X-CSRF-Token": client.cookies[CSRF]}
-
-
-def refresh(client: TestClient, **headers: str) -> httpx.Response:
-    response: httpx.Response = client.post(
-        f"{API}/auth/refresh", headers={**csrf(client), **headers}
-    )
-    return response
-
-
-def my_workspace(client: TestClient) -> str:
-    workspace_id: str = client.get(f"{API}/auth/me").json()["memberships"][0]["workspace_id"]
-    return workspace_id
-
-
-def invite(client: TestClient, workspace_id: str, email: str, role: str) -> httpx.Response:
-    response: httpx.Response = client.post(
-        f"{API}/workspaces/{workspace_id}/invitations",
-        json={"email": email, "role": role},
-        headers=csrf(client),
-    )
-    return response
-
-
-def accept(client: TestClient, token: str) -> httpx.Response:
-    response: httpx.Response = client.post(
-        f"{API}/invitations/accept", json={"token": token}, headers=csrf(client)
-    )
-    return response
-
-
-def use_only_cookies(client: TestClient, **cookies: str) -> None:
-    """Replaces the cookie jar, e.g. to replay an old token."""
-    client.cookies.clear()
-    for name, value in cookies.items():
-        client.cookies.set(name, value)
-
-
-def sql(settings: Settings, statement: str, **params: Any) -> list[Any]:
-    engine = create_engine(settings.database_url)
-    try:
-        with engine.begin() as connection:
-            result = connection.execute(text(statement), params)
-            return list(result.all()) if result.returns_rows else []
-    finally:
-        engine.dispose()
-
-
-def set_cookie_headers(response: httpx.Response) -> dict[str, str]:
-    return {h.split("=", 1)[0]: h for h in response.headers.get_list("set-cookie")}
-
-
-def member(new_client: ClientFactory, owner: TestClient, role: str) -> TestClient:
-    """A second user who joined the owner's workspace with `role`."""
-    other, email = new_client(), _email()
-    register(other, email)
-    token = invite(owner, my_workspace(owner), email, role).json()["invitation_token"]
-    assert accept(other, token).status_code == 200
-    return other
 
 
 # --- registration -------------------------------------------------------------------------
@@ -147,7 +46,7 @@ def member(new_client: ClientFactory, owner: TestClient, role: str) -> TestClien
 def test_register_creates_user_personal_workspace_and_owner_membership(
     client: TestClient, api_settings: Settings
 ) -> None:
-    email = _email()
+    email = new_email()
     response = register(client, email.upper(), workspace_name="Ada's lab")
 
     assert response.status_code == 201
@@ -173,7 +72,7 @@ def test_register_creates_user_personal_workspace_and_owner_membership(
 
 
 def test_register_sets_session_cookies_and_returns_no_tokens(client: TestClient) -> None:
-    response = register(client, _email())
+    response = register(client, new_email())
 
     cookies = set_cookie_headers(response)
     assert set(cookies) == {ACCESS, REFRESH, CSRF}
@@ -187,7 +86,7 @@ def test_register_sets_session_cookies_and_returns_no_tokens(client: TestClient)
 
 
 def test_duplicate_email_is_rejected_case_insensitively(client: TestClient) -> None:
-    email = _email()
+    email = new_email()
     register(client, email)
 
     response = register(client, email.upper())
@@ -224,7 +123,7 @@ def test_failed_signup_rolls_back_everything(
     monkeypatch.setattr(AuthService, "_start_session", explode)
     client = new_client(raise_errors=False)
 
-    response = register(client, _email())
+    response = register(client, new_email())
 
     assert response.status_code == 500
     for query in (
@@ -240,7 +139,7 @@ def test_failed_signup_rolls_back_everything(
 
 
 def test_login_and_me(new_client: ClientFactory) -> None:
-    email = _email()
+    email = new_email()
     register(new_client(), email)
     client = new_client()
 
@@ -255,12 +154,12 @@ def test_login_and_me(new_client: ClientFactory) -> None:
 
 
 def test_wrong_password_and_unknown_email_are_indistinguishable(client: TestClient) -> None:
-    email = _email()
+    email = new_email()
     register(client, email)
     client.cookies.clear()
 
     wrong = login(client, email, "wrong-password-123")
-    unknown = login(client, _email())
+    unknown = login(client, new_email())
 
     for response in (wrong, unknown):
         assert response.status_code == 401
@@ -280,7 +179,7 @@ def test_invalid_access_cookie_is_rejected(client: TestClient, token: str) -> No
 
 
 def test_expired_access_token_is_rejected(client: TestClient, api_settings: Settings) -> None:
-    register(client, _email())
+    register(client, new_email())
     claims = decode_access_token(api_settings, client.cookies[ACCESS])
     expired = create_access_token(
         api_settings,
@@ -297,10 +196,10 @@ def test_expired_access_token_is_rejected(client: TestClient, api_settings: Sett
 
 
 def test_unsafe_authenticated_requests_require_the_session_csrf_token(client: TestClient) -> None:
-    register(client, _email())
+    register(client, new_email())
     workspace_id = my_workspace(client)
     url = f"{API}/workspaces/{workspace_id}/invitations"
-    body = {"email": _email(), "role": "MEMBER"}
+    body = {"email": new_email(), "role": "MEMBER"}
 
     missing = client.post(url, json=body)
     wrong = client.post(url, json=body, headers={"X-CSRF-Token": "forged"})
@@ -313,12 +212,12 @@ def test_unsafe_authenticated_requests_require_the_session_csrf_token(client: Te
 
 def test_csrf_token_from_another_session_is_rejected(new_client: ClientFactory) -> None:
     alice, mallory = new_client(), new_client()
-    register(alice, _email())
-    register(mallory, _email())
+    register(alice, new_email())
+    register(mallory, new_email())
 
     response = alice.post(
         f"{API}/workspaces/{my_workspace(alice)}/invitations",
-        json={"email": _email(), "role": "MEMBER"},
+        json={"email": new_email(), "role": "MEMBER"},
         headers={"X-CSRF-Token": mallory.cookies[CSRF]},
     )
 
@@ -328,7 +227,7 @@ def test_csrf_token_from_another_session_is_rejected(new_client: ClientFactory) 
 def test_cross_site_login_is_blocked_by_origin_check(client: TestClient) -> None:
     response = client.post(
         f"{API}/auth/login",
-        json={"email": _email(), "password": PASSWORD},
+        json={"email": new_email(), "password": PASSWORD},
         headers={"Origin": "https://evil.example"},
     )
 
@@ -342,7 +241,7 @@ def test_cross_site_login_is_blocked_by_origin_check(client: TestClient) -> None
 def test_refresh_rotates_the_refresh_token_and_issues_a_new_access_token(
     client: TestClient,
 ) -> None:
-    register(client, _email())
+    register(client, new_email())
     old_refresh, old_access = client.cookies[REFRESH], client.cookies[ACCESS]
 
     response = refresh(client)
@@ -357,7 +256,7 @@ def test_refresh_rotates_the_refresh_token_and_issues_a_new_access_token(
 def test_reusing_a_rotated_refresh_token_revokes_the_whole_session(
     client: TestClient, api_settings: Settings
 ) -> None:
-    register(client, _email())
+    register(client, new_email())
     stolen = client.cookies[REFRESH]
     csrf_token = client.cookies[CSRF]
     refresh(client)
@@ -382,7 +281,7 @@ def test_reusing_a_rotated_refresh_token_revokes_the_whole_session(
 
 
 def test_refresh_without_csrf_fails_and_does_not_consume_the_token(client: TestClient) -> None:
-    register(client, _email())
+    register(client, new_email())
 
     rejected = client.post(f"{API}/auth/refresh")
     accepted = refresh(client)
@@ -392,7 +291,7 @@ def test_refresh_without_csrf_fails_and_does_not_consume_the_token(client: TestC
 
 
 def test_expired_refresh_token_is_rejected(client: TestClient, api_settings: Settings) -> None:
-    register(client, _email())
+    register(client, new_email())
     sql(api_settings, "UPDATE refresh_tokens SET expires_at = now() - interval '1 second'")
 
     response = refresh(client)
@@ -404,7 +303,7 @@ def test_expired_refresh_token_is_rejected(client: TestClient, api_settings: Set
 def test_session_absolute_expiry_ends_access_and_refresh(
     client: TestClient, api_settings: Settings
 ) -> None:
-    register(client, _email())
+    register(client, new_email())
     sql(
         api_settings,
         "UPDATE auth_sessions SET expires_at = now() - interval '1 second', "
@@ -426,7 +325,7 @@ def test_refresh_without_cookie_is_rejected(client: TestClient) -> None:
 
 
 def test_logout_revokes_the_session_immediately(client: TestClient, api_settings: Settings) -> None:
-    register(client, _email())
+    register(client, new_email())
     access, refresh_token, csrf_token = (
         client.cookies[ACCESS],
         client.cookies[REFRESH],
@@ -447,7 +346,7 @@ def test_logout_revokes_the_session_immediately(client: TestClient, api_settings
 
 
 def test_logout_requires_csrf_and_is_idempotent(client: TestClient) -> None:
-    register(client, _email())
+    register(client, new_email())
 
     assert client.post(f"{API}/auth/logout").status_code == 403
     assert client.get(f"{API}/auth/me").status_code == 200  # not logged out by the forged request
@@ -457,7 +356,7 @@ def test_logout_requires_csrf_and_is_idempotent(client: TestClient) -> None:
 
 
 def test_logout_ends_only_the_current_session(new_client: ClientFactory) -> None:
-    email = _email()
+    email = new_email()
     laptop, phone = new_client(), new_client()
     register(laptop, email)
     login(phone, email)
@@ -472,8 +371,8 @@ def test_logout_ends_only_the_current_session(new_client: ClientFactory) -> None
 
 
 def test_owner_invites_and_invitee_joins_with_the_granted_role(new_client: ClientFactory) -> None:
-    owner, invitee, email = new_client(), new_client(), _email()
-    register(owner, _email())
+    owner, invitee, email = new_client(), new_client(), new_email()
+    register(owner, new_email())
     register(invitee, email)
     workspace_id = my_workspace(owner)
 
@@ -506,10 +405,10 @@ def test_invitation_permissions_follow_the_role_hierarchy(
     expected_code: str | None,
 ) -> None:
     owner = new_client()
-    register(owner, _email())
+    register(owner, new_email())
     actor = member(new_client, owner, role)
 
-    response = invite(actor, my_workspace(owner), _email(), invite_as)
+    response = invite(actor, my_workspace(owner), new_email(), invite_as)
 
     assert response.status_code == expected_status
     if expected_code:
@@ -518,7 +417,7 @@ def test_invitation_permissions_follow_the_role_hierarchy(
 
 def test_viewer_can_read_the_workspace(new_client: ClientFactory) -> None:
     owner = new_client()
-    register(owner, _email())
+    register(owner, new_email())
     viewer = member(new_client, owner, "VIEWER")
     workspace_id = my_workspace(owner)
 
@@ -533,14 +432,14 @@ def test_other_users_cannot_see_or_touch_a_workspace_even_with_its_id(
     new_client: ClientFactory,
 ) -> None:
     alice, mallory = new_client(), new_client()
-    register(alice, _email())
-    register(mallory, _email())
+    register(alice, new_email())
+    register(mallory, new_email())
     target = my_workspace(alice)
 
     responses = [
         mallory.get(f"{API}/workspaces/{target}"),
         mallory.get(f"{API}/workspaces/{target}/members"),
-        invite(mallory, target, _email(), "VIEWER"),
+        invite(mallory, target, new_email(), "VIEWER"),
         mallory.get(f"{API}/workspaces/{uuid.uuid4()}"),
     ]
 
@@ -552,7 +451,7 @@ def test_other_users_cannot_see_or_touch_a_workspace_even_with_its_id(
 
 
 def test_workspace_lists_are_paginated(client: TestClient) -> None:
-    register(client, _email())
+    register(client, new_email())
 
     page = client.get(f"{API}/workspaces", params={"limit": 1, "offset": 0}).json()
     too_big = client.get(f"{API}/workspaces", params={"limit": 101})
@@ -566,9 +465,9 @@ def test_workspace_lists_are_paginated(client: TestClient) -> None:
 
 def test_invitation_is_bound_to_the_invited_email(new_client: ClientFactory) -> None:
     owner, stranger = new_client(), new_client()
-    register(owner, _email())
-    register(stranger, _email())
-    token = invite(owner, my_workspace(owner), _email(), "MEMBER").json()["invitation_token"]
+    register(owner, new_email())
+    register(stranger, new_email())
+    token = invite(owner, my_workspace(owner), new_email(), "MEMBER").json()["invitation_token"]
 
     response = accept(stranger, token)
 
@@ -579,12 +478,12 @@ def test_invitation_is_bound_to_the_invited_email(new_client: ClientFactory) -> 
 def test_invitation_cannot_be_reused_or_used_after_expiry(
     new_client: ClientFactory, api_settings: Settings
 ) -> None:
-    owner, invitee, email = new_client(), new_client(), _email()
-    register(owner, _email())
+    owner, invitee, email = new_client(), new_client(), new_email()
+    register(owner, new_email())
     register(invitee, email)
     workspace_id = my_workspace(owner)
     first = invite(owner, workspace_id, email, "VIEWER").json()["invitation_token"]
-    second = invite(owner, workspace_id, _email(), "VIEWER").json()
+    second = invite(owner, workspace_id, new_email(), "VIEWER").json()
 
     assert accept(invitee, first).status_code == 200
     assert accept(invitee, first).status_code == 404
@@ -598,7 +497,7 @@ def test_invitation_cannot_be_reused_or_used_after_expiry(
 
 
 def test_inviting_an_existing_member_conflicts(client: TestClient) -> None:
-    email = _email()
+    email = new_email()
     register(client, email)
 
     response = invite(client, my_workspace(client), email, "MEMBER")
@@ -610,9 +509,9 @@ def test_inviting_an_existing_member_conflicts(client: TestClient) -> None:
 def test_invitation_token_is_stored_only_as_a_hash(
     client: TestClient, api_settings: Settings
 ) -> None:
-    register(client, _email())
+    register(client, new_email())
 
-    token = invite(client, my_workspace(client), _email(), "MEMBER").json()["invitation_token"]
+    token = invite(client, my_workspace(client), new_email(), "MEMBER").json()["invitation_token"]
 
     stored = sql(api_settings, "SELECT token_hash FROM workspace_invitations")
     assert len(stored) == 1 and stored[0][0] != token and len(stored[0][0]) == 64
@@ -621,7 +520,7 @@ def test_invitation_token_is_stored_only_as_a_hash(
 def test_refresh_tokens_are_stored_only_as_hashes(
     client: TestClient, api_settings: Settings
 ) -> None:
-    register(client, _email())
+    register(client, new_email())
     refresh(client)
 
     hashes = {row[0] for row in sql(api_settings, "SELECT token_hash FROM refresh_tokens")}
@@ -635,9 +534,14 @@ def test_refresh_tokens_are_stored_only_as_hashes(
 # --- rate limiting --------------------------------------------------------------------------
 
 
-def test_login_attempts_are_rate_limited(new_client: ClientFactory, api_settings: Settings) -> None:
+def test_login_attempts_are_rate_limited(
+    new_client: ClientFactory, api_settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Pin the limiter's clock 10 s into a window: slow Argon2 logins must not straddle a
+    # fixed-window boundary and split the attempts across two windows.
+    monkeypatch.setattr("app.core.rate_limit.time", SimpleNamespace(time=lambda: 1_699_999_990.0))
     client = new_client(api_settings.model_copy(update={"auth_login_attempts_per_minute": 3}))
-    email = _email()
+    email = new_email()
 
     statuses = [login(client, email, "wrong-password-123").status_code for _ in range(3)]
     limited = login(client, email, "wrong-password-123")
@@ -645,7 +549,7 @@ def test_login_attempts_are_rate_limited(new_client: ClientFactory, api_settings
     assert statuses == [401, 401, 401]
     assert limited.status_code == 429
     assert limited.json()["error"]["code"] == "RATE_LIMITED"
-    assert 1 <= int(limited.headers["Retry-After"]) <= 60
+    assert limited.headers["Retry-After"] == "50"  # seconds left in the pinned window
 
 
 def test_auth_fails_closed_when_the_rate_limiter_is_unavailable(
@@ -659,7 +563,7 @@ def test_auth_fails_closed_when_the_rate_limiter_is_unavailable(
         )
     )
 
-    response = login(client, _email())
+    response = login(client, new_email())
 
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "RATE_LIMITER_UNAVAILABLE"
@@ -671,13 +575,13 @@ def test_auth_fails_closed_when_the_rate_limiter_is_unavailable(
 def test_passwords_and_tokens_never_appear_in_logs_or_errors(
     new_client: ClientFactory, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    client, email = new_client(), _email()
+    client, email = new_client(), new_email()
     register(client, email)
     secrets_seen = [PASSWORD, client.cookies[ACCESS], client.cookies[REFRESH], client.cookies[CSRF]]
     refresh(client)
     secrets_seen += [client.cookies[ACCESS], client.cookies[REFRESH]]
     login(new_client(), email, "wrong-password-xyz")
-    token = invite(client, my_workspace(client), _email(), "MEMBER").json()["invitation_token"]
+    token = invite(client, my_workspace(client), new_email(), "MEMBER").json()["invitation_token"]
     client.post(f"{API}/auth/logout", headers=csrf(client))
 
     output = capsys.readouterr().out
@@ -690,7 +594,7 @@ def test_passwords_and_tokens_never_appear_in_logs_or_errors(
 
 
 def test_websocket_uses_cookie_auth_and_origin_validation(client: TestClient) -> None:
-    body = register(client, _email()).json()
+    body = register(client, new_email()).json()
 
     with client.websocket_connect("/test/ws", headers={"Origin": ALLOWED_ORIGIN}) as ws:
         assert ws.receive_text() == body["user"]["id"]

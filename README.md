@@ -67,6 +67,7 @@ Requires the repo-root `.env` (see Configuration). Start the infrastructure firs
 cd backend
 uv sync                                   # creates backend\.venv with Python 3.12 + dev tools
 uv run alembic upgrade head               # create or update the database schema
+uv run python -m app.agents.seed          # load/refresh the six built-in agents (idempotent)
 uv run uvicorn app.main:create_app --factory --reload --port 8000 --loop asyncio:SelectorEventLoop
 ```
 
@@ -122,6 +123,43 @@ Browser rules:
 
 Roles run VIEWER < MEMBER < ADMIN < OWNER. Owners may invite ADMIN, MEMBER or VIEWER, and admins may invite MEMBER or VIEWER. Login attempts and the other authentication endpoints are rate-limited through Redis. If Redis is down they return 503 rather than run unprotected.
 
+### Agent registry
+
+All agent routes live under `/api/v1/workspaces/{workspace_id}`. Every workspace sees its own agents plus the six built-in specialists (Researcher, Analyst, Developer, Writer, QA, General). Built-ins are read-only. The design is in [ADR-0008](docs/ADR/0008-agent-registry-and-versioning.md).
+
+| Endpoint | Min role | Body | Success | Notable errors |
+|---|---|---|---|---|
+| `GET /agents?status&limit&offset` | VIEWER | — | 200 page of agents | — |
+| `POST /agents` | ADMIN | `{name, category, description?, configuration}` | 201 agent (INACTIVE, draft only) | 409 `AGENT_NAME_TAKEN`, 422 |
+| `GET /agents/{agent_id}` | VIEWER | — | 200 agent | 404 `AGENT_NOT_FOUND` |
+| `PATCH /agents/{agent_id}` | ADMIN | `{revision, name?, category?, description?, configuration?}` | 200 agent (draft updated) | 409 `AGENT_REVISION_CONFLICT`, 403 `AGENT_READ_ONLY` |
+| `POST /agents/{agent_id}/publish` | ADMIN | `{revision}` | 201 new immutable version | 409 `NOTHING_TO_PUBLISH`, 403 `TOOL_REQUIRES_OWNER`, 422 |
+| `POST /agents/{agent_id}/activate` / `deactivate` | ADMIN | `{revision}` | 200 agent | 409 `AGENT_NOT_PUBLISHED`, 403 `TOOL_REQUIRES_OWNER` |
+| `GET /agents/{agent_id}/versions?limit&offset` | VIEWER | — | 200 page of versions, newest first | 404 |
+| `POST /agent-proposals` | MEMBER | `{name, category, description?, rationale, configuration}` | 201 proposal (PENDING) | 422 |
+| `GET /agent-proposals?status&limit&offset` | VIEWER | — | 200 page of proposals | — |
+| `POST /agent-proposals/{id}/approve` | ADMIN, not the author | `{note?}` | 200 proposal; creates an INACTIVE agent with version 1 | 403 `PROPOSAL_SELF_REVIEW` / `TOOL_REQUIRES_OWNER`, 409 `PROPOSAL_ALREADY_DECIDED` |
+| `POST /agent-proposals/{id}/reject` | ADMIN, not the author | `{note?}` | 200 proposal | as above |
+
+**Configuration** (strict; unknown fields rejected):
+
+```json
+{
+  "system_instruction_ref": "workspace://prompts/summarizer/v1",
+  "model": {"profile": "default", "temperature": 0.2, "max_output_tokens": 4096, "credential_ref": null},
+  "capabilities": ["report_writing"],
+  "tools": [{"tool": "artifact_writer", "access": "write"}],
+  "limits": {"timeout_seconds": 600}
+}
+```
+
+Capabilities, tools and categories must come from the catalog in `backend/app/agents/catalog.py`. Tools that execute code (`python_analysis`, `test_runner`) are HIGH risk: only a workspace OWNER can publish, approve or activate a configuration that grants one. Credentials are never stored; `credential_ref` only accepts `secret://<name>`.
+
+Rules to know:
+- Published versions never change, and tasks keep the exact version they were assigned.
+- Every mutating request must send the agent's current `revision`. A stale revision is rejected, so two editors can't overwrite each other.
+- Approving a proposal does not activate the agent; activation is a separate step.
+
 ### Database and migrations
 
 The schema is managed by Alembic (`backend/alembic/`). Migrations read the database URL from the repo-root `.env`. Run them from `backend/`:
@@ -138,12 +176,14 @@ uv run alembic revision --autogenerate -m "describe change"   # draft a new migr
 |---|---|
 | `users` | Accounts (email unique case-insensitively; only password hashes are stored) |
 | `workspaces`, `workspace_members` | Tenants and membership with roles OWNER / ADMIN / MEMBER / VIEWER |
-| `agents`, `agent_versions` | Agent definitions (`workspace_id` NULL = built-in) and immutable configuration versions |
+| `agents`, `agent_versions` | Agent definitions with draft and revision (`workspace_id` NULL = built-in) and immutable published versions (`UPDATE` rejected by a trigger) |
 | `workflows`, `workflow_tasks`, `task_dependencies` | Requests, their tasks and the dependency DAG |
 | `workflow_events` | Append-only history (`UPDATE` is rejected by a trigger), ordered by `sequence` |
 | `idempotency_keys` | Stored responses for retried requests; expire after `IDEMPOTENCY_KEY_TTL_SECONDS` (default 24 h) |
 | `auth_sessions`, `refresh_tokens` | Login sessions (refresh-token families) and single-use refresh tokens, stored as SHA-256 hashes only |
 | `workspace_invitations` | Pending and accepted invitations; token stored as a hash; role cannot be OWNER |
+| `agent_proposals` | Proposed agents awaiting review; content frozen after submission |
+| `agent_audit_events` | Append-only history of every registry change |
 
 Workspace isolation is enforced by the database: child rows carry `workspace_id`, and composite foreign keys stop them pointing into another workspace or workflow. Deleting a workspace deletes all of its data. Conventions, deletion rules and the idempotency design are in [ADR-0006](docs/ADR/0006-core-schema-and-idempotency.md).
 

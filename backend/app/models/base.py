@@ -25,6 +25,10 @@ NAMING_CONVENTION = {
 
 class Base(DeclarativeBase):
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
+    # Fetch database-generated values (e.g. updated_at = now()) with RETURNING in the same
+    # statement. Without this they are expired after a flush, and reading them later would
+    # need an implicit lazy load, which async sessions cannot perform.
+    __mapper_args__ = {"eager_defaults": True}
 
 
 def uuid_pk() -> Mapped[uuid.UUID]:

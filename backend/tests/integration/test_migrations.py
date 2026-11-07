@@ -28,6 +28,8 @@ EXPECTED_TABLES = {
     "auth_sessions",
     "refresh_tokens",
     "workspace_invitations",
+    "agent_proposals",
+    "agent_audit_events",
 }
 
 
