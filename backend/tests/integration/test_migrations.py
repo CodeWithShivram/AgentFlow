@@ -25,6 +25,9 @@ EXPECTED_TABLES = {
     "task_dependencies",
     "workflow_events",
     "idempotency_keys",
+    "auth_sessions",
+    "refresh_tokens",
+    "workspace_invitations",
 }
 
 

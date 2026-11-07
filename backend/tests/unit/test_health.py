@@ -91,7 +91,10 @@ def test_failed_check_is_logged_without_secrets(
 
 
 def test_api_docs_disabled_in_production() -> None:
-    with make_client(create_app(make_settings(app_env="production"))) as client:
+    production = make_settings(
+        app_env="production", cors_allowed_origins=["https://app.example.com"]
+    )
+    with make_client(create_app(production)) as client:
         assert client.get("/docs").status_code == 404
         assert client.get("/openapi.json").status_code == 404
 

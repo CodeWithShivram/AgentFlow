@@ -4,13 +4,13 @@ import asyncio
 import sys
 from collections.abc import AsyncGenerator
 
-from fastapi import Request
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
+from starlette.requests import HTTPConnection
 
 from app.core.config import Settings
 
@@ -46,14 +46,14 @@ def ensure_psycopg_compatible_event_loop() -> None:
         )
 
 
-def get_engine(request: Request) -> AsyncEngine:
-    engine: AsyncEngine = request.app.state.engine
+def get_engine(connection: HTTPConnection) -> AsyncEngine:
+    engine: AsyncEngine = connection.app.state.engine
     return engine
 
 
-async def get_db_session(request: Request) -> AsyncGenerator[AsyncSession]:
-    """Yields one session per request. Rolls back on error; services own commits."""
-    factory: async_sessionmaker[AsyncSession] = request.app.state.session_factory
+async def get_db_session(connection: HTTPConnection) -> AsyncGenerator[AsyncSession]:
+    """Yields one session per request or WebSocket. Rolls back on error; services own commits."""
+    factory: async_sessionmaker[AsyncSession] = connection.app.state.session_factory
     async with factory() as session:
         try:
             yield session

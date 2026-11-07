@@ -14,6 +14,10 @@ LOOP_FACTORY = asyncio.SelectorEventLoop
 
 UNIT_PG_PASSWORD = "unit-test-pg-secret"
 UNIT_REDIS_PASSWORD = "unit-test-redis-secret"
+UNIT_JWT_KEY_ID = "test-k1"
+UNIT_JWT_KEY = "unit-test-jwt-signing-key-0123456789abcdef"
+# The frontend origin a browser would send; unsafe requests without an allowed Origin are rejected.
+ALLOWED_ORIGIN = "http://localhost:3000"
 
 
 @pytest.fixture
@@ -42,6 +46,9 @@ def make_settings(**overrides: Any) -> Settings:
         "health_check_timeout_seconds": 1.0,
         "redis_socket_timeout_seconds": 1.0,
         "db_connect_timeout_seconds": 1,
+        "auth_jwt_signing_keys": {UNIT_JWT_KEY_ID: UNIT_JWT_KEY},
+        "auth_jwt_active_key_id": UNIT_JWT_KEY_ID,
+        "cors_allowed_origins": [ALLOWED_ORIGIN],
     }
     values.update(overrides)
     return Settings(_env_file=None, **values)
@@ -52,6 +59,7 @@ def make_client(app: FastAPI, *, raise_server_exceptions: bool = True) -> TestCl
         app,
         raise_server_exceptions=raise_server_exceptions,
         backend_options={"loop_factory": LOOP_FACTORY},
+        headers={"Origin": ALLOWED_ORIGIN},
     )
 
 

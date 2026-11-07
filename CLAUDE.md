@@ -26,6 +26,12 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
 - Every workspace-owned table has `workspace_id NOT NULL` plus composite FKs; every repository query takes `workspace_id`.
 - Idempotent operations use `IdempotencyService.begin()` and `complete()`/`fail()` in the same transaction as the business change.
 - Expected client errors subclass `AppError` (`app/core/errors.py`) with a status code, an error code and a safe message.
+- Auth (ADR-0007): cookie-only tokens (never in bodies or localStorage); routes needing a user take `CurrentPrincipal`;
+  workspace routes take `Depends(workspace_role(<min role>))`, which returns 404 to non-members. Never trust a
+  client-supplied workspace ID without it, and never put roles in tokens. Unsafe methods need an allowed Origin
+  and `X-CSRF-Token`; tests use `make_client` (sends the allowed Origin) and send the CSRF cookie value.
+- Store only hashes of refresh, CSRF and invitation tokens. Auth endpoints must call the Redis `RateLimiter` (fails closed).
+- RLS is designed but NOT enabled (OD-13): the app DB role is a superuser. Isolation relies on `workspace_role` + scoped queries.
 - Errors use the standard shape in `app/core/errors.py`; never return exception text. Log through `logging` (JSON + redaction), never `print`.
 - PostgreSQL is authoritative state; Redis is transport/cache only. Dispatch uses a transactional outbox.
 - Agents submit results; only platform verification accepts a task. LLM output is untrusted until validated.

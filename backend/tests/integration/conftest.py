@@ -14,11 +14,12 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from psycopg import sql
-from sqlalchemy import URL, text
+from sqlalchemy import URL, create_engine, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 
 from app.core.config import Settings
 from app.models import Base
+from tests.conftest import ALLOWED_ORIGIN, UNIT_JWT_KEY, UNIT_JWT_KEY_ID
 
 INFRA_HINT = (
     "Integration tests need local PostgreSQL and Redis and the repo-root .env. "
@@ -70,6 +71,37 @@ def migrated_database_url() -> Iterator[URL]:
     with disposable_database() as url:
         command.upgrade(alembic_config(url), "head")
         yield url
+
+
+def _truncate_all(database_url: URL) -> None:
+    tables = ", ".join(table.name for table in Base.metadata.sorted_tables)
+    sync_engine = create_engine(database_url)
+    try:
+        with sync_engine.begin() as connection:
+            connection.execute(text(f"TRUNCATE {tables} CASCADE"))
+    finally:
+        sync_engine.dispose()
+
+
+@pytest.fixture
+def api_settings(migrated_database_url: URL) -> Iterator[Settings]:
+    """Settings for an app bound to the migrated test database.
+
+    Credentials come from the repo-root .env. A unique service name isolates rate-limit counters
+    in the shared Redis. Tables are emptied after the test.
+    """
+    settings = Settings(
+        app_env="test",
+        postgres_db=migrated_database_url.database,
+        service_name=f"agentflow-it-{uuid.uuid4().hex[:8]}",
+        auth_jwt_signing_keys={UNIT_JWT_KEY_ID: UNIT_JWT_KEY},
+        auth_jwt_active_key_id=UNIT_JWT_KEY_ID,
+        cors_allowed_origins=[ALLOWED_ORIGIN],
+    )
+    try:
+        yield settings
+    finally:
+        _truncate_all(migrated_database_url)
 
 
 @pytest.fixture

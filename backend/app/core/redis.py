@@ -1,7 +1,7 @@
 """Async Redis client. Redis is transport/cache only, never the authoritative state store."""
 
-from fastapi import Request
 from redis.asyncio import Redis
+from starlette.requests import HTTPConnection
 
 from app.core.config import Settings
 
@@ -19,6 +19,6 @@ def create_redis_client(settings: Settings) -> Redis:
     )
 
 
-def get_redis(request: Request) -> Redis:
-    client: Redis = request.app.state.redis
+def get_redis(connection: HTTPConnection) -> Redis:
+    client: Redis = connection.app.state.redis
     return client

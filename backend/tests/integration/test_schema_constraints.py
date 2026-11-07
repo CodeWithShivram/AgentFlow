@@ -101,6 +101,8 @@ def test_every_table_is_workspace_scoped_or_explicitly_exempt() -> None:
         "agent_versions": "scoped through agents.agent_id",
         "task_dependencies": "pinned to one workflow by composite foreign keys",
         "agents": "workspace_id is NULL for built-in agents",
+        "auth_sessions": "belongs to a user, not a workspace",
+        "refresh_tokens": "belongs to an auth session",
     }
     for table in Base.metadata.sorted_tables:
         if table.name in exempt:

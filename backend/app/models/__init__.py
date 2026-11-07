@@ -1,6 +1,12 @@
 """ORM models. Importing this package registers every table on `Base.metadata`."""
 
 from app.models.agent import Agent, AgentStatus, AgentVersion
+from app.models.auth import (
+    AuthSession,
+    RefreshToken,
+    SessionRevocationReason,
+    WorkspaceInvitation,
+)
 from app.models.base import Base
 from app.models.idempotency import IdempotencyKey, IdempotencyStatus
 from app.models.tenancy import User, Workspace, WorkspaceMember, WorkspaceRole
@@ -18,9 +24,12 @@ __all__ = [
     "Agent",
     "AgentStatus",
     "AgentVersion",
+    "AuthSession",
     "Base",
     "IdempotencyKey",
     "IdempotencyStatus",
+    "RefreshToken",
+    "SessionRevocationReason",
     "TaskDependency",
     "TaskStatus",
     "User",
@@ -30,6 +39,7 @@ __all__ = [
     "WorkflowStatus",
     "WorkflowTask",
     "Workspace",
+    "WorkspaceInvitation",
     "WorkspaceMember",
     "WorkspaceRole",
 ]

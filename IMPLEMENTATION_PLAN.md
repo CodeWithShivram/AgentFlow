@@ -15,8 +15,8 @@ Phase 1 steps come directly from the handoff (§17). Phases 2–8 are numbered h
 | 1.1 | Monorepo and developer tooling | DONE | `80e28ce` |
 | 1.2 | Local infrastructure (PostgreSQL, Redis) | DONE | `9f8a550` |
 | 1.3 | Backend foundation | DONE | `44eef4a` |
-| 1.4 | Database and migrations | DONE | see `progress.md` |
-| 1.5 | Authentication and workspace authorization | NOT_STARTED | |
+| 1.4 | Database and migrations | DONE | `9543279` |
+| 1.5 | Authentication and workspace authorization | DONE | see `progress.md` |
 | 1.6 | Agent registry CRUD | NOT_STARTED | |
 | 1.7 | Workflow and task management | NOT_STARTED | |
 | 1.8 | Background execution foundation | NOT_STARTED | |
@@ -49,8 +49,8 @@ Phase 1 steps come directly from the handoff (§17). Phases 2–8 are numbered h
 - Commit: `feat(database): add core AgentFlow schema and migrations`
 
 ### 1.5 — Authentication and workspace authorization
-- Depends on: 1.4; decisions OD-1 (token format), OD-2 (SSE/browser auth transport), OD-3 (workspace on registration).
-- Acceptance: register/login; Argon2id; short-lived access tokens; refresh rotation with hashed storage if used; roles Owner/Admin/Member/Viewer; ownership enforced in services/repositories; cross-workspace access denial tested.
+- Depends on: 1.4; OD-1, OD-2, OD-3 resolved (ADR-0007).
+- Acceptance (as revised by the owner's Step 1.5 brief): register/login/refresh/logout/me; Argon2id; JWT access tokens (kid key ring, pinned algorithm, iss/aud/exp/nbf validated, no roles); hashed opaque refresh tokens with rotation, family revocation on reuse; cookie-only transport (HttpOnly, SameSite, host-only, Secure in production, restricted refresh path); session-bound CSRF tokens; Origin validation; strict CORS; cookie-based WebSocket auth; personal workspace + OWNER membership created atomically at signup; invitations; centralized RBAC returning 404 to non-members; Redis rate limiting failing closed; RLS designed (enabling tracked as OD-13); tests for auth, rotation, reuse, expiry, logout, signup rollback, RBAC, isolation, concurrency, cookies and log hygiene.
 - Commit: `feat(auth): add authentication and workspace RBAC`
 
 ### 1.6 — Agent registry CRUD
@@ -162,9 +162,9 @@ Acceptance (phase): deterministic tests with mock model responses; invalid plans
 
 | ID | Decision | Needed by | Notes |
 |---|---|---|---|
-| OD-1 | Access token format (e.g. JWT vs opaque DB-backed) and whether refresh tokens are used | 1.5 | Handoff requires short-lived access tokens; refresh optional. |
-| OD-2 | Browser auth transport (httpOnly cookie vs bearer header) | 1.5 | Browser `EventSource` cannot set headers; SSE (§11) must be authenticated. |
-| OD-3 | Does registration auto-create a workspace with the user as Owner? | 1.5 | Not specified. |
+| OD-1 | ~~Access token format~~ **Resolved 2026-11-07: JWT access + hashed rotating refresh tokens (ADR-0007)** | 1.5 | Approved by owner. |
+| OD-2 | ~~Browser auth transport~~ **Resolved 2026-11-07: HttpOnly cookies + CSRF + Origin checks (ADR-0007)** | 1.5 | Approved by owner. |
+| OD-3 | ~~Workspace on registration~~ **Resolved 2026-11-07: personal workspace + OWNER, atomically (ADR-0007)** | 1.5 | Approved by owner. |
 | OD-4 | ~~Idempotency key storage~~ **Resolved 2026-11-07: `idempotency_keys` table (ADR-0006)** | 1.4 | Approved by owner. |
 | OD-5 | API `settings.max_budget` vs DB `budget_limit` naming | 1.7 | Example request and schema differ. |
 | OD-6 | Frontend component system | 1.9 | "Accessible, consistent", avoid unnecessary libraries. |
@@ -173,4 +173,6 @@ Acceptance (phase): deterministic tests with mock model responses; invalid plans
 | OD-9 | How synchronous Celery workers access PostgreSQL (sync engine vs async inside tasks) | 1.8 | API is async per ADR-0005. |
 | OD-10 | Replace `httpx` with `httpx2` for Starlette's TestClient | before 1.10 | Starlette 1.10 deprecates `httpx` for its test client. |
 | OD-11 | Final workflow status set and transitions | 1.7 | `WorkflowStatus` in 1.4 is provisional (ADR-0006). |
-| OD-12 | Schedule periodic purge of expired idempotency keys | 1.8 | `IdempotencyService.purge_expired()` exists; needs Celery beat. |
+| OD-12 | Schedule periodic purge of expired idempotency keys, auth sessions, refresh tokens and invitations | 1.8 | Purge for idempotency keys exists; auth cleanup still to write. Needs Celery beat. |
+| OD-13 | Enable PostgreSQL row-level security | before multi-user hosting (proposed: with 1.10) | Designed in ADR-0007; needs a non-superuser runtime DB role, per-transaction `set_config`, policies and tests. |
+| OD-14 | Trusted reverse-proxy client IP handling for rate limits | before any proxied deployment | Rate limits use the direct peer IP today. |

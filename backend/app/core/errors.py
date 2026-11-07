@@ -35,10 +35,16 @@ class AppError(Exception):
     code: str = "BAD_REQUEST"
     message: str = "The request could not be processed."
 
-    def __init__(self, message: str | None = None, details: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        message: str | None = None,
+        details: dict[str, Any] | None = None,
+        headers: Mapping[str, str] | None = None,
+    ) -> None:
         super().__init__(message or self.message)
         self.message = message or self.message
         self.details = details or {}
+        self.headers = dict(headers or {})
 
 
 class ErrorBody(BaseModel):
@@ -102,7 +108,12 @@ async def app_error_handler(request: Request, exc: Exception) -> JSONResponse:
     # Registered only for AppError (see register_exception_handlers).
     app_exc = cast(AppError, exc)
     return error_response(
-        request, app_exc.status_code, app_exc.code, app_exc.message, app_exc.details
+        request,
+        app_exc.status_code,
+        app_exc.code,
+        app_exc.message,
+        app_exc.details,
+        headers=app_exc.headers,
     )
 
 

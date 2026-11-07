@@ -86,6 +86,42 @@ Each dependency check times out after `HEALTH_CHECK_TIMEOUT_SECONDS` (default 2)
 - Errors use one shape: `{"error": {"code", "message", "request_id", "details"}}`. Stack traces and exception text are never returned.
 - Logs are JSON lines on stdout. Passwords, tokens, URL credentials and configured secrets are redacted.
 
+### Authentication and workspaces
+
+Browser sessions use cookies only. Tokens never appear in response bodies, and the frontend must not store them. The full design, including key rotation and the row-level security plan, is in [ADR-0007](docs/ADR/0007-authentication-sessions-and-rbac.md).
+
+| Endpoint | Auth | Request body | Success | Notable errors |
+|---|---|---|---|---|
+| `POST /api/v1/auth/register` | — | `{email, password, workspace_name?}` | 201 session payload + cookies | 409 `EMAIL_ALREADY_REGISTERED`, 422 |
+| `POST /api/v1/auth/login` | — | `{email, password}` | 200 session payload + cookies | 401 `INVALID_CREDENTIALS`, 429 `RATE_LIMITED` |
+| `POST /api/v1/auth/refresh` | refresh cookie + CSRF | — | 200 session payload, rotated cookies | 401 `INVALID_REFRESH_TOKEN` / `REFRESH_TOKEN_REUSED` (cookies cleared) |
+| `POST /api/v1/auth/logout` | CSRF if a session is present | — | 204, cookies cleared | 403 `CSRF_TOKEN_INVALID` |
+| `GET /api/v1/auth/me` | access cookie | — | 200 `{user, memberships}` | 401 `AUTHENTICATION_REQUIRED` |
+| `GET /api/v1/workspaces?limit&offset` | access cookie | — | 200 page of your workspaces with your role | 401 |
+| `GET /api/v1/workspaces/{id}` | VIEWER+ | — | 200 workspace | 404 `WORKSPACE_NOT_FOUND` for non-members |
+| `GET /api/v1/workspaces/{id}/members?limit&offset` | VIEWER+ | — | 200 page of members | 404 |
+| `POST /api/v1/workspaces/{id}/invitations` | ADMIN+ and CSRF | `{email, role: ADMIN\|MEMBER\|VIEWER}` | 201 invitation incl. one-time `invitation_token` | 403 `INSUFFICIENT_ROLE` / `CANNOT_GRANT_ROLE`, 409 `ALREADY_A_MEMBER` |
+| `POST /api/v1/invitations/accept` | access cookie and CSRF | `{token}` | 200 `{workspace_id, workspace_name, role}` | 404 `INVITATION_NOT_FOUND`, 409 |
+
+The session payload is `{user, memberships, access_expires_at, session_expires_at}`.
+
+**Cookies:**
+
+| Cookie | Lifetime | Attributes |
+|---|---|---|
+| `agentflow_access` | 15 min | HttpOnly, SameSite=Lax |
+| `agentflow_refresh` | rotated on every refresh | HttpOnly, SameSite=Strict, Path=`/api/v1/auth` |
+| `agentflow_csrf` | session lifetime | readable by the frontend |
+
+In production the names gain `__Host-` / `__Secure-` prefixes and every cookie is `Secure`.
+
+Browser rules:
+- Every POST/PUT/PATCH/DELETE must come from an origin listed in `CORS_ALLOWED_ORIGINS`, otherwise 403 `ORIGIN_NOT_ALLOWED`. Add `http://localhost:8000` there if you want to call unsafe endpoints from `/docs`.
+- Authenticated unsafe requests, plus refresh and logout, must send the `agentflow_csrf` cookie value in `X-CSRF-Token`.
+- Reusing an old refresh token ends the whole session, so the frontend must make sure only one refresh request is in flight at a time.
+
+Roles run VIEWER < MEMBER < ADMIN < OWNER. Owners may invite ADMIN, MEMBER or VIEWER, and admins may invite MEMBER or VIEWER. Login attempts and the other authentication endpoints are rate-limited through Redis. If Redis is down they return 503 rather than run unprotected.
+
 ### Database and migrations
 
 The schema is managed by Alembic (`backend/alembic/`). Migrations read the database URL from the repo-root `.env`. Run them from `backend/`:
@@ -106,6 +142,8 @@ uv run alembic revision --autogenerate -m "describe change"   # draft a new migr
 | `workflows`, `workflow_tasks`, `task_dependencies` | Requests, their tasks and the dependency DAG |
 | `workflow_events` | Append-only history (`UPDATE` is rejected by a trigger), ordered by `sequence` |
 | `idempotency_keys` | Stored responses for retried requests; expire after `IDEMPOTENCY_KEY_TTL_SECONDS` (default 24 h) |
+| `auth_sessions`, `refresh_tokens` | Login sessions (refresh-token families) and single-use refresh tokens, stored as SHA-256 hashes only |
+| `workspace_invitations` | Pending and accepted invitations; token stored as a hash; role cannot be OWNER |
 
 Workspace isolation is enforced by the database: child rows carry `workspace_id`, and composite foreign keys stop them pointing into another workspace or workflow. Deleting a workspace deletes all of its data. Conventions, deletion rules and the idempotency design are in [ADR-0006](docs/ADR/0006-core-schema-and-idempotency.md).
 

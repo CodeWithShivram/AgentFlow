@@ -3,13 +3,16 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from starlette.middleware.cors import CORSMiddleware
 
 from app.api.v1.router import api_router
 from app.core.config import Settings, get_settings
+from app.core.cookies import CSRF_HEADER
 from app.core.errors import register_exception_handlers
 from app.core.logging import configure_logging
+from app.core.origin import OriginCheckMiddleware
 from app.core.redis import create_redis_client
-from app.core.request_id import RequestIdMiddleware
+from app.core.request_id import REQUEST_ID_HEADER, RequestIdMiddleware
 from app.db.session import (
     create_engine,
     create_session_factory,
@@ -53,6 +56,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         openapi_url="/openapi.json" if docs else None,
     )
     app.state.settings = settings
+    # Added innermost first: requests pass RequestId -> CORS -> OriginCheck -> routes.
+    app.add_middleware(OriginCheckMiddleware, allowed_origins=settings.cors_allowed_origins)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_allowed_origins,
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+        allow_headers=["Content-Type", CSRF_HEADER, REQUEST_ID_HEADER, "Idempotency-Key"],
+        expose_headers=[REQUEST_ID_HEADER, "Retry-After"],
+        max_age=600,
+    )
     app.add_middleware(RequestIdMiddleware)
     register_exception_handlers(app)
     app.include_router(api_router)
