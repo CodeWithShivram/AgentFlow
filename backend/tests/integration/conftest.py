@@ -9,7 +9,7 @@ import uuid
 from collections.abc import AsyncIterator, Iterator
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import psycopg
 import pytest
@@ -178,3 +178,60 @@ def seeded_builtins(api_settings: Settings) -> Settings:
 
     asyncio.run(seed(), loop_factory=LOOP_FACTORY)
     return api_settings
+
+
+# --- background execution -----------------------------------------------------------------------
+
+WORKER_TEST_ROLE = "agentflow_worker_it"
+
+
+@pytest.fixture(scope="session")
+def worker_role(migrated_database_url: URL) -> Iterator[tuple[str, str]]:
+    """The restricted worker role, provisioned in the shared test database."""
+    from app.db.roles import admin_connection, provision_worker_role
+
+    settings = Settings(app_env="test")
+    password = uuid.uuid4().hex + uuid.uuid4().hex
+    database = migrated_database_url.database
+    with admin_connection(settings, database=database) as connection:
+        provision_worker_role(connection, role=WORKER_TEST_ROLE, password=password)
+    try:
+        yield WORKER_TEST_ROLE, password
+    finally:
+        # Privileges live in the test database; drop them there, then the cluster-wide role.
+        with admin_connection(settings, database=database) as connection:
+            connection.execute(sql.SQL("DROP OWNED BY {}").format(sql.Identifier(WORKER_TEST_ROLE)))
+            connection.commit()
+        with _admin_connection(settings) as admin:
+            admin.execute(
+                sql.SQL("DROP ROLE IF EXISTS {}").format(sql.Identifier(WORKER_TEST_ROLE))
+            )
+
+
+@pytest.fixture
+def worker_factory(
+    migrated_database_url: URL, worker_role: tuple[str, str], api_settings: Settings
+) -> Iterator[Any]:
+    """Sync session factory connected as the restricted worker role (like Celery workers)."""
+    from app.db.sync_session import create_worker_engine, create_worker_session_factory
+
+    role, password = worker_role
+    engine = create_worker_engine(
+        api_settings, migrated_database_url.set(username=role, password=password)
+    )
+    try:
+        yield create_worker_session_factory(engine)
+    finally:
+        engine.dispose()
+
+
+@pytest.fixture
+def admin_factory(api_settings: Settings) -> Iterator[Any]:
+    """Sync session factory as the schema owner, for test setup."""
+    from app.db.sync_session import create_worker_engine, create_worker_session_factory
+
+    engine = create_worker_engine(api_settings, api_settings.database_url)
+    try:
+        yield create_worker_session_factory(engine)
+    finally:
+        engine.dispose()

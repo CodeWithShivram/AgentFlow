@@ -26,6 +26,7 @@ Universal multi-agent AI orchestration platform. A natural-language request is p
 | FastAPI | 0.162.1 |
 | SQLAlchemy / psycopg / redis-py | 2.1.8 / 3.3.8 / 8.1.0 |
 | Alembic | 1.20.1 |
+| Celery / kombu | 5.7.0 / 5.7.0 |
 | PostgreSQL (Docker) | 18.6-alpine |
 | Redis (Docker) | 8.10.3-alpine |
 | Docker / Compose | 29.8.2 / v5.6.0 tested |
@@ -68,6 +69,7 @@ cd backend
 uv sync                                   # creates backend\.venv with Python 3.12 + dev tools
 uv run alembic upgrade head               # create or update the database schema
 uv run python -m app.agents.seed          # load/refresh the six built-in agents (idempotent)
+uv run python -m app.db.roles provision-worker   # create/refresh the restricted worker DB role
 uv run uvicorn app.main:create_app --factory --reload --port 8000 --loop asyncio:SelectorEventLoop
 ```
 
@@ -216,6 +218,8 @@ uv run alembic revision --autogenerate -m "describe change"   # draft a new migr
 | `workspace_invitations` | Pending and accepted invitations; token stored as a hash; role cannot be OWNER |
 | `agent_proposals` | Proposed agents awaiting review; content frozen after submission |
 | `agent_audit_events` | Append-only history of every registry change |
+| `outbox_events`, `inbox_messages` | Transactional outbox (identifiers only, leases, attempts) and consumed event IDs for idempotent workers |
+| `agent_executions` | One row per task attempt: agent version, status, timing, safe error or result summary |
 
 Workspace isolation is enforced by the database: child rows carry `workspace_id`, and composite foreign keys stop them pointing into another workspace or workflow. Deleting a workspace deletes all of its data. Conventions, deletion rules and the idempotency design are in [ADR-0006](docs/ADR/0006-core-schema-and-idempotency.md).
 
@@ -230,6 +234,43 @@ uv run pytest -m "not integration"        # unit tests only, no infrastructure n
 ```
 
 Integration tests create throwaway databases named `agentflow_test_*` on the local server, migrate them, and drop them afterwards. Your development database is never touched.
+
+## Background workers (Celery)
+
+Workflow tasks are executed by Celery workers, fed through a transactional outbox: the API only writes outbox rows, and the relay publishes them to Redis. In this step the worker runs a harmless mock agent; there is no LLM call. The design is in [ADR-0010](docs/ADR/0010-background-execution-outbox-and-workers.md).
+
+One-time setup, after `alembic upgrade head`: set `WORKER_DB_PASSWORD` in `.env`, then run `uv run python -m app.db.roles provision-worker`. Re-run the provisioning after future migrations.
+
+Run each in its own terminal from `backend/`, with the infrastructure up:
+
+```powershell
+# API (port 8000 is used here by default; pick another if it is taken)
+uv run uvicorn app.main:create_app --factory --port 8000 --loop asyncio:SelectorEventLoop
+
+# Worker: Windows needs the solo pool
+uv run celery -A app.worker.celery_app worker --pool=solo -Q execution,maintenance --loglevel=INFO
+
+# Beat: exactly one instance. It runs the outbox relay every 5 s and cleanup hourly.
+uv run celery -A app.worker.celery_app beat --schedule=celerybeat-schedule --loglevel=INFO
+```
+
+| Queue | Tasks |
+|---|---|
+| `execution` | `agentflow.execute_task`: one attempt of a dispatched task |
+| `maintenance` | `agentflow.relay_outbox` (every 5 s), `agentflow.cleanup` (hourly, at minute 0) |
+
+**Linux production:**
+- Run prefork workers, for example `celery -A app.worker.celery_app worker -Q execution --concurrency 4` and a separate `-Q maintenance --concurrency 1` worker.
+- Run exactly one Beat process.
+- Run everything as a non-root user, with `WORKER_DB_PASSWORD` and the broker password supplied by the environment or a secret manager.
+
+Task time limits (600 s soft, 660 s hard) are enforced only by prefork workers, not by the Windows `solo` pool.
+
+How delivery behaves:
+- Delivery is **at-least-once**, and workers deduplicate on the stable event ID.
+- A task attempt ends `SUBMITTED`; verification arrives in Phase 5.
+- On failure, a task becomes `REWORK_REQUIRED`, or `FAILED` after the 3rd attempt.
+- Each attempt is kept in `agent_executions`.
 
 ## Frontend
 

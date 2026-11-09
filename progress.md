@@ -2,8 +2,8 @@
 
 ## Current position
 - Phase: 1 — Foundation
-- Last completed step: 1.7 — Workflow and task management
-- Next step: 1.8 — Background execution foundation (await explicit go-ahead; needs OD-8, OD-9, OD-12)
+- Last completed step: 1.8 — Reliable background execution with Celery
+- Next step: 1.9 — Frontend foundation (await explicit go-ahead; needs OD-6). OD-13 (RLS) is owner-scheduled before 1.10.
 
 ## Completed steps
 | Step | Commit message | Hash |
@@ -15,75 +15,95 @@
 | 1.4 | `feat(database): add core AgentFlow schema and migrations` | `9543279` |
 | 1.5 | `feat(auth): add authentication and workspace RBAC` | `7eded85` |
 | 1.6 | `feat(agents): implement agent registry and versioning` | `baaedb9` |
-| 1.7 | `feat(workflows): implement workflow and task management` | latest commit touching `backend/app/services/transitions.py` |
+| 1.7 | `feat(workflows): implement workflow and task management` | `82483e6` |
+| 1.8 | `feat(execution): add reliable background execution with Celery` | latest commit touching `backend/app/execution/outbox.py` |
 
 ## Environment snapshot (2026-11-09)
 | Item | Value |
 |---|---|
 | Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`, nothing pushed |
 | Python / uv / Node / npm | 3.12.14 via uv 0.12.9 / Node 24.13.0 / npm 11.6.2 |
-| Docker | 29.8.2, Compose v5.6.0. Docker Desktop was not running at session start; I started it and brought the `agentflow` stack up healthy |
-| Dev database | `agentflow` at revision `0004 (head)`; six built-in agents seeded |
-| Port 8000 | Used by another local project (`easa`); run AgentFlow smoke servers on another port |
+| Celery / kombu | 5.7.0 / 5.7.0 |
+| Docker | 29.8.2, Compose v5.6.0 — `agentflow` stack healthy |
+| Dev database | `agentflow` at `0005 (head)`; built-ins seeded; `agentflow_worker` role provisioned |
+| Local `.env` | now also holds a generated `WORKER_DB_PASSWORD` (gitignored) |
+| Port 8000 | Used by another local project (`easa`); smoke tests used 8010 |
 
 ## Current implementation state
-- Steps 1.3–1.6: foundation, schema, idempotency, authentication and RBAC, agent registry.
-- Migration `0004`:
-  - the final 10 workflow statuses (OD-11), with an `autonomy_policy` CHECK (`approval_required` or `autonomous`);
-  - `workflows.allow_dynamic_agent_proposals` and `workflows.revision`;
-  - `workflow_tasks.required`, `removed_at` (CHECK: removed means CANCELLED) and `revision`;
-  - six new event types.
-- `app/workflows/state_machine.py`: the approved workflow and task matrices, with allowed actors per edge.
-- `app/services/transitions.py`: the only place statuses change. It writes events atomically and runs reconciliation (readiness, BLOCKED/FAILED/COMPLETED propagation, cascade cancellation).
-- `app/services/workflows.py`: idempotent create, list and get, user transitions (ADMIN to approve a plan or unblock), events.
-- `app/services/tasks.py`:
-  - task CRUD with plan-edit rules;
-  - DAG dependencies with cycle detection;
-  - assignment pinning the active agent version, with skill checks;
-  - cancellation.
-- `app/api/v1/workflows.py`: routes under `/api/v1/workspaces/{workspace_id}/workflows`.
+- **Transition engine:** `app/workflows/engine.py` (sync) is the single transition engine. `app/services/transitions.py` is its async adapter, via `run_sync`. The engine writes `task.dispatch` outbox rows in the same transaction when a task becomes ASSIGNED, when a workflow resumes, and when a running task frees a slot.
+- **Migration `0005`:**
+  - `outbox_events` (lease, attempts, backoff, partial indexes);
+  - `inbox_messages`;
+  - `agent_executions` (composite FKs, unique `(task_id, attempt_number)`, unique `dispatch_event_id`);
+  - expiry indexes on `refresh_tokens` and `workspace_invitations`.
+- **`app/execution/`:**
+  - `outbox.py`: enqueue; claim with SKIP LOCKED and leases; lease-guarded mark published/failed; inbox.
+  - `relay.py`: claim, publish with no transaction, record.
+  - `runner.py`: claim, mock agent, finish; at most 3 attempts.
+  - `cleanup.py`: bounded hourly cleanup with retention rules.
+- **`app/worker/`:** `celery_app.py` (JSON only, late acks, prefetch 1, execution and maintenance queues, Beat schedule) and `tasks.py` (relay, execute_task, cleanup).
+- **`app/db/`:** `sync_session.py` (a per-process sync engine; `session_scope` always rolls back on error and closes) and `roles.py` (`agentflow_worker` grants and the provisioning command).
 
-## Checks last executed (Step 1.7)
-- **Dev DB migrations:** `alembic upgrade` to 0004, `alembic check` clean, `downgrade -1` and re-upgrade ✔
+## Checks last executed (Step 1.8)
+- **Migrations:** `alembic upgrade` to 0005, `alembic check` clean, `downgrade -1` and re-upgrade on the dev DB ✔
 - **`scripts/check.ps1` ✔:**
-  - ruff format and check; mypy strict (92 files); alembic check;
-  - pytest **689 passed** (519 unit, 170 integration);
+  - ruff; mypy strict (107 files); alembic check;
+  - pytest **724 passed** (529 unit, 195 integration);
   - eslint, typecheck, vitest 2, next build.
-- **Transition coverage:** every ordered pair of statuses (100 workflow, 196 task) checked against an independent copy of the approved matrix, plus actor invariants.
+- **New integration tests,** against real PostgreSQL, as the worker role:
+  - outbox commit and rollback with the state change;
+  - 3 concurrent relays with no double claim;
+  - lease expiry reclaim with the stale-owner guard;
+  - publish with no open transaction;
+  - broker failure keeping the event, backoff, then FAILED;
+  - duplicate delivery from 4 concurrent consumers executing once;
+  - stale dispatch ignored;
+  - bounded attempts with kept history;
+  - parallel-limit deferral and re-dispatch;
+  - paused workflow with re-dispatch on resume;
+  - cancellation mid-run;
+  - session rollback and close;
+  - role restrictions and an exact grant list;
+  - cleanup retention, boundedness, idempotency and concurrency;
+  - **an end-to-end run through real Redis and a real Celery worker.**
 - **Deliberate-bug checks** (each reverted afterwards), all caught:
-  - cycle check off: 1 failure;
-  - dependents becoming ready early: 2;
-  - no completion guard: 1;
-  - agents allowed to complete tasks: 1;
-  - unscoped workflow lookup: 1;
-  - plan approval without ADMIN: 1.
+  - inbox deduplication off: 1 failure;
+  - no lease guard: 1;
+  - no dispatch on assignment: 5;
+  - immediate give-up on publish failure: 1;
+  - parallel limit ignored: 1;
+  - no security retention: 2.
+- **Startup, each independently,** with processes stopped by their own process tree:
+  - API on :8010 reported ready;
+  - the worker (solo pool) reported ready and executed relay tasks;
+  - Beat sent `relay-outbox` every 5 s;
+  - the Redis password appeared in no log, and no processes were left.
 
-## Issues found and fixed during Step 1.7
-- **The brief said the workflow status definitions were "in this conversation"; they weren't.** I proposed both transition matrices and the owner approved them before implementation.
-- **Design flaw found before testing:** escalation could deadlock a BLOCKED workflow, because reassignment needed RUNNING. Now only dispatch (QUEUED/IN_PROGRESS) needs RUNNING.
-- **Bug:** closing a workflow refused to cancel its leftover tasks. Cascade cancellation is now allowed only for that closing transition.
-- **Bug:** `populate_existing` on task queries overwrote unflushed status changes in app sessions (`autoflush=False`). Removed it, transitions now flush, and the lifecycle tests use production-style sessions; the original tests used autoflush and missed this.
+## Deviations and findings
+- **Refactor of Step 1.7:** the transition logic moved from async to a sync engine with an async adapter, so workers can use the single transition service. Behaviour is unchanged; all Step 1.7 tests pass unmodified.
+- **Row locks need UPDATE privilege.** The real-database tests showed this. Cleanup therefore deletes by key without `FOR UPDATE SKIP LOCKED`, so the worker role doesn't get UPDATE on security tables. It remains safe concurrently (tested).
+- **Additions beyond the brief:** cleanup also prunes PUBLISHED outbox rows and inbox entries older than 7 days. FAILED outbox rows are kept.
+- **Typing:** mypy relaxations apply only to Celery (untyped) and `app/worker/*`; `app/execution` stays strict.
 
 ## Known issues / limitations
-- A required task blocked by a cancelled dependency can only be resolved by cancelling the workflow, until replanning exists (OD-16, Phase 5).
-- Tasks are moved through scheduler, worker and verifier transitions only by services and tests; those actors arrive in Step 1.8 and Phase 5. The API exposes user transitions only.
-- Plan limits are 200 tasks per workflow and 50 dependencies per task.
-- **Backlog (recorded in `IMPLEMENTATION_PLAN.md`):**
-  - OD-15: database-level case-insensitive agent names;
-  - OD-13: RLS before Step 1.10;
-  - OD-14: trusted proxy IPs before hosted deployment;
-  - OD-12: scheduled cleanup in Step 1.8.
-- Frontend `budget_limit` types arrive with the frontend in Step 1.9.
+- **OD-13:** RLS is not enabled. The API and migrations still use the superuser; the worker role is already compatible.
+- **OD-14:** trusted proxy IP handling, before hosted deployment.
+- **OD-17:** a worker crash after claim leaves the task IN_PROGRESS; redelivery is deduplicated, so recovery is Phase 4.
+- **OD-18:** FAILED outbox rows are kept but not surfaced or replayable yet (Phase 4).
+- **OD-15:** database-level case-insensitive agent names. **OD-16:** replanning for tasks blocked by a cancelled dependency.
+- Celery time limits are not enforced by the Windows `solo` pool, only by Linux prefork. Exactly one Beat must run.
+- Dispatch latency is up to 5 s (the relay interval).
+- Worker logs report `service: agentflow-api` (same SERVICE_NAME); a distinct worker service name can be configured.
 - Still open: OD-10 (`httpx2` warning), the dev-only `minimatch` finding, and the Redis licence review.
 
 ## Blockers
 None.
 
 ## Next exact action
-On approval, with OD-8 (outbox scope), OD-9 (worker DB access) and OD-12 (cleanup scheduling) decided, start Step 1.8:
-- Celery with Redis;
-- a mock worker driving SCHEDULER and WORKER transitions through `transitions.py`;
-- `agent_executions` records per attempt;
-- outbox-based dispatch;
-- bounded retry and timeout;
-- duplicate-delivery tests.
+On approval, with OD-6 (frontend component system) decided, start Step 1.9:
+- auth screens with cookie and CSRF handling, and single-flight refresh;
+- dashboard shell;
+- workflow list/create/detail using `budget_limit`;
+- agent registry screen;
+- a typed API client;
+- tests.

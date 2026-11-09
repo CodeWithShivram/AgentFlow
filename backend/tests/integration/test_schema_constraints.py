@@ -104,6 +104,7 @@ def test_every_table_is_workspace_scoped_or_explicitly_exempt() -> None:
         "auth_sessions": "belongs to a user, not a workspace",
         "refresh_tokens": "belongs to an auth session",
         "agent_audit_events": "workspace_id is NULL for built-in agent history",
+        "inbox_messages": "consumed event IDs only; the events themselves are workspace-scoped",
     }
     for table in Base.metadata.sorted_tables:
         if table.name in exempt:

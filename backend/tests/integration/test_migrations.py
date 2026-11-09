@@ -30,6 +30,9 @@ EXPECTED_TABLES = {
     "workspace_invitations",
     "agent_proposals",
     "agent_audit_events",
+    "outbox_events",
+    "inbox_messages",
+    "agent_executions",
 }
 
 

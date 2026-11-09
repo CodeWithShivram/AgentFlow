@@ -32,3 +32,6 @@ artifacts_storage/
 Thumbs.db
 .idea/
 .vscode/
+
+# Celery Beat state
+celerybeat-schedule*

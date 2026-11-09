@@ -37,12 +37,17 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   tasks pin `assigned_agent_version_id`. Mutations take the agent `revision`. HIGH-risk tools need OWNER.
   Built-ins come only from `builtin_agents.json` via `uv run python -m app.agents.seed`.
 - No ORM relationships are defined: flush a parent row before inserting rows that reference it in the same transaction.
-- Workflows (ADR-0009): only `app/services/transitions.py` changes workflow/task status, under the workflow row lock
+- Workflows (ADR-0009): only the engine (`app/workflows/engine.py`, async adapter `app/services/transitions.py`) changes workflow/task status, under the workflow row lock
   (`lock_for_change`), with the event written in the same transaction. The matrix lives in `app/workflows/state_machine.py`
   with an actor per edge; agents (WORKER) never reach COMPLETED. Use `budget_limit`, never `max_budget`.
 - App sessions do not autoflush and must not use `populate_existing` on rows already changed in the transaction;
   service-level tests should use `AsyncSession(..., autoflush=False)` like production.
 - Port 8000 may be used by another local project: run AgentFlow smoke servers on another port and stop them by PID.
+- Background execution (ADR-0010): the API never calls the broker; dispatch is written to the outbox by
+  `app/workflows/engine.py` in the same transaction. Workers use the sync engine (`app/db/sync_session.py`) as the
+  restricted `agentflow_worker` role; consumers must be idempotent via `outbox.record_consumed`. Celery messages carry IDs
+  only. New tables a worker touches need an entry in `app/db/roles.py` WORKER_GRANTS (then re-provision). Row locks
+  need UPDATE privilege. Never claim exactly-once delivery.
 - Errors use the standard shape in `app/core/errors.py`; never return exception text. Log through `logging` (JSON + redaction), never `print`.
 - PostgreSQL is authoritative state; Redis is transport/cache only. Dispatch uses a transactional outbox.
 - Agents submit results; only platform verification accepts a task. LLM output is untrusted until validated.

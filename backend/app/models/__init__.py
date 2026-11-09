@@ -16,6 +16,13 @@ from app.models.auth import (
     WorkspaceInvitation,
 )
 from app.models.base import Base
+from app.models.execution import (
+    AgentExecution,
+    ExecutionStatus,
+    InboxMessage,
+    OutboxEvent,
+    OutboxStatus,
+)
 from app.models.idempotency import IdempotencyKey, IdempotencyStatus
 from app.models.tenancy import User, Workspace, WorkspaceMember, WorkspaceRole
 from app.models.workflow import (
@@ -31,6 +38,7 @@ from app.models.workflow import (
 
 __all__ = [
     "Agent",
+    "AgentExecution",
     "AgentAuditAction",
     "AgentAuditEvent",
     "AgentProposal",
@@ -40,8 +48,12 @@ __all__ = [
     "AuthSession",
     "AutonomyPolicy",
     "Base",
+    "ExecutionStatus",
     "IdempotencyKey",
     "IdempotencyStatus",
+    "InboxMessage",
+    "OutboxEvent",
+    "OutboxStatus",
     "RefreshToken",
     "SessionRevocationReason",
     "TaskDependency",

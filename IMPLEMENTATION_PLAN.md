@@ -18,8 +18,8 @@ Phase 1 steps come directly from the handoff (§17). Phases 2–8 are numbered h
 | 1.4 | Database and migrations | DONE | `9543279` |
 | 1.5 | Authentication and workspace authorization | DONE | `7eded85` |
 | 1.6 | Agent registry CRUD | DONE | `baaedb9` |
-| 1.7 | Workflow and task management | DONE | see `progress.md` |
-| 1.8 | Background execution foundation | NOT_STARTED | |
+| 1.7 | Workflow and task management | DONE | `82483e6` |
+| 1.8 | Background execution foundation | DONE | see `progress.md` |
 | 1.9 | Frontend foundation | NOT_STARTED | |
 | 1.10 | Phase 1 integration and release v0.1.0 | NOT_STARTED | |
 
@@ -64,9 +64,9 @@ Phase 1 steps come directly from the handoff (§17). Phases 2–8 are numbered h
 - Commit: `feat(workflows): implement workflow and task management`
 
 ### 1.8 — Background execution foundation
-- Depends on: 1.7; ADR-0004 (Celery on Windows); decisions OD-8 (outbox scope), OD-9 (worker DB access).
-- Acceptance: Celery + Redis configured; mock worker runs a harmless task; agent_executions records (migration added here); outbox-based dispatch; bounded retry and timeout; duplicate delivery produces no duplicate accepted side effects (tested).
-- Commit: `feat(execution): add mock background task execution`
+- Depends on: 1.7; OD-8, OD-9, OD-12 resolved (ADR-0010).
+- Acceptance (as revised by the owner's Step 1.8 brief): Celery + Redis (JSON only, late acks, prefetch 1, execution/maintenance queues, Windows solo pool, worker and Beat entry points); transactional outbox written with the state change, relay with SKIP LOCKED claims, leases, lease-guarded acknowledgement, retained failures and at-least-once semantics; idempotent consumers via inbox; sync worker sessions as a restricted non-superuser role; mock execution recording `agent_executions`; hourly bounded idempotent cleanup preserving security records; real PostgreSQL/Redis tests including a real-worker end-to-end test.
+- Commit: `feat(execution): add reliable background execution with Celery`
 
 ### 1.9 — Frontend foundation
 - Depends on: 1.5–1.8 APIs; decision OD-6 (component system).
@@ -169,12 +169,14 @@ Acceptance (phase): deterministic tests with mock model responses; invalid plans
 | OD-5 | ~~Budget field naming~~ **Resolved 2026-11-09: `budget_limit` everywhere, no alias (ADR-0009)** | 1.7 | Approved by owner. |
 | OD-6 | Frontend component system | 1.9 | "Accessible, consistent", avoid unnecessary libraries. |
 | OD-7 | ~~Python dependency locking~~ **Resolved 2026-11-07: uv project + `uv.lock`** | 1.1 | Approved by owner. |
-| OD-8 | Outbox scope in 1.8 vs Phase 4 | 1.8 | Proposed: minimal outbox in 1.8, hardening in 4.3. |
-| OD-9 | How synchronous Celery workers access PostgreSQL (sync engine vs async inside tasks) | 1.8 | API is async per ADR-0005. |
+| OD-8 | ~~Outbox scope~~ **Resolved 2026-11-09: minimal reliable outbox now, advanced recovery in Phase 4 (ADR-0010)** | 1.8 | Approved by owner. |
+| OD-9 | ~~Worker DB access~~ **Resolved 2026-11-09: sync SQLAlchemy + psycopg 3 as restricted `agentflow_worker` (ADR-0010)** | 1.8 | Approved by owner. |
 | OD-10 | Replace `httpx` with `httpx2` for Starlette's TestClient | before 1.10 | Starlette 1.10 deprecates `httpx` for its test client. |
 | OD-11 | ~~Workflow statuses~~ **Resolved 2026-11-09: 10 statuses and approved transition matrices (ADR-0009)** | 1.7 | Approved by owner. |
-| OD-12 | Schedule periodic purge of expired idempotency keys, auth sessions, refresh tokens and invitations | 1.8 | Purge for idempotency keys exists; auth cleanup still to write. Needs Celery beat. |
-| OD-13 | Enable PostgreSQL row-level security | before multi-user hosting (proposed: with 1.10) | Designed in ADR-0007; needs a non-superuser runtime DB role, per-transaction `set_config`, policies and tests. |
+| OD-12 | ~~Cleanup scheduling~~ **Resolved 2026-11-09: hourly Celery Beat cleanup (ADR-0010)** | 1.8 | Approved by owner. |
+| OD-13 | Enable PostgreSQL row-level security | before 1.10 (owner-scheduled) | Designed in ADR-0007; worker role already non-superuser/NOBYPASSRLS (ADR-0010). Remaining: non-superuser schema owner, `agentflow_api` role, per-transaction `set_config`, policies, tests. |
 | OD-14 | Trusted reverse-proxy client IP handling for rate limits | before any proxied deployment | Rate limits use the direct peer IP today. |
 | OD-15 | Database-level case-insensitive uniqueness for agent names | before 1.10 | App checks are case-insensitive; DB constraint is case-sensitive (race can create "A" and "a"). Needs a `lower(name)` unique index migration. |
 | OD-16 | Replanning / recovery for tasks blocked by a cancelled dependency | Phase 5 | Today only cancelling the workflow resolves it (ADR-0009). |
+| OD-17 | Recover executions stranded by a worker crash after claim (task stays IN_PROGRESS) | Phase 4 | Needs heartbeat/time-out sweep (ADR-0010). |
+| OD-18 | Surface and replay FAILED outbox events; dead-letter tooling | Phase 4 | Rows are kept, not yet visible (ADR-0010). |

@@ -4,6 +4,7 @@ import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
+from urllib.parse import quote
 
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -71,6 +72,18 @@ class Settings(BaseSettings):
     auth_login_attempts_per_minute: int = Field(default=10, ge=1, le=1_000)
     auth_requests_per_minute: int = Field(default=60, ge=1, le=10_000)
     workspace_invitation_ttl_seconds: int = Field(default=604_800, ge=300, le=2_592_000)
+    # --- Background execution (ADR-0010) ---
+    # Celery broker: the same Redis server, separate logical database from rate limiting.
+    celery_broker_redis_db: int = Field(default=1, ge=0, le=15)
+    # Workers connect as a restricted, non-superuser role (see app/db/roles.py).
+    worker_db_user: str = Field(default="agentflow_worker", min_length=1, max_length=63)
+    worker_db_password: SecretStr | None = None
+    outbox_lease_seconds: int = Field(default=60, ge=5, le=3600)
+    outbox_max_attempts: int = Field(default=10, ge=1, le=100)
+    outbox_batch_size: int = Field(default=100, ge=1, le=1000)
+    cleanup_batch_size: int = Field(default=500, ge=1, le=10_000)
+    cleanup_max_batches: int = Field(default=20, ge=1, le=1000)
+
     # Browser origins allowed to make credentialed requests (CORS) and unsafe requests.
     cors_allowed_origins: list[str] = Field(
         default=["http://localhost:3000", "http://127.0.0.1:3000"], min_length=1
@@ -107,12 +120,15 @@ class Settings(BaseSettings):
     def _reject_placeholder_secrets_in_production(self) -> "Settings":
         if self.app_env != "production":
             return self
+        secrets: list[tuple[str, SecretStr]] = [
+            ("POSTGRES_PASSWORD", self.postgres_password),
+            ("REDIS_PASSWORD", self.redis_password),
+        ]
+        if self.worker_db_password is not None:
+            secrets.append(("WORKER_DB_PASSWORD", self.worker_db_password))
         weak = [
             name
-            for name, secret in (
-                ("POSTGRES_PASSWORD", self.postgres_password),
-                ("REDIS_PASSWORD", self.redis_password),
-            )
+            for name, secret in secrets
             if secret.get_secret_value().strip().lower() in _PLACEHOLDER_SECRETS
         ]
         if any(
@@ -148,12 +164,34 @@ class Settings(BaseSettings):
             database=self.postgres_db,
         )
 
+    @property
+    def worker_database_url(self) -> URL:
+        """psycopg 3 sync URL for Celery workers, using the restricted worker role."""
+        if self.worker_db_password is None:
+            raise ValueError("WORKER_DB_PASSWORD must be set to run workers")
+        return URL.create(
+            "postgresql+psycopg",
+            username=self.worker_db_user,
+            password=self.worker_db_password.get_secret_value(),
+            host=self.postgres_host,
+            port=self.postgres_port,
+            database=self.postgres_db,
+        )
+
+    @property
+    def celery_broker_url(self) -> str:
+        password = quote(self.redis_password.get_secret_value(), safe="")
+        return (
+            f"redis://:{password}@{self.redis_host}:{self.redis_port}/{self.celery_broker_redis_db}"
+        )
+
     def secret_values(self) -> list[str]:
         """Secret values to redact from logs."""
         values = [
             self.postgres_password.get_secret_value(),
             self.redis_password.get_secret_value(),
             *(key.get_secret_value() for key in self.auth_jwt_signing_keys.values()),
+            *([self.worker_db_password.get_secret_value()] if self.worker_db_password else []),
         ]
         return [v for v in values if len(v) >= _MIN_REDACTABLE_SECRET_LENGTH]
 
