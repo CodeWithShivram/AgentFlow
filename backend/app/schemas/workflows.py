@@ -16,7 +16,13 @@ from pydantic import (
     field_validator,
 )
 
-from app.models import AutonomyPolicy, TaskStatus, WorkflowEventType, WorkflowStatus
+from app.models import (
+    AutonomyPolicy,
+    ExecutionStatus,
+    TaskStatus,
+    WorkflowEventType,
+    WorkflowStatus,
+)
 from app.schemas.agents import Capability, SafeText, Slug
 
 _FORBID = ConfigDict(extra="forbid")
@@ -194,6 +200,27 @@ class WorkflowEventResponse(BaseModel):
     event_type: WorkflowEventType
     payload: dict[str, Any]
     created_at: datetime
+
+
+class ExecutionResponse(BaseModel):
+    """One attempt of a task. Error and result text are short, safe summaries."""
+
+    id: uuid.UUID
+    task_id: uuid.UUID
+    attempt_number: int
+    status: ExecutionStatus
+    agent_id: uuid.UUID
+    agent_version_id: uuid.UUID
+    agent_version: int
+    started_at: datetime
+    completed_at: datetime | None
+    error_code: str | None
+    error_summary: str | None
+    result_summary: str | None
+
+
+class ExecutionList(BaseModel):
+    items: list[ExecutionResponse]
 
 
 class EventPage(BaseModel):

@@ -8,13 +8,16 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, status
 
-from app.api.deps import DbSession, workspace_role
+from app.agents.catalog import CAPABILITIES, CATEGORIES, TOOLS
+from app.api.deps import CurrentPrincipal, DbSession, workspace_role
 from app.models import AgentProposal, AgentProposalStatus, AgentStatus, AgentVersion, WorkspaceRole
 from app.schemas.agents import (
+    AgentCatalogResponse,
     AgentCreateRequest,
     AgentResponse,
     AgentUpdateRequest,
     AgentVersionResponse,
+    CatalogTool,
     ProposalCreateRequest,
     ProposalDecisionRequest,
     ProposalResponse,
@@ -25,6 +28,27 @@ from app.services import agents as service
 from app.services.authorization import WorkspaceAccess
 
 router = APIRouter(prefix="/workspaces/{workspace_id}", tags=["agents"])
+catalog_router = APIRouter(tags=["agents"])
+
+
+@catalog_router.get("/agent-catalog")
+async def agent_catalog(_: CurrentPrincipal) -> AgentCatalogResponse:
+    """The capabilities, categories and tools an agent configuration may use (platform policy,
+    the same for every workspace). Read-only."""
+    return AgentCatalogResponse(
+        capabilities=sorted(CAPABILITIES),
+        categories=sorted(CATEGORIES),
+        tools=[
+            CatalogTool(
+                name=t.name,
+                risk=t.risk.value,
+                description=t.description,
+                available_in_phase_1=t.available_in_phase_1,
+            )
+            for t in sorted(TOOLS.values(), key=lambda t: (t.risk, t.name))
+        ],
+    )
+
 
 Limit = Annotated[int, Query(ge=1, le=100)]
 Offset = Annotated[int, Query(ge=0, le=100_000)]

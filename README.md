@@ -2,7 +2,7 @@
 
 Universal multi-agent AI orchestration platform. A natural-language request is planned into a task graph, executed by specialised agents, independently verified, and reported with full history, usage and cost.
 
-> Status: **Phase 1 — Foundation** in progress. Only a health endpoint and an application shell exist so far. See [`progress.md`](progress.md) and [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md). The full specification is [`AGENTFLOW_HANDOFF.txt`](AGENTFLOW_HANDOFF.txt).
+> Status: **Phase 1 — Foundation** in progress. The API (auth, workspaces, agent registry, workflows, background execution with a mock agent) and the web application are in place. See [`progress.md`](progress.md) and [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md). The full specification is [`AGENTFLOW_HANDOFF.txt`](AGENTFLOW_HANDOFF.txt).
 
 ## Repository layout
 
@@ -274,25 +274,49 @@ How delivery behaves:
 
 ## Frontend
 
+The web application (ADR-0011): sign-in, workspaces, dashboard, workflows (planning, dependencies, assignment, lifecycle, live execution monitoring), agents and versions, agent proposals, members and invitations.
+
 ```powershell
 cd frontend
 npm ci
 npm run dev                               # http://localhost:3000
 ```
 
+- **API address.** The app calls the API at `NEXT_PUBLIC_API_BASE_URL` (default `http://localhost:8000`). To use another port, put it in `frontend/.env.local` (gitignored), for example `NEXT_PUBLIC_API_BASE_URL=http://localhost:8010`. It is a public, build-time value: never put secrets in `NEXT_PUBLIC_*` variables.
+- **Allowed origins.** The API must allow the app's origin (`CORS_ALLOWED_ORIGINS`). The default allows `http://localhost:3000` and `http://127.0.0.1:3000`.
+- **Use the same host name for both.** Open the app on the same host name as the API (`localhost` with `localhost`). The app must read the API's CSRF cookie, and cookies are per host. In production, serve both from one host, for example with a reverse proxy routing `/api` to the API.
+- **No authentication tokens in the browser's reach.** They stay in HttpOnly cookies and never reach JavaScript, `localStorage` or `sessionStorage`.
+- **Live updates use polling.** There is no push endpoint. The workflow page polls the event log while work is running.
+
 Checks:
 
 ```powershell
 npm run lint
 npm run typecheck
-npm test
+npm test                                  # Vitest + React Testing Library
 npm run build
 ```
+
+### End-to-end tests (Playwright)
+
+The journeys run against the real stack. No AI API is called: the mock agent executes tasks.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/infra.ps1 up
+cd frontend
+npm run test:e2e
+```
+
+What the run does:
+- **Database.** It resets a disposable database, `agentflow_e2e`, then migrates it, seeds the built-in agents and provisions the worker role. It refuses any database name not ending in `_e2e`.
+- **Processes.** It starts the API on :8011, a Celery worker and Beat (Redis databases 2 and 3), and a production build on :3100. All of them are stopped afterwards.
+- **Logs.** Backend logs go to `frontend/test-results/e2e-backend/`.
+- **Browser.** It uses the installed Google Chrome. Set `PLAYWRIGHT_CHANNEL=""` to use Playwright's Chromium instead (`npx playwright install chromium`).
 
 ## All checks
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts/check.ps1
+powershell -ExecutionPolicy Bypass -File scripts/check.ps1        # add -E2E to include Playwright
 ```
 
 ## Configuration

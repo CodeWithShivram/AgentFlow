@@ -13,10 +13,13 @@ from fastapi.responses import JSONResponse
 
 from app.api.deps import DbSession, SettingsDep, workspace_role
 from app.models import WorkflowStatus, WorkflowTask, WorkspaceRole
+from app.repositories import workflows as repository
 from app.schemas.workflows import (
     AssignRequest,
     DependencyRequest,
     EventPage,
+    ExecutionList,
+    ExecutionResponse,
     RevisionReasonRequest,
     TaskCreateRequest,
     TaskResponse,
@@ -285,6 +288,34 @@ async def assign_agent(
         session, access, workflow_id, task_id, agent_id=body.agent_id, revision=body.revision
     )
     return await _task_response(session, access, workflow_id, task)
+
+
+@router.get("/{workflow_id}/tasks/{task_id}/executions")
+async def list_executions(
+    workflow_id: uuid.UUID, task_id: uuid.UUID, access: Viewer, session: DbSession
+) -> ExecutionList:
+    """Every attempt of the task, oldest first, with the exact agent version it used."""
+    workflow = await service.get_workflow(session, access, workflow_id)
+    await task_service.get_task(session, workflow, task_id)  # 404 for unknown/foreign tasks
+    rows = await repository.list_executions(session, workflow, task_id)
+    items = [
+        ExecutionResponse(
+            id=e.id,
+            task_id=e.task_id,
+            attempt_number=e.attempt_number,
+            status=e.status,
+            agent_id=e.agent_id,
+            agent_version_id=e.agent_version_id,
+            agent_version=version,
+            started_at=e.started_at,
+            completed_at=e.completed_at,
+            error_code=e.error_code,
+            error_summary=e.error_summary,
+            result_summary=e.result_summary,
+        )
+        for e, version in rows
+    ]
+    return ExecutionList(items=items)
 
 
 @router.post("/{workflow_id}/tasks/{task_id}/cancel")

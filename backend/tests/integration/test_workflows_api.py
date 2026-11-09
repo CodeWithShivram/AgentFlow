@@ -458,3 +458,84 @@ def test_events_are_ordered_paginated_append_only_and_free_of_prompts(
     assert "Research AI support platforms" not in str(page) + str(rest)
     with pytest.raises(DBAPIError, match="append-only"):
         sql(api_settings, "UPDATE workflow_events SET payload = '{}'::jsonb")
+
+
+# --- read-only endpoints added for the frontend (Step 1.9) ---------------------------------------
+
+
+def test_agent_catalog_matches_platform_policy(
+    owner: TestClient, new_client: ClientFactory
+) -> None:
+    from app.agents.catalog import CAPABILITIES, CATEGORIES, TOOLS
+
+    catalog = owner.get(f"{API}/agent-catalog")
+    anonymous = new_client().get(f"{API}/agent-catalog")
+
+    assert catalog.status_code == 200
+    body = catalog.json()
+    assert body["capabilities"] == sorted(CAPABILITIES)
+    assert body["categories"] == sorted(CATEGORIES)
+    assert {t["name"]: t["risk"] for t in body["tools"]} == {
+        n: t.risk.value for n, t in TOOLS.items()
+    }
+    assert anonymous.status_code == 401
+
+
+def test_execution_history_lists_attempts_with_agent_versions(
+    owner: TestClient, workspace: str, workflow: str, worker_factory: Any
+) -> None:
+    from app.db.sync_session import session_scope
+    from app.execution import runner
+
+    task = add_task(owner, workspace, workflow).json()
+    url = wf_url(workspace, f"/{workflow}/tasks/{task['id']}/executions")
+    assert owner.get(url).json() == {"items": []}
+    for status in ("PLANNING", "READY", "RUNNING"):
+        move(owner, workspace, workflow, status)
+    task = task_of(owner, workspace, workflow, task["id"])
+    owner.post(
+        wf_url(workspace, f"/{workflow}/tasks/{task['id']}/assign"),
+        json={"agent_id": builtin_id(owner, workspace, "Writer"), "revision": task["revision"]},
+        headers=csrf(owner),
+    )
+    with session_scope(worker_factory) as s:
+        from sqlalchemy import select
+
+        from app.models import OutboxEvent
+
+        event = s.execute(select(OutboxEvent)).scalar_one()
+    with session_scope(worker_factory) as s:
+        claim = runner.claim(
+            s,
+            event_id=event.id,
+            workspace_id=event.workspace_id,
+            workflow_id=uuid.UUID(workflow),
+            task_id=uuid.UUID(task["id"]),
+            agent_version_id=uuid.UUID(event.payload["agent_version_id"]),
+        )
+    assert isinstance(claim, runner.Claim)
+    with session_scope(worker_factory) as s:
+        runner.finish(s, claim, result=runner.run_mock_agent(claim), failure=None)
+
+    (attempt,) = owner.get(url).json()["items"]
+
+    assert attempt["attempt_number"] == 1 and attempt["status"] == "SUCCEEDED"
+    assert attempt["agent_version"] == 1 and attempt["error_code"] is None
+    assert attempt["result_summary"].startswith("Mock result")
+    assert task_of(owner, workspace, workflow, task["id"])["status"] == "SUBMITTED"
+
+
+def test_execution_history_is_workspace_scoped(
+    new_client: ClientFactory, owner: TestClient, workspace: str, workflow: str
+) -> None:
+    task = add_task(owner, workspace, workflow).json()
+    mallory = new_client()
+    register(mallory, new_email())
+
+    via_own = mallory.get(
+        wf_url(my_workspace(mallory), f"/{workflow}/tasks/{task['id']}/executions")
+    )
+    via_victim = mallory.get(wf_url(workspace, f"/{workflow}/tasks/{task['id']}/executions"))
+
+    assert via_own.status_code == 404 and via_own.json()["error"]["code"] == "WORKFLOW_NOT_FOUND"
+    assert via_victim.status_code == 404

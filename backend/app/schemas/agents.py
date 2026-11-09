@@ -132,6 +132,19 @@ class AgentConfiguration(BaseModel):
         return [permission.tool for permission in self.tools]
 
 
+class CatalogTool(BaseModel):
+    name: str
+    risk: str
+    description: str
+    available_in_phase_1: bool
+
+
+class AgentCatalogResponse(BaseModel):
+    capabilities: list[str]
+    categories: list[str]
+    tools: list[CatalogTool]
+
+
 # --- requests -------------------------------------------------------------------------------
 
 

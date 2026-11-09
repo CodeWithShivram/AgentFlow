@@ -1,5 +1,7 @@
 # Runs every configured quality gate for backend and frontend.
-# Usage (from repo root): powershell -ExecutionPolicy Bypass -File scripts/check.ps1
+# Usage (from repo root): powershell -ExecutionPolicy Bypass -File scripts/check.ps1 [-E2E]
+# -E2E also runs the Playwright journeys against a real backend (needs infra.ps1 up; ~6 min).
+param([switch]$E2E)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 
@@ -24,6 +26,8 @@ try {
     Invoke-Step 'frontend: lint' { npm run lint }
     Invoke-Step 'frontend: typecheck' { npm run typecheck }
     Invoke-Step 'frontend: test' { npm test }
+    # E2E builds with the E2E API URL, so it runs before the final build.
+    if ($E2E) { Invoke-Step 'frontend: e2e (Playwright)' { npm run test:e2e } }
     Invoke-Step 'frontend: build' { npm run build }
 }
 finally { Pop-Location }

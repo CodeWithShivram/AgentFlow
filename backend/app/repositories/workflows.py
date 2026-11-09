@@ -7,7 +7,15 @@ from typing import Any
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import TaskDependency, Workflow, WorkflowEvent, WorkflowStatus, WorkflowTask
+from app.models import (
+    AgentExecution,
+    AgentVersion,
+    TaskDependency,
+    Workflow,
+    WorkflowEvent,
+    WorkflowStatus,
+    WorkflowTask,
+)
 
 
 async def list_workflows(
@@ -156,3 +164,20 @@ async def list_events(
         .limit(limit)
     )
     return list((await session.execute(statement)).scalars())
+
+
+async def list_executions(
+    session: AsyncSession, workflow: Workflow, task_id: uuid.UUID
+) -> list[tuple[AgentExecution, int]]:
+    """Attempts of one task, oldest first, with the agent version number each one used."""
+    rows = await session.execute(
+        select(AgentExecution, AgentVersion.version)
+        .join(AgentVersion, AgentVersion.id == AgentExecution.agent_version_id)
+        .where(
+            AgentExecution.task_id == task_id,
+            AgentExecution.workflow_id == workflow.id,
+            AgentExecution.workspace_id == workflow.workspace_id,
+        )
+        .order_by(AgentExecution.attempt_number)
+    )
+    return [(row[0], row[1]) for row in rows]

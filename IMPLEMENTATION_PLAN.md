@@ -19,8 +19,8 @@ Phase 1 steps come directly from the handoff (§17). Phases 2–8 are numbered h
 | 1.5 | Authentication and workspace authorization | DONE | `7eded85` |
 | 1.6 | Agent registry CRUD | DONE | `baaedb9` |
 | 1.7 | Workflow and task management | DONE | `82483e6` |
-| 1.8 | Background execution foundation | DONE | see `progress.md` |
-| 1.9 | Frontend foundation | NOT_STARTED | |
+| 1.8 | Background execution foundation | DONE | `51e03f5` |
+| 1.9 | Frontend application | DONE | see `progress.md` |
 | 1.10 | Phase 1 integration and release v0.1.0 | NOT_STARTED | |
 
 ### 1.0 — Repository reconnaissance and implementation plan
@@ -68,10 +68,39 @@ Phase 1 steps come directly from the handoff (§17). Phases 2–8 are numbered h
 - Acceptance (as revised by the owner's Step 1.8 brief): Celery + Redis (JSON only, late acks, prefetch 1, execution/maintenance queues, Windows solo pool, worker and Beat entry points); transactional outbox written with the state change, relay with SKIP LOCKED claims, leases, lease-guarded acknowledgement, retained failures and at-least-once semantics; idempotent consumers via inbox; sync worker sessions as a restricted non-superuser role; mock execution recording `agent_executions`; hourly bounded idempotent cleanup preserving security records; real PostgreSQL/Redis tests including a real-worker end-to-end test.
 - Commit: `feat(execution): add reliable background execution with Celery`
 
-### 1.9 — Frontend foundation
-- Depends on: 1.5–1.8 APIs; decision OD-6 (component system).
-- Acceptance: auth screens; dashboard shell and navigation; workflow list/create/detail skeletons; agent registry screen; typed API client; mock data clearly labelled; loading/error/empty states; component tests.
-- Commit: `feat(frontend): add AgentFlow application shell`
+### 1.9 — Frontend application
+- Depends on: 1.5–1.8 APIs; OD-6 resolved (ADR-0011).
+- Acceptance, as revised by the owner's Step 1.9 brief:
+  - **Built on the real API only:** no mock production APIs, fake authentication or invented metrics.
+  - **Shell:** responsive app shell with mobile navigation.
+  - **Auth:** cookie authentication with CSRF; serialized refresh; expiry handling.
+  - **Features:**
+    - a dashboard;
+    - agents, versions and proposals;
+    - workflows with filters and pagination, tasks, dependencies, assignment, lifecycle actions, revision conflicts, budget and currency;
+    - execution monitoring by polling;
+    - members and invitations.
+  - **Robustness and accessibility:** the 401/403/404/409/422/429/5xx errors handled; no silent retries of writes; accessible and responsive.
+  - **Tests:** Vitest unit/component/integration tests, and 11 Playwright journeys against the real backend.
+  - **Backend:** the smallest additions where a gap blocked a screen. These are `GET /agent-catalog` and `GET .../tasks/{id}/executions`; the other gaps are documented below.
+- Commit: `feat(frontend): add AgentFlow web application`
+
+#### Step 1.9 API gaps
+The UI states each of these where it applies; none is faked.
+
+| Gap | Today | Smallest compatible backend change |
+|---|---|---|
+| Agent options (capabilities, categories, tools) | **Added in 1.9:** `GET /api/v1/agent-catalog` | — |
+| Task execution attempts | **Added in 1.9:** `GET .../workflows/{id}/tasks/{task_id}/executions` | — |
+| Change a member's role, remove a member | Members page explains it is unavailable | `PATCH`/`DELETE /workspaces/{id}/members/{user_id}` (ADMIN+, OWNER for admins), reusing the invite role rules |
+| Rename a workspace | Settings are read-only | `PATCH /workspaces/{id}` with `name` (ADMIN+) |
+| Change password or email | Account page is read-only | `POST /auth/password` (current + new password; revokes other sessions) |
+| Notifications | The bell opens Activity | A notifications table + `GET /notifications` (Phase 6/8) |
+| Workspace-wide activity feed | Activity merges the events of the 10 newest workflows (first 500 events each) | `GET /workspaces/{id}/events?after=` across workflows |
+| Aggregate counts | Dashboard uses `?status=X&limit=1` totals (13 requests) | `GET /workspaces/{id}/workflows/summary` returning counts by status |
+| Recently updated ordering | Lists are newest-created first | `sort=updated_at` on the list endpoints |
+| Spend and token usage | "Not measured yet (Phase 2)" | Model gateway usage records (Phase 2) |
+| Live push | Polling the event log with backoff | SSE stream of workflow events (Phase 4) |
 
 ### 1.10 — Phase 1 integration and release
 - Depends on: 1.1–1.9.
@@ -167,7 +196,7 @@ Acceptance (phase): deterministic tests with mock model responses; invalid plans
 | OD-3 | ~~Workspace on registration~~ **Resolved 2026-11-07: personal workspace + OWNER, atomically (ADR-0007)** | 1.5 | Approved by owner. |
 | OD-4 | ~~Idempotency key storage~~ **Resolved 2026-11-07: `idempotency_keys` table (ADR-0006)** | 1.4 | Approved by owner. |
 | OD-5 | ~~Budget field naming~~ **Resolved 2026-11-09: `budget_limit` everywhere, no alias (ADR-0009)** | 1.7 | Approved by owner. |
-| OD-6 | Frontend component system | 1.9 | "Accessible, consistent", avoid unnecessary libraries. |
+| OD-6 | ~~Frontend component system~~ **Resolved 2026-11-09: shadcn/ui (in-repo) on Radix, Tailwind, React Hook Form + Zod, TanStack Query (ADR-0011)** | 1.9 | Approved by owner in the Step 1.9 brief. |
 | OD-7 | ~~Python dependency locking~~ **Resolved 2026-11-07: uv project + `uv.lock`** | 1.1 | Approved by owner. |
 | OD-8 | ~~Outbox scope~~ **Resolved 2026-11-09: minimal reliable outbox now, advanced recovery in Phase 4 (ADR-0010)** | 1.8 | Approved by owner. |
 | OD-9 | ~~Worker DB access~~ **Resolved 2026-11-09: sync SQLAlchemy + psycopg 3 as restricted `agentflow_worker` (ADR-0010)** | 1.8 | Approved by owner. |
@@ -180,3 +209,4 @@ Acceptance (phase): deterministic tests with mock model responses; invalid plans
 | OD-16 | Replanning / recovery for tasks blocked by a cancelled dependency | Phase 5 | Today only cancelling the workflow resolves it (ADR-0009). |
 | OD-17 | Recover executions stranded by a worker crash after claim (task stays IN_PROGRESS) | Phase 4 | Needs heartbeat/time-out sweep (ADR-0010). |
 | OD-18 | Surface and replay FAILED outbox events; dead-letter tooling | Phase 4 | Rows are kept, not yet visible (ADR-0010). |
+| OD-19 | Hosted frontend topology and Content-Security-Policy | before any hosted deployment | The app must read the API's CSRF cookie, so the frontend and API must share a host (e.g. a reverse proxy routing `/api`). A CSP needs per-request nonces for Next.js inline scripts (ADR-0011). |
