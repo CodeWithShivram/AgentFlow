@@ -31,13 +31,24 @@ from app.models.base import Base, created_at_column, str_enum, updated_at_column
 
 
 class WorkflowStatus(StrEnum):
-    # Provisional set; the workflow state machine is finalized in Step 1.7.
+    # OD-11, ADR-0009. Transitions live in app/workflows/state_machine.py.
     PENDING = "PENDING"
+    PLANNING = "PLANNING"
+    AWAITING_APPROVAL = "AWAITING_APPROVAL"
+    READY = "READY"
     RUNNING = "RUNNING"
-    WAITING_APPROVAL = "WAITING_APPROVAL"
+    PAUSED = "PAUSED"
+    BLOCKED = "BLOCKED"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
+
+
+class AutonomyPolicy(StrEnum):
+    # approval_required: a plan must be approved (AWAITING_APPROVAL) before it can run.
+    # autonomous: a submitted plan goes straight to READY.
+    APPROVAL_REQUIRED = "approval_required"
+    AUTONOMOUS = "autonomous"
 
 
 class TaskStatus(StrEnum):
@@ -78,6 +89,13 @@ class WorkflowEventType(StrEnum):
     WORKFLOW_COMPLETED = "WORKFLOW_COMPLETED"
     WORKFLOW_FAILED = "WORKFLOW_FAILED"
     WORKFLOW_CANCELLED = "WORKFLOW_CANCELLED"
+    # Added in Step 1.7 for changes the handoff list does not name.
+    WORKFLOW_STATUS_CHANGED = "WORKFLOW_STATUS_CHANGED"
+    TASK_STATUS_CHANGED = "TASK_STATUS_CHANGED"
+    TASK_UPDATED = "TASK_UPDATED"
+    TASK_REMOVED = "TASK_REMOVED"
+    DEPENDENCY_ADDED = "DEPENDENCY_ADDED"
+    DEPENDENCY_REMOVED = "DEPENDENCY_REMOVED"
 
 
 class Workflow(Base):
@@ -88,6 +106,7 @@ class Workflow(Base):
         CheckConstraint("budget_limit IS NULL OR budget_limit >= 0", name="budget_non_negative"),
         CheckConstraint("currency ~ '^[A-Z]{3}$'", name="currency_iso4217"),
         CheckConstraint("max_parallel_tasks BETWEEN 1 AND 100", name="max_parallel_tasks_range"),
+        CheckConstraint("revision >= 1", name="revision_positive"),
         Index("ix_workflows_workspace_id_created_at", "workspace_id", "created_at"),
         Index("ix_workflows_workspace_id_status", "workspace_id", "status"),
     )
@@ -102,11 +121,18 @@ class Workflow(Base):
     status: Mapped[WorkflowStatus] = mapped_column(
         str_enum(WorkflowStatus, "status"), default=WorkflowStatus.PENDING
     )
-    autonomy_policy: Mapped[str] = mapped_column(String(50))
+    autonomy_policy: Mapped[AutonomyPolicy] = mapped_column(
+        str_enum(AutonomyPolicy, "autonomy_policy"), default=AutonomyPolicy.APPROVAL_REQUIRED
+    )
     budget_limit: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
     currency: Mapped[str] = mapped_column(String(3), server_default=text("'USD'"))
     max_parallel_tasks: Mapped[int] = mapped_column(server_default=text("3"))
     deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    allow_dynamic_agent_proposals: Mapped[bool] = mapped_column(
+        server_default=text("false"), default=False
+    )
+    # Optimistic concurrency for user edits; mutations also lock the row (ADR-0009).
+    revision: Mapped[int] = mapped_column(server_default=text("1"), default=1)
     created_at: Mapped[datetime] = created_at_column()
     updated_at: Mapped[datetime] = updated_at_column()
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -139,6 +165,9 @@ class WorkflowTask(Base):
             name="agent_and_version_assigned_together",
         ),
         CheckConstraint("attempt_count >= 0", name="attempt_count_non_negative"),
+        CheckConstraint("revision >= 1", name="revision_positive"),
+        # A task removed from the plan stays as history, CANCELLED.
+        CheckConstraint("removed_at IS NULL OR status = 'CANCELLED'", name="removed_is_cancelled"),
         Index("ix_workflow_tasks_workflow_id_status", "workflow_id", "status"),
         Index("ix_workflow_tasks_workspace_id_status", "workspace_id", "status"),
     )
@@ -166,6 +195,11 @@ class WorkflowTask(Base):
     # Pinned when assigned; later publishing never changes what this task runs.
     assigned_agent_version_id: Mapped[uuid.UUID | None] = mapped_column(index=True)
     attempt_count: Mapped[int] = mapped_column(server_default=text("0"))
+    # Required tasks must be COMPLETED before the workflow can complete.
+    required: Mapped[bool] = mapped_column(server_default=text("true"), default=True)
+    # Set when the task is removed from the plan (rows are kept: events reference them).
+    removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revision: Mapped[int] = mapped_column(server_default=text("1"), default=1)
     created_at: Mapped[datetime] = created_at_column()
     updated_at: Mapped[datetime] = updated_at_column()
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

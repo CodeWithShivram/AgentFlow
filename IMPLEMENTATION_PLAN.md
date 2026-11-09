@@ -17,8 +17,8 @@ Phase 1 steps come directly from the handoff (§17). Phases 2–8 are numbered h
 | 1.3 | Backend foundation | DONE | `44eef4a` |
 | 1.4 | Database and migrations | DONE | `9543279` |
 | 1.5 | Authentication and workspace authorization | DONE | `7eded85` |
-| 1.6 | Agent registry CRUD | DONE | see `progress.md` |
-| 1.7 | Workflow and task management | NOT_STARTED | |
+| 1.6 | Agent registry CRUD | DONE | `baaedb9` |
+| 1.7 | Workflow and task management | DONE | see `progress.md` |
 | 1.8 | Background execution foundation | NOT_STARTED | |
 | 1.9 | Frontend foundation | NOT_STARTED | |
 | 1.10 | Phase 1 integration and release v0.1.0 | NOT_STARTED | |
@@ -59,8 +59,8 @@ Phase 1 steps come directly from the handoff (§17). Phases 2–8 are numbered h
 - Commit: `feat(agents): implement agent registry and versioning`
 
 ### 1.7 — Workflow and task management
-- Depends on: 1.6; decision OD-5 (`max_budget` vs `budget_limit` naming).
-- Acceptance: workflow create/list/detail; task CRUD and dependencies; DAG cycle and self-dependency rejection; central state transition service; persisted workflow events; idempotent workflow creation; transition and dependency tests.
+- Depends on: 1.6; OD-5 and OD-11 resolved (ADR-0009).
+- Acceptance (as revised by the owner's Step 1.7 brief): workflow create/list/detail with idempotent creation; task CRUD; dependencies with self/duplicate/cross-workflow/cycle rejection; central workflow and task transition services implementing the approved matrices with actor rules; row locks plus revisions for concurrency; events written atomically; `budget_limit`/currency validation; assignment pinning the active published agent version with skill checks; completion only when required tasks are COMPLETED; workflow kept consistent with task state; tests for every transition, DAG rules, isolation, concurrency, idempotency, events, budget and migrations.
 - Commit: `feat(workflows): implement workflow and task management`
 
 ### 1.8 — Background execution foundation
@@ -166,13 +166,15 @@ Acceptance (phase): deterministic tests with mock model responses; invalid plans
 | OD-2 | ~~Browser auth transport~~ **Resolved 2026-11-07: HttpOnly cookies + CSRF + Origin checks (ADR-0007)** | 1.5 | Approved by owner. |
 | OD-3 | ~~Workspace on registration~~ **Resolved 2026-11-07: personal workspace + OWNER, atomically (ADR-0007)** | 1.5 | Approved by owner. |
 | OD-4 | ~~Idempotency key storage~~ **Resolved 2026-11-07: `idempotency_keys` table (ADR-0006)** | 1.4 | Approved by owner. |
-| OD-5 | API `settings.max_budget` vs DB `budget_limit` naming | 1.7 | Example request and schema differ. |
+| OD-5 | ~~Budget field naming~~ **Resolved 2026-11-09: `budget_limit` everywhere, no alias (ADR-0009)** | 1.7 | Approved by owner. |
 | OD-6 | Frontend component system | 1.9 | "Accessible, consistent", avoid unnecessary libraries. |
 | OD-7 | ~~Python dependency locking~~ **Resolved 2026-11-07: uv project + `uv.lock`** | 1.1 | Approved by owner. |
 | OD-8 | Outbox scope in 1.8 vs Phase 4 | 1.8 | Proposed: minimal outbox in 1.8, hardening in 4.3. |
 | OD-9 | How synchronous Celery workers access PostgreSQL (sync engine vs async inside tasks) | 1.8 | API is async per ADR-0005. |
 | OD-10 | Replace `httpx` with `httpx2` for Starlette's TestClient | before 1.10 | Starlette 1.10 deprecates `httpx` for its test client. |
-| OD-11 | Final workflow status set and transitions | 1.7 | `WorkflowStatus` in 1.4 is provisional (ADR-0006). |
+| OD-11 | ~~Workflow statuses~~ **Resolved 2026-11-09: 10 statuses and approved transition matrices (ADR-0009)** | 1.7 | Approved by owner. |
 | OD-12 | Schedule periodic purge of expired idempotency keys, auth sessions, refresh tokens and invitations | 1.8 | Purge for idempotency keys exists; auth cleanup still to write. Needs Celery beat. |
 | OD-13 | Enable PostgreSQL row-level security | before multi-user hosting (proposed: with 1.10) | Designed in ADR-0007; needs a non-superuser runtime DB role, per-transaction `set_config`, policies and tests. |
 | OD-14 | Trusted reverse-proxy client IP handling for rate limits | before any proxied deployment | Rate limits use the direct peer IP today. |
+| OD-15 | Database-level case-insensitive uniqueness for agent names | before 1.10 | App checks are case-insensitive; DB constraint is case-sensitive (race can create "A" and "a"). Needs a `lower(name)` unique index migration. |
+| OD-16 | Replanning / recovery for tasks blocked by a cancelled dependency | Phase 5 | Today only cancelling the workflow resolves it (ADR-0009). |

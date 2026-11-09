@@ -19,6 +19,7 @@ from app.models.base import Base
 from app.models.idempotency import IdempotencyKey, IdempotencyStatus
 from app.models.tenancy import User, Workspace, WorkspaceMember, WorkspaceRole
 from app.models.workflow import (
+    AutonomyPolicy,
     TaskDependency,
     TaskStatus,
     Workflow,
@@ -37,6 +38,7 @@ __all__ = [
     "AgentStatus",
     "AgentVersion",
     "AuthSession",
+    "AutonomyPolicy",
     "Base",
     "IdempotencyKey",
     "IdempotencyStatus",

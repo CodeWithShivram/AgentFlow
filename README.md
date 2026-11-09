@@ -160,6 +160,38 @@ Rules to know:
 - Every mutating request must send the agent's current `revision`. A stale revision is rejected, so two editors can't overwrite each other.
 - Approving a proposal does not activate the agent; activation is a separate step.
 
+### Workflows and tasks
+
+Routes live under `/api/v1/workspaces/{workspace_id}/workflows`. The lifecycle, DAG rules and the full transition matrix are in [ADR-0009](docs/ADR/0009-workflow-and-task-lifecycle.md).
+
+| Endpoint | Min role | Body | Success | Notable errors |
+|---|---|---|---|---|
+| `POST /workflows` (optional `Idempotency-Key` header) | MEMBER | `{prompt, settings: {autonomy_policy?, budget_limit?, currency?, max_parallel_tasks?, allow_dynamic_agent_proposals?, deadline?}}` | 201 PENDING workflow; replays add `Idempotent-Replayed: true` | 409 `IDEMPOTENCY_KEY_REUSED`, 422 |
+| `GET /workflows?status&limit&offset` | VIEWER | — | 200 page | — |
+| `GET /workflows/{id}` | VIEWER | — | 200 workflow | 404 `WORKFLOW_NOT_FOUND` |
+| `POST /workflows/{id}/transitions` | MEMBER (approve plan, unblock: ADMIN) | `{to_status, revision, reason?}` | 200 workflow | 409 `INVALID_TRANSITION` / `TRANSITION_PRECONDITION_FAILED` / `WORKFLOW_REVISION_CONFLICT` |
+| `POST /workflows/{id}/start` · `/cancel` | MEMBER | `{revision, reason?}` | 200 (READY→RUNNING · →CANCELLED) | as above |
+| `GET /workflows/{id}/events?after&limit` | VIEWER | — | 200 `{items, last_sequence}` in order | — |
+| `GET /workflows/{id}/tasks?limit&offset` · `GET …/tasks/{task_id}` | VIEWER | — | 200 | 404 `TASK_NOT_FOUND` |
+| `POST /workflows/{id}/tasks` | MEMBER | `{title, description?, required_skills?, input_references?, expected_output_schema?, acceptance_criteria?, priority?, required?, depends_on?}` | 201 task | 409 `PLAN_NOT_EDITABLE`, 422 |
+| `PATCH …/tasks/{task_id}` | MEMBER | `{revision, …fields}` | 200 task | 409 `TASK_REVISION_CONFLICT` / `PLAN_NOT_EDITABLE` |
+| `DELETE …/tasks/{task_id}?revision=` | MEMBER | — | 204 (kept as removed/CANCELLED history) | 409 |
+| `POST …/tasks/{task_id}/dependencies` · `DELETE …/dependencies/{depends_on_task_id}` | MEMBER | `{depends_on_task_id}` | 201 task · 204 | 422 `INVALID_DEPENDENCY` / `DEPENDENCY_CYCLE`, 409 `DEPENDENCY_EXISTS` |
+| `POST …/tasks/{task_id}/assign` | MEMBER | `{agent_id, revision}` | 200 task pinned to the agent's active version | 409 `AGENT_NOT_RUNNABLE` / `INVALID_TRANSITION`, 422 `AGENT_LACKS_SKILLS` |
+| `POST …/tasks/{task_id}/cancel` | MEMBER | `{revision, reason?}` | 200 task | 409 |
+
+A typical manual run looks like this:
+
+1. Create the workflow.
+2. Add tasks and dependencies.
+3. `PENDING → PLANNING`.
+4. Submit the plan with `→ AWAITING_APPROVAL`, or go straight to `→ READY` when `autonomy_policy` is `autonomous`.
+5. An ADMIN approves with `→ READY`.
+6. `start`. Tasks whose dependencies are complete become READY automatically.
+7. Assign an agent.
+
+Queueing, execution and verification arrive in later steps. The workflow completes by itself once every required task is COMPLETED. Editing a submitted or approved plan sends it back to PLANNING. Budgets use `budget_limit` (decimal string, up to 4 places) and a 3-letter `currency`; `max_budget` is not accepted.
+
 ### Database and migrations
 
 The schema is managed by Alembic (`backend/alembic/`). Migrations read the database URL from the repo-root `.env`. Run them from `backend/`:
@@ -177,7 +209,7 @@ uv run alembic revision --autogenerate -m "describe change"   # draft a new migr
 | `users` | Accounts (email unique case-insensitively; only password hashes are stored) |
 | `workspaces`, `workspace_members` | Tenants and membership with roles OWNER / ADMIN / MEMBER / VIEWER |
 | `agents`, `agent_versions` | Agent definitions with draft and revision (`workspace_id` NULL = built-in) and immutable published versions (`UPDATE` rejected by a trigger) |
-| `workflows`, `workflow_tasks`, `task_dependencies` | Requests, their tasks and the dependency DAG |
+| `workflows`, `workflow_tasks`, `task_dependencies` | Requests (10 statuses, `budget_limit`, `revision`), their tasks (required/removed flags, pinned agent version) and the acyclic dependency graph |
 | `workflow_events` | Append-only history (`UPDATE` is rejected by a trigger), ordered by `sequence` |
 | `idempotency_keys` | Stored responses for retried requests; expire after `IDEMPOTENCY_KEY_TTL_SECONDS` (default 24 h) |
 | `auth_sessions`, `refresh_tokens` | Login sessions (refresh-token families) and single-use refresh tokens, stored as SHA-256 hashes only |
