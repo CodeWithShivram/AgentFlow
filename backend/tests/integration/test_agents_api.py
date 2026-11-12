@@ -3,7 +3,7 @@
 import uuid
 from typing import Any
 
-import httpx
+import httpx2
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import DBAPIError
@@ -50,8 +50,8 @@ def agents_url(workspace_id: str, suffix: str = "") -> str:
 
 def create(
     client: TestClient, workspace_id: str, name: str = "Summarizer", config: dict[str, Any] = CONFIG
-) -> httpx.Response:
-    response: httpx.Response = client.post(
+) -> httpx2.Response:
+    response: httpx2.Response = client.post(
         agents_url(workspace_id),
         json={"name": name, "category": "writing", "description": "d", "configuration": config},
         headers=csrf(client),
@@ -61,8 +61,8 @@ def create(
 
 def act(
     client: TestClient, workspace_id: str, agent: dict[str, Any], action: str
-) -> httpx.Response:
-    response: httpx.Response = client.post(
+) -> httpx2.Response:
+    response: httpx2.Response = client.post(
         agents_url(workspace_id, f"/{agent['id']}/{action}"),
         json={"revision": agent["revision"]},
         headers=csrf(client),
@@ -70,8 +70,8 @@ def act(
     return response
 
 
-def patch(client: TestClient, workspace_id: str, agent_id: str, **body: Any) -> httpx.Response:
-    response: httpx.Response = client.patch(
+def patch(client: TestClient, workspace_id: str, agent_id: str, **body: Any) -> httpx2.Response:
+    response: httpx2.Response = client.patch(
         agents_url(workspace_id, f"/{agent_id}"), json=body, headers=csrf(client)
     )
     return response
@@ -84,8 +84,8 @@ def fetch(client: TestClient, workspace_id: str, agent_id: str) -> dict[str, Any
 
 def propose(
     client: TestClient, workspace_id: str, config: dict[str, Any] = CONFIG, **extra: Any
-) -> httpx.Response:
-    response: httpx.Response = client.post(
+) -> httpx2.Response:
+    response: httpx2.Response = client.post(
         f"{API}/workspaces/{workspace_id}/agent-proposals",
         json={
             "name": "Market scanner",
@@ -101,8 +101,8 @@ def propose(
 
 def decide(
     client: TestClient, workspace_id: str, proposal_id: str, decision: str
-) -> httpx.Response:
-    response: httpx.Response = client.post(
+) -> httpx2.Response:
+    response: httpx2.Response = client.post(
         f"{API}/workspaces/{workspace_id}/agent-proposals/{proposal_id}/{decision}",
         json={"note": f"{decision}d after review"},
         headers=csrf(client),

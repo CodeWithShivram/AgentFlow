@@ -174,13 +174,20 @@ def _audit(
 async def _lock_owned(
     session: AsyncSession, access: WorkspaceAccess, agent_id: uuid.UUID, revision: int
 ) -> Agent:
+    # Built-ins are readable but never lockable: row-level security only lets FOR UPDATE reach
+    # the workspace's own rows (ADR-0012). Check before locking so they report read-only.
+    visible = await repository.get_visible(
+        session, workspace_id=access.workspace_id, agent_id=agent_id
+    )
+    if visible is None:
+        raise AgentNotFoundError()
+    if visible[0].workspace_id is None:
+        raise AgentReadOnlyError()
     agent = await repository.lock_visible(
         session, workspace_id=access.workspace_id, agent_id=agent_id
     )
     if agent is None:
         raise AgentNotFoundError()
-    if agent.workspace_id is None:
-        raise AgentReadOnlyError()
     if agent.revision != revision:
         raise AgentRevisionConflictError(details={"current_revision": agent.revision})
     return agent
@@ -193,7 +200,7 @@ async def _write_or_name_conflict(session: AsyncSession, *, commit: bool) -> Non
     except IntegrityError as exc:
         await session.rollback()
         constraint = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
-        if constraint == "uq_agents_workspace_id_name":
+        if constraint == "uq_agents_workspace_id_lower_name":
             raise AgentNameTakenError() from exc
         raise
 

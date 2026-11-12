@@ -103,6 +103,28 @@ async def test_concurrent_edits_with_the_same_revision_cannot_both_win(engine: A
     assert agent.description == winners[0].agent.description
 
 
+async def test_concurrent_case_variant_names_create_exactly_one_agent(
+    engine: AsyncEngine,
+) -> None:
+    """OD-15: the database index closes the race the application pre-check cannot."""
+    (owner,) = await _workspace_with(engine, WorkspaceRole.OWNER)
+
+    def create(name: str) -> Any:
+        request = AgentCreateRequest(name=name, category="analysis", configuration=CONFIG)
+        return _run(engine, service.create_agent, owner, request)
+
+    results = await _gather(*(create(n) for n in ("Scout", "SCOUT", "scout", "sCoUt")))
+
+    assert sum(isinstance(r, service.AgentView) for r in results) == 1
+    assert all(
+        isinstance(r, service.AgentNameTakenError)
+        for r in results
+        if not isinstance(r, service.AgentView)
+    )
+    agents = select(func.count()).where(func.lower(Agent.name) == "scout")
+    assert await _count(engine, agents) == 1
+
+
 async def test_concurrent_publishes_create_exactly_one_version(engine: AsyncEngine) -> None:
     (owner,) = await _workspace_with(engine, WorkspaceRole.OWNER)
     agent_id = await _new_agent(engine, owner)

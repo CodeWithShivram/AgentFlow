@@ -19,6 +19,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    func,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -52,8 +53,15 @@ class AgentAuditAction(StrEnum):
 class Agent(Base):
     __tablename__ = "agents"
     __table_args__ = (
-        # Built-in agents have no workspace; NULLS NOT DISTINCT keeps their names unique too.
-        UniqueConstraint("workspace_id", "name", postgresql_nulls_not_distinct=True),
+        # Names are unique per workspace regardless of case (OD-15). Built-in agents have no
+        # workspace; NULLS NOT DISTINCT keeps their names unique too.
+        Index(
+            "uq_agents_workspace_id_lower_name",
+            "workspace_id",
+            func.lower(text("name")),
+            unique=True,
+            postgresql_nulls_not_distinct=True,
+        ),
         # The active version must be a version of this agent. use_alter breaks the
         # agents <-> agent_versions creation cycle. NO ACTION (checked at statement end)
         # lets an agent and its versions be deleted together.

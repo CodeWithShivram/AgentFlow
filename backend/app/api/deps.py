@@ -21,7 +21,7 @@ from app.core.origin import UNSAFE_METHODS
 from app.core.rate_limit import RateLimiter
 from app.core.redis import get_redis
 from app.core.tokens import InvalidAccessTokenError, decode_access_token
-from app.db.session import get_db_session
+from app.db.session import get_db_session, set_session_user
 from app.models import AuthSession, User, WorkspaceRole
 from app.repositories import auth_sessions as sessions_repository
 from app.services.auth import AuthenticationRequiredError, AuthService, verify_csrf
@@ -57,6 +57,8 @@ async def _authenticate(
     if found is None:
         raise AuthenticationRequiredError()
     auth_session, user = found
+    # Everything after authentication runs under row-level security for this user (ADR-0012).
+    await set_session_user(session, user.id)
     return Principal(user=user, session_id=auth_session.id), auth_session
 
 

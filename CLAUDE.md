@@ -31,7 +31,11 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   client-supplied workspace ID without it, and never put roles in tokens. Unsafe methods need an allowed Origin
   and `X-CSRF-Token`; tests use `make_client` (sends the allowed Origin) and send the CSRF cookie value.
 - Store only hashes of refresh, CSRF and invitation tokens. Auth endpoints must call the Redis `RateLimiter` (fails closed).
-- RLS is designed but NOT enabled (OD-13): the app DB role is a superuser. Isolation relies on `workspace_role` + scoped queries.
+- RLS is enabled (ADR-0012): the API connects as restricted `agentflow_api` (`API_DB_PASSWORD`); policies limit it to the
+  workspaces of `app.user_id`, set per transaction by `set_session_user` (authentication does this). POSTGRES_USER is
+  admin only (migrations, seed, provisioning). New workspace-owned tables need RLS policies in their migration; run
+  `uv run python -m app.db.roles provision` after migrations. `SELECT ... FOR UPDATE` only reaches rows the UPDATE policy
+  allows (built-ins are read-only). Keep `workspace_role` and scoped queries as the first layer.
 - Agent registry (ADR-0008): never execute instructions or tools in the registry. Configurations go through the strict
   `AgentConfiguration`; tools and capabilities come only from `app/agents/catalog.py`. `agent_versions` is immutable;
   tasks pin `assigned_agent_version_id`. Mutations take the agent `revision`. HIGH-risk tools need OWNER.

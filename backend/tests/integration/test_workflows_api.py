@@ -4,7 +4,7 @@ import uuid
 from decimal import Decimal
 from typing import Any
 
-import httpx
+import httpx2
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import DBAPIError
@@ -30,10 +30,10 @@ def wf_url(workspace: str, suffix: str = "") -> str:
 
 def create_workflow(
     client: TestClient, workspace: str, key: str | None = None, **settings: Any
-) -> httpx.Response:
+) -> httpx2.Response:
     headers = {**csrf(client), **({"Idempotency-Key": key} if key else {})}
     body = {"prompt": "Research AI support platforms", "settings": settings}
-    response: httpx.Response = client.post(wf_url(workspace), json=body, headers=headers)
+    response: httpx2.Response = client.post(wf_url(workspace), json=body, headers=headers)
     return response
 
 
@@ -42,9 +42,9 @@ def get_workflow(client: TestClient, workspace: str, workflow_id: str) -> dict[s
     return body
 
 
-def move(client: TestClient, workspace: str, workflow_id: str, to: str) -> httpx.Response:
+def move(client: TestClient, workspace: str, workflow_id: str, to: str) -> httpx2.Response:
     revision = get_workflow(client, workspace, workflow_id)["revision"]
-    response: httpx.Response = client.post(
+    response: httpx2.Response = client.post(
         wf_url(workspace, f"/{workflow_id}/transitions"),
         json={"to_status": to, "revision": revision},
         headers=csrf(client),
@@ -54,8 +54,8 @@ def move(client: TestClient, workspace: str, workflow_id: str, to: str) -> httpx
 
 def add_task(
     client: TestClient, workspace: str, workflow_id: str, title: str = "task", **fields: Any
-) -> httpx.Response:
-    response: httpx.Response = client.post(
+) -> httpx2.Response:
+    response: httpx2.Response = client.post(
         wf_url(workspace, f"/{workflow_id}/tasks"),
         json={"title": title, "required_skills": ["report_writing"], **fields},
         headers=csrf(client),
@@ -65,8 +65,8 @@ def add_task(
 
 def depend(
     client: TestClient, workspace: str, workflow_id: str, task: str, on: str
-) -> httpx.Response:
-    response: httpx.Response = client.post(
+) -> httpx2.Response:
+    response: httpx2.Response = client.post(
         wf_url(workspace, f"/{workflow_id}/tasks/{task}/dependencies"),
         json={"depends_on_task_id": on},
         headers=csrf(client),

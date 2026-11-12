@@ -90,15 +90,49 @@ def _truncate_all(database_url: URL) -> None:
         sync_engine.dispose()
 
 
-@pytest.fixture
-def api_settings(migrated_database_url: URL) -> Iterator[Settings]:
-    """Settings for an app bound to the migrated test database.
+API_TEST_ROLE = "agentflow_api_it"
 
-    Credentials come from the repo-root .env. A unique service name isolates rate-limit counters
-    in the shared Redis. Tables are emptied after the test.
+
+def _drop_test_role(database: str | None, role: str) -> None:
+    """Drops the role's privileges in the test database, then the cluster-wide role."""
+    from app.db.roles import admin_connection
+
+    settings = Settings(app_env="test")
+    with admin_connection(settings, database=database) as connection:
+        connection.execute(sql.SQL("DROP OWNED BY {}").format(sql.Identifier(role)))
+        connection.commit()
+    with _admin_connection(settings) as admin:
+        admin.execute(sql.SQL("DROP ROLE IF EXISTS {}").format(sql.Identifier(role)))
+
+
+@pytest.fixture(scope="session")
+def api_role(migrated_database_url: URL) -> Iterator[tuple[str, str]]:
+    """The restricted API role (row-level security applies), provisioned in the shared test
+    database. Every API integration test connects as it, like the real API."""
+    from app.db.roles import admin_connection, provision_api_role
+
+    settings = Settings(app_env="test")
+    password = uuid.uuid4().hex + uuid.uuid4().hex
+    database = migrated_database_url.database
+    with admin_connection(settings, database=database) as connection:
+        provision_api_role(connection, role=API_TEST_ROLE, password=password)
+    try:
+        yield API_TEST_ROLE, password
+    finally:
+        _drop_test_role(database, API_TEST_ROLE)
+
+
+@pytest.fixture
+def api_settings(migrated_database_url: URL, api_role: tuple[str, str]) -> Iterator[Settings]:
+    """Settings for an app bound to the migrated test database, connected as the API role.
+
+    Other credentials come from the repo-root .env. A unique service name isolates rate-limit
+    counters in the shared Redis. Tables are emptied after the test.
     """
     settings = Settings(
         app_env="test",
+        api_db_user=api_role[0],
+        api_db_password=api_role[1],
         postgres_db=migrated_database_url.database,
         service_name=f"agentflow-it-{uuid.uuid4().hex[:8]}",
         auth_jwt_signing_keys={UNIT_JWT_KEY_ID: UNIT_JWT_KEY},
@@ -169,7 +203,8 @@ def seeded_builtins(api_settings: Settings) -> Settings:
     from tests.conftest import LOOP_FACTORY
 
     async def seed() -> None:
-        engine = create_app_engine(api_settings)
+        # Built-ins are written by the administrator, as `python -m app.agents.seed` does.
+        engine = create_app_engine(api_settings, api_settings.database_url)
         try:
             async with AsyncSession(engine, expire_on_commit=False) as session:
                 await seed_builtin_agents(session)
@@ -198,14 +233,7 @@ def worker_role(migrated_database_url: URL) -> Iterator[tuple[str, str]]:
     try:
         yield WORKER_TEST_ROLE, password
     finally:
-        # Privileges live in the test database; drop them there, then the cluster-wide role.
-        with admin_connection(settings, database=database) as connection:
-            connection.execute(sql.SQL("DROP OWNED BY {}").format(sql.Identifier(WORKER_TEST_ROLE)))
-            connection.commit()
-        with _admin_connection(settings) as admin:
-            admin.execute(
-                sql.SQL("DROP ROLE IF EXISTS {}").format(sql.Identifier(WORKER_TEST_ROLE))
-            )
+        _drop_test_role(database, WORKER_TEST_ROLE)
 
 
 @pytest.fixture

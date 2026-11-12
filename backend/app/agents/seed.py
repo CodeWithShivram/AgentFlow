@@ -120,7 +120,9 @@ async def seed_builtin_agents(
 
 
 async def _main() -> None:
-    engine = create_engine(get_settings())
+    # Built-ins belong to no workspace; only the administrator may write them (ADR-0012).
+    settings = get_settings()
+    engine = create_engine(settings, settings.database_url)
     try:
         async with AsyncSession(engine, expire_on_commit=False) as session:
             report = await seed_builtin_agents(session)

@@ -44,7 +44,8 @@ export function prepareDatabase(): void {
   run("reset e2e database", ["python", path.join(FRONTEND_DIR, "e2e", "support", "reset_db.py")]);
   run("migrate", ["alembic", "upgrade", "head"]);
   run("seed built-in agents", ["python", "-m", "app.agents.seed"]);
-  run("provision worker role", ["python", "-m", "app.db.roles", "provision-worker"]);
+  // The API runs as the restricted role under row-level security (ADR-0012), like production.
+  run("provision API and worker roles", ["python", "-m", "app.db.roles", "provision"]);
 }
 
 function start(name: string, args: string[]): ChildProcess {

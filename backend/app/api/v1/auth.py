@@ -18,6 +18,7 @@ from app.core.config import Settings
 from app.core.cookies import CSRF_HEADER, clear_session_cookies, cookie_names, set_session_cookies
 from app.core.errors import error_response
 from app.core.tokens import InvalidAccessTokenError, decode_access_token
+from app.db.session import set_session_user
 from app.models import User
 from app.repositories import workspaces as workspaces_repository
 from app.schemas.auth import (
@@ -53,6 +54,8 @@ async def _me(session: DbSession, user: User) -> MeResponse:
 async def _session_response(
     session: DbSession, response: Response, settings: Settings, issued: IssuedTokens
 ) -> SessionResponse:
+    # The memberships below are read under row-level security as the signed-in user.
+    await set_session_user(session, issued.user.id)
     now = datetime.now(UTC)
     set_session_cookies(
         response,

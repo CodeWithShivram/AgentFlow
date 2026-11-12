@@ -20,7 +20,8 @@ Phase 1 steps come directly from the handoff (§17). Phases 2–8 are numbered h
 | 1.6 | Agent registry CRUD | DONE | `baaedb9` |
 | 1.7 | Workflow and task management | DONE | `82483e6` |
 | 1.8 | Background execution foundation | DONE | `51e03f5` |
-| 1.9 | Frontend application | DONE | see `progress.md` |
+| 1.9 | Frontend application | DONE | `b3cce86` |
+| 1.9a | Database hardening: row-level security (OD-13, OD-15, OD-10) | DONE | see `progress.md` |
 | 1.10 | Phase 1 integration and release v0.1.0 | NOT_STARTED | |
 
 ### 1.0 — Repository reconnaissance and implementation plan
@@ -101,6 +102,18 @@ The UI states each of these where it applies; none is faked.
 | Recently updated ordering | Lists are newest-created first | `sort=updated_at` on the list endpoints |
 | Spend and token usage | "Not measured yet (Phase 2)" | Model gateway usage records (Phase 2) |
 | Live push | Polling the event log with backoff | SSE stream of workflow events (Phase 4) |
+
+### 1.9a — Database hardening: row-level security
+- Inserted by the owner before 1.10 (separate step and commit). Resolves OD-13, OD-15, OD-10 (ADR-0012).
+- Acceptance:
+  - **Roles:** the API connects as a restricted `agentflow_api` role (no superuser, no BYPASSRLS, owns nothing).
+  - **Policies:** `ENABLE`/`FORCE` RLS policies on every workspace-owned table, through group roles. Workers keep a platform policy.
+  - **Context:** a per-transaction `app.user_id` context set by authentication and registration.
+  - **Joining:** a user can join a workspace only as its owner or with an invitation. Built-in agents are read-only.
+  - **Tests:** isolation proven with unfiltered SQL; no context left over on pooled connections; every API integration test runs as the restricted role.
+  - **OD-15:** a `(workspace_id, lower(name))` unique index, with the concurrent-race test.
+  - **OD-10:** tests use `httpx2`.
+- Commit: `feat(security): enable PostgreSQL row-level security`
 
 ### 1.10 — Phase 1 integration and release
 - Depends on: 1.1–1.9.
@@ -200,13 +213,14 @@ Acceptance (phase): deterministic tests with mock model responses; invalid plans
 | OD-7 | ~~Python dependency locking~~ **Resolved 2026-11-07: uv project + `uv.lock`** | 1.1 | Approved by owner. |
 | OD-8 | ~~Outbox scope~~ **Resolved 2026-11-09: minimal reliable outbox now, advanced recovery in Phase 4 (ADR-0010)** | 1.8 | Approved by owner. |
 | OD-9 | ~~Worker DB access~~ **Resolved 2026-11-09: sync SQLAlchemy + psycopg 3 as restricted `agentflow_worker` (ADR-0010)** | 1.8 | Approved by owner. |
-| OD-10 | Replace `httpx` with `httpx2` for Starlette's TestClient | before 1.10 | Starlette 1.10 deprecates `httpx` for its test client. |
+| OD-10 | ~~Replace `httpx` with `httpx2`~~ **Resolved 2026-11-12 in Step 1.9a (ADR-0012)** | before 1.10 | Tests use `httpx2`; the deprecation warning is gone. |
 | OD-11 | ~~Workflow statuses~~ **Resolved 2026-11-09: 10 statuses and approved transition matrices (ADR-0009)** | 1.7 | Approved by owner. |
 | OD-12 | ~~Cleanup scheduling~~ **Resolved 2026-11-09: hourly Celery Beat cleanup (ADR-0010)** | 1.8 | Approved by owner. |
-| OD-13 | Enable PostgreSQL row-level security | before 1.10 (owner-scheduled) | Designed in ADR-0007; worker role already non-superuser/NOBYPASSRLS (ADR-0010). Remaining: non-superuser schema owner, `agentflow_api` role, per-transaction `set_config`, policies, tests. |
+| OD-13 | ~~Enable PostgreSQL row-level security~~ **Resolved 2026-11-12 in Step 1.9a (ADR-0012)** | before 1.10 (owner-scheduled) | Restricted `agentflow_api` role, per-transaction `app.user_id`, policies via group roles, tests. Non-superuser schema owner moved to OD-20. |
 | OD-14 | Trusted reverse-proxy client IP handling for rate limits | before any proxied deployment | Rate limits use the direct peer IP today. |
-| OD-15 | Database-level case-insensitive uniqueness for agent names | before 1.10 | App checks are case-insensitive; DB constraint is case-sensitive (race can create "A" and "a"). Needs a `lower(name)` unique index migration. |
+| OD-15 | ~~Database-level case-insensitive agent names~~ **Resolved 2026-11-12 in Step 1.9a (ADR-0012)** | before 1.10 | Unique index `uq_agents_workspace_id_lower_name`. |
 | OD-16 | Replanning / recovery for tasks blocked by a cancelled dependency | Phase 5 | Today only cancelling the workflow resolves it (ADR-0009). |
 | OD-17 | Recover executions stranded by a worker crash after claim (task stays IN_PROGRESS) | Phase 4 | Needs heartbeat/time-out sweep (ADR-0010). |
 | OD-18 | Surface and replay FAILED outbox events; dead-letter tooling | Phase 4 | Rows are kept, not yet visible (ADR-0010). |
 | OD-19 | Hosted frontend topology and Content-Security-Policy | before any hosted deployment | The app must read the API's CSRF cookie, so the frontend and API must share a host (e.g. a reverse proxy routing `/api`). A CSP needs per-request nonces for Next.js inline scripts (ADR-0011). |
+| OD-20 | Non-superuser schema owner for migrations | before any hosted deployment | Migrations still run as the administrator (`POSTGRES_USER`); applications never connect as it (ADR-0012). |

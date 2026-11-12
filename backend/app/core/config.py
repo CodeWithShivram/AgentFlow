@@ -72,6 +72,11 @@ class Settings(BaseSettings):
     auth_login_attempts_per_minute: int = Field(default=10, ge=1, le=1_000)
     auth_requests_per_minute: int = Field(default=60, ge=1, le=10_000)
     workspace_invitation_ttl_seconds: int = Field(default=604_800, ge=300, le=2_592_000)
+    # --- Database roles (ADR-0012, OD-13) ---
+    # The API connects as a restricted role that row-level security applies to. POSTGRES_USER
+    # is the administrator and schema owner: migrations, seeding and role provisioning only.
+    api_db_user: str = Field(default="agentflow_api", min_length=1, max_length=63)
+    api_db_password: SecretStr | None = None
     # --- Background execution (ADR-0010) ---
     # Celery broker: the same Redis server, separate logical database from rate limiting.
     celery_broker_redis_db: int = Field(default=1, ge=0, le=15)
@@ -126,6 +131,8 @@ class Settings(BaseSettings):
         ]
         if self.worker_db_password is not None:
             secrets.append(("WORKER_DB_PASSWORD", self.worker_db_password))
+        if self.api_db_password is not None:
+            secrets.append(("API_DB_PASSWORD", self.api_db_password))
         weak = [
             name
             for name, secret in secrets
@@ -154,11 +161,28 @@ class Settings(BaseSettings):
 
     @property
     def database_url(self) -> URL:
-        # psycopg 3; create_async_engine selects its async dialect. str(URL) masks the password.
+        """The administrator and schema owner (POSTGRES_USER): migrations, seeding, provisioning.
+
+        psycopg 3; create_async_engine selects its async dialect. str(URL) masks the password.
+        """
         return URL.create(
             "postgresql+psycopg",
             username=self.postgres_user,
             password=self.postgres_password.get_secret_value(),
+            host=self.postgres_host,
+            port=self.postgres_port,
+            database=self.postgres_db,
+        )
+
+    @property
+    def api_database_url(self) -> URL:
+        """The restricted API role; row-level security applies to it (ADR-0012)."""
+        if self.api_db_password is None:
+            raise ValueError("API_DB_PASSWORD must be set to run the API")
+        return URL.create(
+            "postgresql+psycopg",
+            username=self.api_db_user,
+            password=self.api_db_password.get_secret_value(),
             host=self.postgres_host,
             port=self.postgres_port,
             database=self.postgres_db,
@@ -192,6 +216,7 @@ class Settings(BaseSettings):
             self.redis_password.get_secret_value(),
             *(key.get_secret_value() for key in self.auth_jwt_signing_keys.values()),
             *([self.worker_db_password.get_secret_value()] if self.worker_db_password else []),
+            *([self.api_db_password.get_secret_value()] if self.api_db_password else []),
         ]
         return [v for v in values if len(v) >= _MIN_REDACTABLE_SECRET_LENGTH]
 

@@ -69,9 +69,11 @@ cd backend
 uv sync                                   # creates backend\.venv with Python 3.12 + dev tools
 uv run alembic upgrade head               # create or update the database schema
 uv run python -m app.agents.seed          # load/refresh the six built-in agents (idempotent)
-uv run python -m app.db.roles provision-worker   # create/refresh the restricted worker DB role
+uv run python -m app.db.roles provision    # create/refresh the restricted API and worker DB roles
 uv run uvicorn app.main:create_app --factory --reload --port 8000 --loop asyncio:SelectorEventLoop
 ```
+
+The API connects as the restricted `agentflow_api` role (set `API_DB_PASSWORD` in `.env`); PostgreSQL row-level security limits it to the signed-in user's workspaces. `POSTGRES_USER` is only the administrator for migrations, seeding and provisioning. Re-run `app.db.roles provision` after every migration. See [ADR-0012](docs/ADR/0012-row-level-security.md).
 
 On Windows, `--loop asyncio:SelectorEventLoop` is required. Async psycopg cannot use the default Windows event loop, and the API refuses to start without it (see [ADR-0005](docs/ADR/0005-async-sqlalchemy-psycopg.md)).
 
@@ -239,7 +241,7 @@ Integration tests create throwaway databases named `agentflow_test_*` on the loc
 
 Workflow tasks are executed by Celery workers, fed through a transactional outbox: the API only writes outbox rows, and the relay publishes them to Redis. In this step the worker runs a harmless mock agent; there is no LLM call. The design is in [ADR-0010](docs/ADR/0010-background-execution-outbox-and-workers.md).
 
-One-time setup, after `alembic upgrade head`: set `WORKER_DB_PASSWORD` in `.env`, then run `uv run python -m app.db.roles provision-worker`. Re-run the provisioning after future migrations.
+One-time setup, after `alembic upgrade head`: set `WORKER_DB_PASSWORD` (and `API_DB_PASSWORD`) in `.env`, then run `uv run python -m app.db.roles provision`. Re-run the provisioning after future migrations.
 
 Run each in its own terminal from `backend/`, with the infrastructure up:
 
@@ -308,7 +310,7 @@ npm run test:e2e
 ```
 
 What the run does:
-- **Database.** It resets a disposable database, `agentflow_e2e`, then migrates it, seeds the built-in agents and provisions the worker role. It refuses any database name not ending in `_e2e`.
+- **Database.** It resets a disposable database, `agentflow_e2e`, then migrates it, seeds the built-in agents and provisions the API and worker roles, so the API runs under row-level security as in production. It refuses any database name not ending in `_e2e`.
 - **Processes.** It starts the API on :8011, a Celery worker and Beat (Redis databases 2 and 3), and a production build on :3100. All of them are stopped afterwards.
 - **Logs.** Backend logs go to `frontend/test-results/e2e-backend/`.
 - **Browser.** It uses the installed Google Chrome. Set `PLAYWRIGHT_CHANNEL=""` to use Playwright's Chromium instead (`npx playwright install chromium`).

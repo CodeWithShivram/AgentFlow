@@ -14,6 +14,7 @@ LOOP_FACTORY = asyncio.SelectorEventLoop
 
 UNIT_PG_PASSWORD = "unit-test-pg-secret"
 UNIT_REDIS_PASSWORD = "unit-test-redis-secret"
+UNIT_API_DB_PASSWORD = "unit-test-api-db-secret"
 UNIT_JWT_KEY_ID = "test-k1"
 UNIT_JWT_KEY = "unit-test-jwt-signing-key-0123456789abcdef"
 # The frontend origin a browser would send; unsafe requests without an allowed Origin are rejected.
@@ -40,6 +41,7 @@ def make_settings(**overrides: Any) -> Settings:
         "postgres_user": "agentflow",
         "postgres_password": UNIT_PG_PASSWORD,
         "postgres_db": "agentflow",
+        "api_db_password": UNIT_API_DB_PASSWORD,
         "postgres_port": closed_port(),
         "redis_password": UNIT_REDIS_PASSWORD,
         "redis_port": closed_port(),

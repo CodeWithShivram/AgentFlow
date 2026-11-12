@@ -6,6 +6,7 @@ from pydantic import ValidationError
 
 from app.core.config import REPO_ROOT_ENV_FILE, Settings
 from tests.conftest import (
+    UNIT_API_DB_PASSWORD,
     UNIT_JWT_KEY,
     UNIT_PG_PASSWORD,
     UNIT_REDIS_PASSWORD,
@@ -154,4 +155,17 @@ def test_secrets_are_masked_in_repr_dump_and_database_url() -> None:
 def test_secret_values_include_jwt_keys_and_skip_short_values() -> None:
     settings = make_settings(postgres_password="abc")
 
-    assert settings.secret_values() == [UNIT_REDIS_PASSWORD, UNIT_JWT_KEY]
+    assert settings.secret_values() == [UNIT_REDIS_PASSWORD, UNIT_JWT_KEY, UNIT_API_DB_PASSWORD]
+
+
+def test_api_database_url_uses_the_restricted_role_and_requires_its_password() -> None:
+    settings = make_settings()
+    url = settings.api_database_url
+
+    assert url.username == "agentflow_api"
+    assert url.password == UNIT_API_DB_PASSWORD
+    assert url.database == settings.database_url.database
+    with pytest.raises(ValueError, match="API_DB_PASSWORD"):
+        _ = make_settings(api_db_password=None).api_database_url
+    with pytest.raises(ValueError, match="API_DB_PASSWORD must be set to a real secret"):
+        make_settings(**PRODUCTION, api_db_password="change-me")

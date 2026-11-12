@@ -15,6 +15,7 @@ from app.core.config import Settings
 from app.core.errors import AppError
 from app.core.passwords import hash_password, needs_rehash, spend_verification_time, verify_password
 from app.core.tokens import create_access_token, hash_token, new_opaque_token, token_matches
+from app.db.session import set_session_user
 from app.models import (
     AuthSession,
     RefreshToken,
@@ -112,6 +113,8 @@ class AuthService:
             if _constraint_name(exc) == _EMAIL_UNIQUE_INDEX:
                 raise EmailAlreadyRegisteredError() from exc
             raise
+        # The new user owns the workspace; row-level security checks that (ADR-0012).
+        await set_session_user(session, user.id)
         workspace = Workspace(owner_id=user.id, name=workspace_name)
         session.add(workspace)
         await session.flush()

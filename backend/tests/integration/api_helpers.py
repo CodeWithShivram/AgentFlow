@@ -4,7 +4,7 @@ import uuid
 from collections.abc import Callable
 from typing import Any
 
-import httpx
+import httpx2
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 
@@ -23,15 +23,15 @@ def new_email() -> str:
 
 def register(
     client: TestClient, email: str, password: str = PASSWORD, **extra: Any
-) -> httpx.Response:
-    response: httpx.Response = client.post(
+) -> httpx2.Response:
+    response: httpx2.Response = client.post(
         f"{API}/auth/register", json={"email": email, "password": password, **extra}
     )
     return response
 
 
-def login(client: TestClient, email: str, password: str = PASSWORD) -> httpx.Response:
-    response: httpx.Response = client.post(
+def login(client: TestClient, email: str, password: str = PASSWORD) -> httpx2.Response:
+    response: httpx2.Response = client.post(
         f"{API}/auth/login", json={"email": email, "password": password}
     )
     return response
@@ -41,8 +41,8 @@ def csrf(client: TestClient) -> dict[str, str]:
     return {"X-CSRF-Token": client.cookies[CSRF]}
 
 
-def refresh(client: TestClient, **headers: str) -> httpx.Response:
-    response: httpx.Response = client.post(
+def refresh(client: TestClient, **headers: str) -> httpx2.Response:
+    response: httpx2.Response = client.post(
         f"{API}/auth/refresh", headers={**csrf(client), **headers}
     )
     return response
@@ -53,8 +53,8 @@ def my_workspace(client: TestClient) -> str:
     return workspace_id
 
 
-def invite(client: TestClient, workspace_id: str, email: str, role: str) -> httpx.Response:
-    response: httpx.Response = client.post(
+def invite(client: TestClient, workspace_id: str, email: str, role: str) -> httpx2.Response:
+    response: httpx2.Response = client.post(
         f"{API}/workspaces/{workspace_id}/invitations",
         json={"email": email, "role": role},
         headers=csrf(client),
@@ -62,8 +62,8 @@ def invite(client: TestClient, workspace_id: str, email: str, role: str) -> http
     return response
 
 
-def accept(client: TestClient, token: str) -> httpx.Response:
-    response: httpx.Response = client.post(
+def accept(client: TestClient, token: str) -> httpx2.Response:
+    response: httpx2.Response = client.post(
         f"{API}/invitations/accept", json={"token": token}, headers=csrf(client)
     )
     return response
@@ -86,7 +86,7 @@ def sql(settings: Settings, statement: str, **params: Any) -> list[Any]:
         engine.dispose()
 
 
-def set_cookie_headers(response: httpx.Response) -> dict[str, str]:
+def set_cookie_headers(response: httpx2.Response) -> dict[str, str]:
     return {h.split("=", 1)[0]: h for h in response.headers.get_list("set-cookie")}
 
 

@@ -69,18 +69,24 @@ def test_expired_token_is_rejected() -> None:
 
 
 @pytest.mark.parametrize(
-    "claims",
+    "overrides",
     [
-        _claims(aud="someone-else"),
-        _claims(iss="https://evil.example"),
-        _claims(typ="refresh"),
-        _claims(sid=None),
-        _claims(sub="not-a-uuid"),
-        _claims(nbf=datetime.now(UTC) + timedelta(minutes=5)),
-        _claims(exp=None),
+        {"aud": "someone-else"},
+        {"iss": "https://evil.example"},
+        {"typ": "refresh"},
+        {"sid": None},
+        {"sub": "not-a-uuid"},
+        {"nbf": timedelta(minutes=5)},
+        {"exp": None},
     ],
 )
-def test_wrong_or_missing_claims_are_rejected(claims: dict[str, Any]) -> None:
+def test_wrong_or_missing_claims_are_rejected(overrides: dict[str, Any]) -> None:
+    # Claims are built when the test runs, not at collection: otherwise a slow suite lets the
+    # 5-minute `exp` lapse and every case is rejected as expired instead of for its own reason.
+    if isinstance(overrides.get("nbf"), timedelta):
+        overrides = {**overrides, "nbf": datetime.now(UTC) + overrides["nbf"]}
+    claims = _claims(**overrides)
+    decode_access_token(make_settings(), _sign(_claims()))  # the baseline token is valid
     with pytest.raises(InvalidAccessTokenError):
         decode_access_token(make_settings(), _sign(claims))
 
