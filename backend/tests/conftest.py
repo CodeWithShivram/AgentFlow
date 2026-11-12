@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
 
 from app.core.config import Settings
 
@@ -34,8 +35,26 @@ def closed_port() -> int:
     return port
 
 
+class _IsolatedSettings(Settings):
+    """Settings built only from constructor arguments: no .env file and no environment
+    variables. CI and developer shells export real settings (e.g. WORKER_DB_PASSWORD), which
+    must not leak into unit tests."""
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        return (init_settings,)
+
+
 def make_settings(**overrides: Any) -> Settings:
-    """Isolated settings: ignores .env and points at ports where nothing listens."""
+    """Isolated settings: ignores .env and the environment, and points at ports where nothing
+    listens."""
     values: dict[str, Any] = {
         "app_env": "test",
         "postgres_user": "agentflow",
@@ -53,7 +72,7 @@ def make_settings(**overrides: Any) -> Settings:
         "cors_allowed_origins": [ALLOWED_ORIGIN],
     }
     values.update(overrides)
-    return Settings(_env_file=None, **values)
+    return _IsolatedSettings(**values)
 
 
 def make_client(app: FastAPI, *, raise_server_exceptions: bool = True) -> TestClient:

@@ -45,7 +45,7 @@ jobs:
           --health-cmd "pg_isready -U agentflow -d agentflow"
           --health-interval 5s --health-timeout 5s --health-retries 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Service containers cannot take a command, and Redis must require a password like locally.
       - name: Start Redis
@@ -59,7 +59,7 @@ jobs:
           done
           echo "Redis did not start" && exit 1
 
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v10
         with:
           enable-cache: true
           cache-dependency-glob: backend/uv.lock
