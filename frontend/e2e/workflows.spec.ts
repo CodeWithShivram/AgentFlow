@@ -35,6 +35,16 @@ test("journey 7: plan tasks with dependencies", async ({ browser }) => {
   await page.getByRole("button", { name: "Start planning" }).click();
   await expect(visibleText(page, "Planning")).toBeVisible();
 
+  // Step 2.2: a worker analyses the request through the model gateway (mock provider) and the
+  // page picks the result up by polling.
+  await page.getByRole("tab", { name: /Requirements/ }).click();
+  const requirements = page.getByRole("tabpanel", { name: /Requirements/ });
+  await expect(requirements.getByText("Objective", { exact: true })).toBeVisible({ timeout: 60_000 });
+  await expect(requirements.getByText("Write a market report", { exact: true }).first()).toBeVisible();
+  // The request is brief, so the analysis lists an open question.
+  await expect(requirements.getByText("Open questions (1)")).toBeVisible();
+  await page.getByRole("tab", { name: /Tasks/ }).click();
+
   await addTask(page, "Collect sources");
   await addTask(page, "Draft report", ["Collect sources"]);
   await addTask(page, "Optional appendix");

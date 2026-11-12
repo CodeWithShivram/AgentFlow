@@ -44,6 +44,14 @@ class WorkflowStatus(StrEnum):
     CANCELLED = "CANCELLED"
 
 
+class AnalysisStatus(StrEnum):
+    # Prompt analysis by the model gateway (Step 2.2). Independent of the workflow status.
+    NOT_REQUESTED = "NOT_REQUESTED"
+    PENDING = "PENDING"
+    READY = "READY"
+    FAILED = "FAILED"
+
+
 class AutonomyPolicy(StrEnum):
     # approval_required: a plan must be approved (AWAITING_APPROVAL) before it can run.
     # autonomous: a submitted plan goes straight to READY.
@@ -96,6 +104,10 @@ class WorkflowEventType(StrEnum):
     TASK_REMOVED = "TASK_REMOVED"
     DEPENDENCY_ADDED = "DEPENDENCY_ADDED"
     DEPENDENCY_REMOVED = "DEPENDENCY_REMOVED"
+    # Added in Step 2.2 for prompt analysis.
+    ANALYSIS_REQUESTED = "ANALYSIS_REQUESTED"
+    REQUIREMENTS_ANALYZED = "REQUIREMENTS_ANALYZED"
+    ANALYSIS_FAILED = "ANALYSIS_FAILED"
 
 
 class Workflow(Base):
@@ -117,7 +129,15 @@ class Workflow(Base):
         ForeignKey("users.id", ondelete="RESTRICT"), index=True
     )
     prompt: Mapped[str] = mapped_column(Text)
+    # The validated prompt analysis (app.planning.analysis.PromptAnalysis), once READY.
     normalized_requirements: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    analysis_status: Mapped[AnalysisStatus] = mapped_column(
+        str_enum(AnalysisStatus, "analysis_status"),
+        server_default=text("'NOT_REQUESTED'"),
+        default=AnalysisStatus.NOT_REQUESTED,
+    )
+    # The outbox event of the current analysis request; older deliveries are ignored.
+    analysis_request_id: Mapped[uuid.UUID | None]
     status: Mapped[WorkflowStatus] = mapped_column(
         str_enum(WorkflowStatus, "status"), default=WorkflowStatus.PENDING
     )

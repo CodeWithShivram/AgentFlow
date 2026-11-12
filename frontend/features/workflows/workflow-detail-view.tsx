@@ -25,6 +25,7 @@ import { AssignAgentDialog } from "./assign-agent-dialog";
 import { DependenciesDialog } from "./dependencies-dialog";
 import { DependencyGraph } from "./dependency-graph";
 import { EventTimeline } from "./event-timeline";
+import { RequirementsPanel } from "./requirements-panel";
 import { PLAN_EDIT_REOPENS, PLAN_EDITABLE, WORKFLOW_STATUS_HELP } from "./status";
 import { type TaskAction, TaskList } from "./task-list";
 import { TaskFormDialog } from "./task-form-dialog";
@@ -121,6 +122,9 @@ export function WorkflowDetailView() {
       <Tabs defaultValue="tasks">
         <TabsList>
           <TabsTrigger value="tasks">Tasks ({activeTasks.length})</TabsTrigger>
+          <TabsTrigger value="requirements">
+            Requirements{wf.analysis_status === "PENDING" ? " (analysing…)" : ""}
+          </TabsTrigger>
           <TabsTrigger value="graph">Dependencies</TabsTrigger>
           <TabsTrigger value="timeline">Timeline</TabsTrigger>
           <TabsTrigger value="details">Settings</TabsTrigger>
@@ -144,6 +148,10 @@ export function WorkflowDetailView() {
           ) : (
             <TaskList workflow={wf} tasks={taskList} agentsById={agentsById} canEdit={canEdit} onAction={onTaskAction} />
           )}
+        </TabsContent>
+
+        <TabsContent value="requirements" className="pt-2">
+          <RequirementsPanel workflow={wf} />
         </TabsContent>
 
         <TabsContent value="graph" className="pt-2">

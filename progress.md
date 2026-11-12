@@ -2,8 +2,8 @@
 
 ## Current position
 - Phase: 2 — Intelligent planning (Phase 1 released as `v0.1.0`, pushed with its tag)
-- Last completed step: 2.1 — Model gateway abstraction and mock model adapter
-- Next step: 2.2 — Structured prompt analysis (requirements and constraints), which needs a short plan and the owner's go-ahead
+- Last completed step: 2.2 — Structured prompt analysis
+- Next step: 2.3 — Planner output schema, task decomposition and acceptance criteria, which needs a short plan and the owner's go-ahead
 
 ## Completed steps
 | Step | Commit message | Hash |
@@ -22,21 +22,51 @@
 | 1.10 | `release: complete AgentFlow foundation v0.1.0` | `04f1bc1` (tag `v0.1.0`) |
 | — | `ci: isolate unit-test settings from the environment and update actions` | `54dc11b` |
 | — | `ci: pin astral-sh/setup-uv to v10.3.3` | `19f2604` |
-| 2.1 | `feat(llm): add model gateway with usage records and mock adapter` | latest commit touching `backend/app/llm/gateway.py` |
+| 2.1 | `feat(llm): add model gateway with usage records and mock adapter` | `d2aef8f` (pushed, CI ✔) |
+| 2.2 | `feat(planning): add structured prompt analysis` | latest commit touching `backend/app/planning/analysis.py` |
 
 ## Environment snapshot (2026-11-12)
 | Item | Value |
 |---|---|
-| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `19f2604` plus tag `v0.1.0` (owner-authorized) |
+| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `d2aef8f` plus tag `v0.1.0` (owner-authorized) |
 | Python / uv / Node / npm | 3.12.14 via uv 0.12.9 / Node 24.13.0 / npm 11.6.2 |
 | Celery / kombu | 5.7.0 / 5.7.0 |
 | Docker | 29.8.2, Compose v5.6.0 — `agentflow` stack healthy (Docker Desktop must be started first) |
-| Dev database | `agentflow` at `0007 (head)`; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
+| Dev database | `agentflow` at `0008 (head)`; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
 | Local `.env` | holds generated `WORKER_DB_PASSWORD` and (new) `API_DB_PASSWORD` (gitignored) |
 | Port 8000 | Used by another local project (`easa`); smoke tests used 8010 |
 | E2E | API :8011 (as `agentflow_api`), frontend :3100, database `agentflow_e2e` (reset each run), Redis DBs 2/3, installed Google Chrome |
 | Frontend audit | `npm audit --omit=dev`: 0 vulnerabilities; dev-only: 8 moderate, all the existing `minimatch` chain via ESLint |
 | Test HTTP client | `httpx2` 2.16.0 (replaces `httpx`, OD-10) |
+
+## Step 2.2 — structured prompt analysis (ADR-0014)
+- **Owner decisions (2026-11-12):** analysis starts automatically when planning starts; bounded retries, then a recorded failure with a user retry; ambiguities are recorded and shown, not blocking; a frontend Requirements panel.
+- **Trigger:** `engine.request_analysis` runs on PENDING → PLANNING. In the same transaction it writes a `workflow.analyze` outbox row (identifiers only), sets `analysis_status=PENDING` and `analysis_request_id`, and appends `ANALYSIS_REQUESTED`.
+- **`app/planning/analysis.py`:**
+  - the strict `PromptAnalysis` schema: unique IDs, catalog-checked skills, credential-like text rejected;
+  - the versioned prompt `prompt_analysis/v1`, with the request delimited and settings given as context;
+  - a deterministic mock default derived from the request;
+  - the job: `claim` (inbox, current request only) → `analyse` (gateway, 3 attempts with 1 s/2 s backoff) → `finish` (READY with `REQUIREMENTS_ANALYZED`, or FAILED with `ANALYSIS_FAILED`; superseded requests ignored).
+  - Analysis never changes the workflow's `revision`.
+- **Worker:** the Celery task `agentflow.analyze_workflow` (soft limit 300 s; a timeout is recorded as a failure). Outbox route `workflow.analyze`.
+- **API:** `WorkflowResponse.analysis_status` and `normalized_requirements`; `POST …/workflows/{id}/analysis` (Member) retries; otherwise 409 `ANALYSIS_NOT_RETRYABLE`.
+- **Migration `0008`:** `workflows.analysis_status` and `analysis_request_id`, plus three event types in the event-type check. Downgrade deletes those events first.
+- **Mock adapter:** defaults may be functions of the request (`register_default`).
+- **Frontend:** a Requirements tab (`requirements-panel.tsx`) showing pending, failed with retry for members, or the analysis as plain text; polling while pending; timeline shows error codes.
+- **Tests changed because of new behaviour:**
+  - the event-sequence test now expects `ANALYSIS_REQUESTED`;
+  - one test selects the dispatch event by type;
+  - the dispatch-focused `_world` helper removes the analysis outbox row, so every existing relay assertion stays exact.
+
+## Checks last executed (Step 2.2)
+- **`scripts/check.ps1 -E2E` ✔ ("All checks passed"):**
+  - ruff; mypy (123 files); alembic check;
+  - pytest **786 passed** (761 plus 25 new: 18 unit, 7 integration);
+  - eslint, typecheck; Vitest **82 passed** (5 new);
+  - Playwright **14 passed**: journey 7 now checks that the real worker's analysis appears on the Requirements tab;
+  - build.
+- **Deliberate-bug check** (reverted): removing the request-ID guard makes `test_a_stale_delivery_changes_nothing` fail.
+- **No E2E processes were left running.** The dev DB was migrated to `0008` and re-provisioned.
 
 ## Step 2.1 — model gateway (ADR-0013)
 - **Owner decisions (2026-11-12):** usage is persisted from the start (`llm_usage`); models are called from workers only, through a sync gateway; the mock is scripted, with deterministic defaults.
@@ -154,6 +184,6 @@
 None.
 
 ## Next exact action
-1. **Push Step 2.1** on the owner's go-ahead, and confirm `backend-ci` on GitHub.
-2. **Step 2.2: structured prompt analysis.** Present a short plan first. It will be the first gateway caller: a background job through the outbox, a Pydantic analysis schema, and a mock default for its purpose.
+1. **Push Step 2.2** on the owner's go-ahead, and confirm CI on GitHub.
+2. **Step 2.3: planner output schema, task decomposition and acceptance criteria.** Present a short plan first. It reads `normalized_requirements` and proposes tasks, a DAG and acceptance criteria.
 3. **Before any hosted deployment:** settle OD-14, OD-19 and OD-20.

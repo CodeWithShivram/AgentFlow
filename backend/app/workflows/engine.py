@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session
 from app.core.errors import AppError
 from app.execution import outbox
 from app.models import (
+    AnalysisStatus,
     AutonomyPolicy,
     TaskDependency,
     TaskStatus,
@@ -169,6 +170,28 @@ def request_dispatch(session: _AddsRows, workflow: Workflow, task: WorkflowTask)
     )
 
 
+def request_analysis(session: Session, workflow: Workflow, *, actor: Actor) -> uuid.UUID:
+    """Asks a worker to analyse the workflow's prompt (Step 2.2): writes a `workflow.analyze`
+    outbox row and marks the analysis PENDING, in the caller's transaction. A newer request
+    supersedes older ones; their deliveries are ignored."""
+    event_id = outbox.enqueue(
+        session,
+        outbox.WORKFLOW_ANALYZE,
+        workspace_id=workflow.workspace_id,
+        workflow_id=workflow.id,
+        payload={"workspace_id": str(workflow.workspace_id), "workflow_id": str(workflow.id)},
+    )
+    workflow.analysis_status = AnalysisStatus.PENDING
+    workflow.analysis_request_id = event_id
+    record_event(
+        session,
+        workflow,
+        WorkflowEventType.ANALYSIS_REQUESTED,
+        payload={"actor": actor.value, "request_id": str(event_id)},
+    )
+    return event_id
+
+
 def _dispatch_waiting(session: Session, workflow: Workflow) -> None:
     if workflow.status != W.RUNNING:
         return
@@ -204,6 +227,9 @@ def transition_workflow(
     if reason:
         payload["reason"] = reason
     record_event(session, workflow, _workflow_event_type(source, target), payload=payload)
+    if source == W.PENDING and target == W.PLANNING:
+        # Planning starts with an analysis of the request, in the background.
+        request_analysis(session, workflow, actor=actor)
     session.flush()
 
     if target in {W.CANCELLED, W.FAILED}:

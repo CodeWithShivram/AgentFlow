@@ -24,6 +24,7 @@ __all__ = [
     "TransitionPreconditionError",
     "reconcile_workflow",
     "record_event",
+    "request_analysis",
     "transition_task",
     "transition_workflow",
 ]
@@ -40,6 +41,10 @@ async def transition_workflow(
     await session.run_sync(
         lambda sync: engine.transition_workflow(sync, workflow, target, actor=actor, reason=reason)
     )
+
+
+async def request_analysis(session: AsyncSession, workflow: Workflow, *, actor: Actor) -> None:
+    await session.run_sync(lambda sync: engine.request_analysis(sync, workflow, actor=actor))
 
 
 async def transition_task(

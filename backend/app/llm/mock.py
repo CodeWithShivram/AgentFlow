@@ -2,8 +2,9 @@
 
 - Tests script exact replies per purpose (`script`); replies are consumed in order and may be
   exceptions to simulate provider failures.
-- Without a script, a purpose registered in DEFAULT_RESPONSES gets its canned reply, which
-  must be valid for the schema that purpose requests (later steps register their purposes).
+- Without a script, a purpose registered with `register_default` gets its canned reply (a
+  string, or a function of the request), which must be valid for the schema that purpose
+  requests. Planning modules register their purposes when imported.
 - An unscripted purpose that requests structured output fails loudly; plain-text calls get a
   deterministic placeholder.
 
@@ -14,14 +15,21 @@ derived from the request and reply, so identical calls produce identical records
 import hashlib
 import json
 from collections import defaultdict, deque
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 
 from pydantic import BaseModel
 
 from app.llm.types import AdapterResult, ModelRequest, ProviderUsage
 
-# purpose -> canned reply (JSON text for structured purposes).
-DEFAULT_RESPONSES: dict[str, str] = {}
+Reply = str | Callable[[ModelRequest], str]
+
+# purpose -> canned reply (JSON text for structured purposes), or a deterministic function of
+# the request that produces one.
+DEFAULT_RESPONSES: dict[str, Reply] = {}
+
+
+def register_default(purpose: str, reply: Reply) -> None:
+    DEFAULT_RESPONSES[purpose] = reply
 
 
 class MockProviderError(Exception):
@@ -33,14 +41,18 @@ class MockNotScriptedError(Exception):
 
 
 class MockModelAdapter:
-    def __init__(self, defaults: Mapping[str, str] | None = None) -> None:
-        self._defaults = dict(DEFAULT_RESPONSES if defaults is None else defaults)
+    def __init__(self, defaults: Mapping[str, Reply] | None = None) -> None:
+        # None = the shared registry, read at call time so later registrations count.
+        self._defaults = None if defaults is None else dict(defaults)
         self._scripts: dict[str, deque[str | Exception]] = defaultdict(deque)
         self.requests: list[ModelRequest] = []
 
     @property
     def provider(self) -> str:
         return "mock"
+
+    def _registry(self) -> Mapping[str, Reply]:
+        return DEFAULT_RESPONSES if self._defaults is None else self._defaults
 
     def script(self, purpose: str, *replies: str | Exception) -> None:
         """Queues replies for `purpose`; each call consumes one."""
@@ -57,8 +69,9 @@ class MockModelAdapter:
             if isinstance(reply, Exception):
                 raise reply
             text = reply
-        elif request.purpose in self._defaults:
-            text = self._defaults[request.purpose]
+        elif request.purpose in (defaults := self._registry()):
+            reply_or_fn = defaults[request.purpose]
+            text = reply_or_fn if isinstance(reply_or_fn, str) else reply_or_fn(request)
         elif response_format is None:
             digest = hashlib.sha256(prompt.encode()).hexdigest()[:12]
             text = f"Mock response for {request.purpose} ({digest})."

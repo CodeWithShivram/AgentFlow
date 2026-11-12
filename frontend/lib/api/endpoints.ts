@@ -118,6 +118,9 @@ export function createEndpoints(client: ApiClient) {
         workflowId: Uuid,
         body: { to_status: WorkflowStatus; revision: number; reason?: string },
       ) => client.post<Workflow>(`${wf(workspaceId, workflowId)}/transitions`, body),
+      /** Requests the prompt analysis again after it failed; it runs in a worker. */
+      retryAnalysis: (workspaceId: Uuid, workflowId: Uuid) =>
+        client.post<Workflow>(`${wf(workspaceId, workflowId)}/analysis`),
       start: (workspaceId: Uuid, workflowId: Uuid, revision: number) =>
         client.post<Workflow>(`${wf(workspaceId, workflowId)}/start`, { revision }),
       cancel: (workspaceId: Uuid, workflowId: Uuid, revision: number, reason?: string) =>

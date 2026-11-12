@@ -452,9 +452,17 @@ def test_events_are_ordered_paginated_append_only_and_free_of_prompts(
         wf_url(workspace, f"/{workflow}/events"), params={"after": page["last_sequence"]}
     ).json()
 
-    types = [e["event_type"] for e in page["items"] + rest["items"]]
-    assert types == ["WORKFLOW_CREATED", "TASK_CREATED", "WORKFLOW_STATUS_CHANGED"]
-    assert rest["items"][-1]["payload"] == {"from": "PENDING", "to": "PLANNING", "actor": "USER"}
+    events = page["items"] + rest["items"]
+    types = [e["event_type"] for e in events]
+    # Starting to plan also requests the prompt analysis (Step 2.2).
+    assert types == [
+        "WORKFLOW_CREATED",
+        "TASK_CREATED",
+        "WORKFLOW_STATUS_CHANGED",
+        "ANALYSIS_REQUESTED",
+    ]
+    assert events[2]["payload"] == {"from": "PENDING", "to": "PLANNING", "actor": "USER"}
+    assert set(events[3]["payload"]) == {"actor", "request_id"}
     assert "Research AI support platforms" not in str(page) + str(rest)
     with pytest.raises(DBAPIError, match="append-only"):
         sql(api_settings, "UPDATE workflow_events SET payload = '{}'::jsonb")
@@ -501,9 +509,12 @@ def test_execution_history_lists_attempts_with_agent_versions(
     with session_scope(worker_factory) as s:
         from sqlalchemy import select
 
+        from app.execution import outbox
         from app.models import OutboxEvent
 
-        event = s.execute(select(OutboxEvent)).scalar_one()
+        event = s.execute(
+            select(OutboxEvent).where(OutboxEvent.event_type == outbox.TASK_DISPATCH)
+        ).scalar_one()
     with session_scope(worker_factory) as s:
         claim = runner.claim(
             s,

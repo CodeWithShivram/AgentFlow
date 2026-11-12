@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 from app.models import InboxMessage, OutboxEvent, OutboxStatus
 
 TASK_DISPATCH = "task.dispatch"
+WORKFLOW_ANALYZE = "workflow.analyze"
 _MAX_BACKOFF_SECONDS = 300
 _MAX_ERROR_LENGTH = 1000
 

@@ -13,12 +13,19 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError
-from app.models import Workflow, WorkflowEvent, WorkflowEventType, WorkflowStatus, WorkspaceRole
+from app.models import (
+    AnalysisStatus,
+    Workflow,
+    WorkflowEvent,
+    WorkflowEventType,
+    WorkflowStatus,
+    WorkspaceRole,
+)
 from app.repositories import workflows as repository
 from app.schemas.workflows import WorkflowCreateRequest, WorkflowResponse
 from app.services.authorization import InsufficientRoleError, WorkspaceAccess, role_at_least
 from app.services.idempotency import IdempotencyService, NewRequest, StoredResponse
-from app.services.transitions import record_event, transition_workflow
+from app.services.transitions import record_event, request_analysis, transition_workflow
 from app.workflows.state_machine import Actor
 
 logger = logging.getLogger("agentflow.workflows")
@@ -38,6 +45,17 @@ class WorkflowRevisionConflictError(AppError):
     status_code = 409
     code = "WORKFLOW_REVISION_CONFLICT"
     message = "The workflow was changed by someone else. Reload it and try again."
+
+
+class AnalysisNotRetryableError(AppError):
+    status_code = 409
+    code = "ANALYSIS_NOT_RETRYABLE"
+    message = "The analysis can be requested again only after it failed, while planning."
+
+
+# Analysis may be (re)requested only while the plan can still change.
+_ANALYSIS_RETRY_STATUSES = frozenset({W.PLANNING, W.AWAITING_APPROVAL, W.READY})
+_ANALYSIS_RETRYABLE = frozenset({AnalysisStatus.FAILED, AnalysisStatus.NOT_REQUESTED})
 
 
 @dataclass(frozen=True)
@@ -179,3 +197,24 @@ async def list_events(
     return await repository.list_events(
         session, workflow, after_sequence=after_sequence, limit=limit
     )
+
+
+async def retry_analysis(
+    session: AsyncSession, access: WorkspaceAccess, workflow_id: uuid.UUID
+) -> Workflow:
+    """Requests a new prompt analysis after a failure (or for a workflow planned before
+    analysis existed). Does not change the workflow's revision: the plan is untouched."""
+    workflow = await lock_for_change(session, access, workflow_id, revision=None)
+    if (
+        workflow.status not in _ANALYSIS_RETRY_STATUSES
+        or workflow.analysis_status not in _ANALYSIS_RETRYABLE
+    ):
+        raise AnalysisNotRetryableError(
+            details={
+                "status": workflow.status.value,
+                "analysis_status": workflow.analysis_status.value,
+            }
+        )
+    await request_analysis(session, workflow, actor=Actor.USER)
+    await session.commit()
+    return workflow

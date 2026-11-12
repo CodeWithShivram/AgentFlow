@@ -22,6 +22,8 @@ export function describeEvent(event: WorkflowEvent, taskTitle?: string): string 
   if (actor) parts.push(`by ${actor.toLowerCase()}`);
   const reason = text("reason");
   if (reason) parts.push(`“${reason}”`);
+  const errorCode = text("error_code");
+  if (errorCode) parts.push(humanize(errorCode));
   const prefix = taskTitle ? `${taskTitle}: ` : "";
   return prefix + (parts.join(" · ") || humanize(event.event_type));
 }

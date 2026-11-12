@@ -54,8 +54,8 @@ export async function fetchNewEvents(
 
 /**
  * Live view of one workflow. There is no push channel (no SSE/WebSocket endpoint), so while the
- * workflow is executing the append-only event log is polled; new events refresh the workflow,
- * its tasks and their executions.
+ * workflow is executing or its prompt analysis is pending, the append-only event log is polled;
+ * new events refresh the workflow, its tasks and their executions.
  */
 export function useWorkflow(workspaceId: Uuid, workflowId: Uuid) {
   const queryClient = useQueryClient();
@@ -73,6 +73,7 @@ export function useWorkflow(workspaceId: Uuid, workflowId: Uuid) {
 
   const live =
     (workflow.data !== undefined && WORKFLOW_ACTIVE.has(workflow.data.status)) ||
+    workflow.data?.analysis_status === "PENDING" ||
     (tasks.data ?? []).some((t) => TASK_IN_FLIGHT.has(t.status));
 
   const eventsKey = workflowKeys.events(workspaceId, workflowId);

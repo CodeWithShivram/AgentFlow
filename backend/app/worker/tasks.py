@@ -9,16 +9,24 @@ from sqlalchemy.exc import OperationalError
 
 from app.db.sync_session import get_worker_session_factory, session_scope
 from app.execution import cleanup, outbox, relay, runner
+from app.llm.gateway import get_model_gateway
+from app.planning import analysis
 from app.worker.celery_app import EXECUTION_QUEUE, celery_app, settings
 
 logger = logging.getLogger("agentflow.worker")
 
 # Outbox event type -> (Celery task name, queue).
-EVENT_ROUTES = {outbox.TASK_DISPATCH: ("agentflow.execute_task", EXECUTION_QUEUE)}
+EVENT_ROUTES = {
+    outbox.TASK_DISPATCH: ("agentflow.execute_task", EXECUTION_QUEUE),
+    outbox.WORKFLOW_ANALYZE: ("agentflow.analyze_workflow", EXECUTION_QUEUE),
+}
 _FINISH_ATTEMPTS = 3
 # Default agent timeout (handoff section 6): 600 s. Hard limit gives the soft one room to finish.
 EXECUTION_SOFT_TIME_LIMIT = 600
 EXECUTION_TIME_LIMIT = 660
+# Prompt analysis: three model attempts with short backoff.
+ANALYSIS_SOFT_TIME_LIMIT = 300
+ANALYSIS_TIME_LIMIT = 330
 
 
 def publish_event(event: outbox.ClaimedEvent) -> None:
@@ -102,6 +110,34 @@ def execute_task(
         extra={"event_id": event_id, "execution_id": str(claimed.execution_id), "outcome": outcome},
     )
     return outcome
+
+
+@celery_app.task(
+    name="agentflow.analyze_workflow",
+    soft_time_limit=ANALYSIS_SOFT_TIME_LIMIT,
+    time_limit=ANALYSIS_TIME_LIMIT,
+)
+def analyze_workflow(event_id: str, workspace_id: str, workflow_id: str) -> str:
+    """Analyses a workflow's prompt (Step 2.2). Idempotent on `event_id`."""
+    factory = get_worker_session_factory()
+    with session_scope(factory) as session:
+        job = analysis.claim(
+            session,
+            event_id=uuid.UUID(event_id),
+            workspace_id=uuid.UUID(workspace_id),
+            workflow_id=uuid.UUID(workflow_id),
+        )
+    if isinstance(job, analysis.Skipped):
+        logger.info("analysis skipped", extra={"event_id": event_id, "outcome": job.value})
+        return job.value
+    outcome: analysis.PromptAnalysis | analysis.AnalysisFailure
+    try:
+        outcome = analysis.analyse(get_model_gateway(), job)
+    except SoftTimeLimitExceeded:
+        # Recorded as a failure so the analysis never stays PENDING; the user can retry.
+        outcome = analysis.AnalysisFailure(code="ANALYSIS_TIMED_OUT", attempts=0)
+    with session_scope(factory) as session:
+        return analysis.finish(session, job, outcome)
 
 
 @celery_app.task(name="agentflow.cleanup", ignore_result=True)

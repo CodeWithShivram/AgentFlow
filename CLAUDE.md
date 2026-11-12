@@ -60,6 +60,9 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   stay NULL until Phase 7 pricing. Validate structured output with a Pydantic `response_format`; never log prompts or
   outputs. Tests use `MockModelAdapter.script(...)`; register schema-valid mock defaults for new purposes. Never label
   estimated cost/tokens as actual.
+- Planning jobs (ADR-0014, `app/planning/`) follow claim -> model call outside any transaction -> finish, keyed by a
+  request id on the workflow so superseded deliveries change nothing. Prompts reach models only inside delimiters;
+  outbox payloads and events carry identifiers and counts, never prompt text. Analysis never bumps `revision`.
 - Workflow events are append-only.
 
 ## Security

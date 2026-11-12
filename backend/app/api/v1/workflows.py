@@ -137,6 +137,15 @@ async def transition_workflow(
     return service.workflow_response(workflow)
 
 
+@router.post("/{workflow_id}/analysis")
+async def retry_analysis(
+    workflow_id: uuid.UUID, access: Member, session: DbSession
+) -> WorkflowResponse:
+    """Requests the prompt analysis again after it failed (Step 2.2). It runs in a worker;
+    poll the workflow or its events for the result."""
+    return service.workflow_response(await service.retry_analysis(session, access, workflow_id))
+
+
 @router.post("/{workflow_id}/start")
 async def start_workflow(
     workflow_id: uuid.UUID, body: RevisionReasonRequest, access: Member, session: DbSession

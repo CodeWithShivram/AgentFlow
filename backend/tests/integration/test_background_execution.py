@@ -11,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
-from sqlalchemy import func, select, text, update
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -104,6 +104,14 @@ def _world(admin: Factory, *, tasks: int = 1, max_parallel: int = 3) -> World:
         s.flush()
         for target in (WorkflowStatus.PLANNING, WorkflowStatus.READY, WorkflowStatus.RUNNING):
             engine.transition_workflow(s, workflow, target, actor=Actor.USER)
+        # These tests exercise task dispatch, so the prompt-analysis request that starting to
+        # plan writes is removed; tests/integration/test_prompt_analysis.py covers it.
+        s.execute(
+            delete(OutboxEvent).where(
+                OutboxEvent.workflow_id == workflow.id,
+                OutboxEvent.event_type == outbox.WORKFLOW_ANALYZE,
+            )
+        )
         s.commit()
         return World(workspace.id, workflow.id, [t.id for t in rows], agent.id, version.id, user.id)
 

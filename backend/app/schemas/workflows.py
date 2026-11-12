@@ -17,6 +17,7 @@ from pydantic import (
 )
 
 from app.models import (
+    AnalysisStatus,
     AutonomyPolicy,
     ExecutionStatus,
     TaskStatus,
@@ -156,6 +157,9 @@ class WorkflowResponse(BaseModel):
     created_by_user_id: uuid.UUID
     prompt: str
     status: WorkflowStatus
+    # Prompt analysis (Step 2.2): validated PromptAnalysis JSON once analysis_status is READY.
+    analysis_status: AnalysisStatus
+    normalized_requirements: dict[str, Any] | None
     autonomy_policy: AutonomyPolicy
     budget_limit: Decimal | None
     currency: str

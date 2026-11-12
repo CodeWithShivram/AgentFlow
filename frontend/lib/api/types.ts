@@ -50,6 +50,25 @@ export type ProposalStatus = (typeof PROPOSAL_STATUSES)[number];
 
 export type AutonomyPolicy = "approval_required" | "autonomous";
 
+export const ANALYSIS_STATUSES = ["NOT_REQUESTED", "PENDING", "READY", "FAILED"] as const;
+export type AnalysisStatus = (typeof ANALYSIS_STATUSES)[number];
+
+/** The validated prompt analysis (backend app/planning/analysis.py PromptAnalysis). */
+export interface PromptAnalysis {
+  schema_version: 1;
+  objective: string;
+  requirements: { id: string; description: string; priority: "must" | "should" | "could" }[];
+  constraints: {
+    id: string;
+    kind: "budget" | "deadline" | "scope" | "technical" | "compliance" | "other";
+    description: string;
+  }[];
+  deliverables: string[];
+  assumptions: string[];
+  ambiguities: { id: string; question: string; impact: string }[];
+  suggested_skills: string[];
+}
+
 export interface Page<T> {
   items: T[];
   total: number;
@@ -235,6 +254,8 @@ export interface Workflow {
   created_by_user_id: Uuid;
   prompt: string;
   status: WorkflowStatus;
+  analysis_status: AnalysisStatus;
+  normalized_requirements: PromptAnalysis | null;
   autonomy_policy: AutonomyPolicy;
   budget_limit: string | null;
   currency: string;
