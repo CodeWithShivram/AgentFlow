@@ -135,5 +135,7 @@ def test_proactor_event_loop_is_rejected_with_clear_message() -> None:
     async def check() -> None:
         ensure_psycopg_compatible_event_loop()
 
-    with pytest.raises(RuntimeError, match="SelectorEventLoop"):
-        asyncio.run(check(), loop_factory=asyncio.ProactorEventLoop)
+    # The platform check lets mypy skip this block on Linux, where the class does not exist.
+    if sys.platform == "win32":
+        with pytest.raises(RuntimeError, match="SelectorEventLoop"):
+            asyncio.run(check(), loop_factory=asyncio.ProactorEventLoop)

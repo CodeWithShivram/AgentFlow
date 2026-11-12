@@ -21,8 +21,8 @@ Phase 1 steps come directly from the handoff (§17). Phases 2–8 are numbered h
 | 1.7 | Workflow and task management | DONE | `82483e6` |
 | 1.8 | Background execution foundation | DONE | `51e03f5` |
 | 1.9 | Frontend application | DONE | `b3cce86` |
-| 1.9a | Database hardening: row-level security (OD-13, OD-15, OD-10) | DONE | see `progress.md` |
-| 1.10 | Phase 1 integration and release v0.1.0 | NOT_STARTED | |
+| 1.9a | Database hardening: row-level security (OD-13, OD-15, OD-10) | DONE | `889d989` |
+| 1.10 | Phase 1 integration and release v0.1.0 | DONE (CI not yet run on GitHub) | see `progress.md`; tag `v0.1.0` |
 
 ### 1.0 — Repository reconnaissance and implementation plan
 - Depends on: —
@@ -118,6 +118,8 @@ The UI states each of these where it applies; none is faked.
 ### 1.10 — Phase 1 integration and release
 - Depends on: 1.1–1.9.
 - Acceptance: full backend and frontend suites pass; migrations from clean state; frontend, API, worker, PostgreSQL, Redis running together; registration/login, workspace isolation, agent CRUD, workflow/task CRUD and mock worker verified; GitHub Actions CI (backend-ci, frontend-ci) green; README, progress and release notes updated.
+- Owner decisions (2026-11-12): RLS delivered first as Step 1.9a; no push, so "CI green" is verified by running both workflows' commands in Linux containers (Python 3.12 / Node 24) and becomes confirmed on the first push; local annotated tag `v0.1.0`.
+- Delivered: `.github/workflows/backend-ci.yml` and `frontend-ci.yml`; `CHANGELOG.md` (release notes); full stack (API, worker, Beat, PostgreSQL, Redis, frontend) verified from a clean database by the Playwright journeys.
 - Commit: `release: complete AgentFlow foundation v0.1.0`
 
 ---

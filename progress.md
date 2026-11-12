@@ -1,9 +1,9 @@
 # AgentFlow Progress
 
 ## Current position
-- Phase: 1 — Foundation
-- Last completed step: 1.9a — Database hardening: row-level security (OD-13, OD-15, OD-10)
-- Next step: 1.10 — Phase 1 integration and release v0.1.0 (approved by the owner: no push, CI unverified until pushed, local tag `v0.1.0`).
+- Phase: 1 — Foundation, **complete** (release `v0.1.0`, local tag)
+- Last completed step: 1.10 — Phase 1 integration and release v0.1.0
+- Next step: Phase 2 — Intelligent planning (await the owner's brief). The GitHub Actions workflows run for the first time when the owner pushes.
 
 ## Completed steps
 | Step | Commit message | Hash |
@@ -18,7 +18,8 @@
 | 1.7 | `feat(workflows): implement workflow and task management` | `82483e6` |
 | 1.8 | `feat(execution): add reliable background execution with Celery` | `51e03f5` |
 | 1.9 | `feat(frontend): add AgentFlow web application` | `b3cce86` |
-| 1.9a | `feat(security): enable PostgreSQL row-level security` | latest commit touching `backend/alembic/versions/0006_row_level_security.py` |
+| 1.9a | `feat(security): enable PostgreSQL row-level security` | `889d989` |
+| 1.10 | `release: complete AgentFlow foundation v0.1.0` | the commit tagged `v0.1.0` |
 
 ## Environment snapshot (2026-11-12)
 | Item | Value |
@@ -33,6 +34,27 @@
 | E2E | API :8011 (as `agentflow_api`), frontend :3100, database `agentflow_e2e` (reset each run), Redis DBs 2/3, installed Google Chrome |
 | Frontend audit | `npm audit --omit=dev`: 0 vulnerabilities; dev-only: 8 moderate, all the existing `minimatch` chain via ESLint |
 | Test HTTP client | `httpx2` 2.16.0 (replaces `httpx`, OD-10) |
+
+## Step 1.10 — release v0.1.0
+- **CI:**
+  - `.github/workflows/backend-ci.yml`: Ubuntu, a PostgreSQL 18.6 service, and Redis 8.10.3 with a password started in a step. It runs `uv sync --locked`, ruff, mypy, migrate/seed/provision, `alembic check` and pytest.
+  - `.github/workflows/frontend-ci.yml`: Node 24, `npm ci`, lint, typecheck, Vitest, build.
+  - Both have `contents: read` permissions and concurrency groups.
+- **Release notes:** `CHANGELOG.md`; README status, layout and CI section updated.
+- **CI rehearsal, without a push** (owner decision), running both workflows' commands in Linux containers against the local infrastructure:
+  - **backend** (`ghcr.io/astral-sh/uv:python3.12-bookworm`): `uv sync --locked`, ruff, mypy, `alembic check`; pytest **738 passed, 1 skipped** (the Windows-only event-loop test).
+  - **frontend** (`node:24-bookworm`, Node 24.22.3), on a container-local copy: `npm ci`, eslint, typecheck, Vitest **77 passed**, `next build`.
+  - **It found a real Linux-only failure,** now fixed: mypy rejected `asyncio.ProactorEventLoop` in `tests/unit/test_lifecycle.py`. The call is now under a `sys.platform == "win32"` check, and `mypy --platform linux` is clean.
+  - The first backend attempt hit a network timeout downloading a package; a retry with `UV_HTTP_TIMEOUT=180` passed.
+- **Not yet verified:** the workflows on GitHub itself, including the action versions `actions/checkout@v4`, `actions/setup-node@v4` and `astral-sh/setup-uv@v6`.
+- **Full stack from a clean database:** the Playwright harness resets `agentflow_e2e`, migrates from empty, seeds and provisions, then runs the API (restricted role, RLS), the Celery worker and Beat, PostgreSQL, Redis and a production frontend build. Its journeys cover registration and login, workspace isolation and permissions, agent CRUD, workflow and task CRUD, and mock-worker execution.
+
+## Checks last executed (Step 1.10)
+- **`scripts/check.ps1 -E2E` ✔ (exit 0, "All checks passed"):**
+  - ruff, mypy, alembic check; pytest **739 passed**, no warnings;
+  - eslint, typecheck; Vitest **77 passed**;
+  - Playwright **14 passed**; `next build`.
+- **Linux CI rehearsals:** both ✔, as above.
 
 ## Current implementation state (Step 1.9a)
 - **ADR-0012:** resolves OD-13, OD-15 and OD-10, and opens OD-20.
@@ -104,9 +126,5 @@
 None.
 
 ## Next exact action
-Start Step 1.10:
-- GitHub Actions `backend-ci` and `frontend-ci`, written and validated locally (no push, so CI stays unverified);
-- a clean-state migration plus the full stack together;
-- release notes; README, plan and progress;
-- the commit `release: complete AgentFlow foundation v0.1.0`;
-- a local annotated tag `v0.1.0`.
+1. **The owner pushes when ready:** `git push origin main` and `git push origin v0.1.0`. Confirm that `backend-ci` and `frontend-ci` pass on GitHub. If an action version needs bumping, change it in a follow-up commit.
+2. **Phase 2 starts on the owner's brief.** Settle OD-14, OD-19 and OD-20 before any hosted deployment.

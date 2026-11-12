@@ -2,17 +2,18 @@
 
 Universal multi-agent AI orchestration platform. A natural-language request is planned into a task graph, executed by specialised agents, independently verified, and reported with full history, usage and cost.
 
-> Status: **Phase 1 — Foundation** in progress. The API (auth, workspaces, agent registry, workflows, background execution with a mock agent) and the web application are in place. See [`progress.md`](progress.md) and [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md). The full specification is [`AGENTFLOW_HANDOFF.txt`](AGENTFLOW_HANDOFF.txt).
+> Status: **v0.1.0 — Phase 1 (Foundation) complete.** The API (auth, workspaces with row-level security, agent registry, workflows, background execution with a mock agent) and the web application are in place. Agents do not call a model yet (Phase 2). See [`CHANGELOG.md`](CHANGELOG.md), [`progress.md`](progress.md) and [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md). The full specification is [`AGENTFLOW_HANDOFF.txt`](AGENTFLOW_HANDOFF.txt).
 
 ## Repository layout
 
 | Path | Contents |
 |---|---|
-| `backend/` | FastAPI API (and, from Step 1.8, Celery worker). Python 3.12, managed with uv. |
+| `backend/` | FastAPI API and Celery worker. Python 3.12, managed with uv. |
 | `frontend/` | Next.js App Router UI. TypeScript strict, npm. |
 | `infrastructure/docker/` | Docker Compose for local PostgreSQL and Redis. |
 | `scripts/` | Developer scripts (`check.ps1` runs all quality gates, `infra.ps1` manages local infrastructure). |
 | `docs/ADR/` | Architecture decision records. |
+| `.github/workflows/` | GitHub Actions: `backend-ci`, `frontend-ci`. |
 
 ## Runtime versions
 
@@ -320,6 +321,14 @@ What the run does:
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/check.ps1        # add -E2E to include Playwright
 ```
+
+## Continuous integration
+
+GitHub Actions runs the same gates on pushes to `main` and on pull requests:
+- **`backend-ci`** (`.github/workflows/backend-ci.yml`), on Ubuntu with PostgreSQL 18.6 and Redis 8.10.3 containers. It runs `uv sync --locked`, ruff, mypy, migrations with seeding and role provisioning, `alembic check` and pytest.
+- **`frontend-ci`** (`.github/workflows/frontend-ci.yml`), on Node 24. It runs `npm ci`, lint, typecheck, Vitest and the production build.
+
+The Playwright journeys need the whole stack and run locally with `check.ps1 -E2E`.
 
 ## Configuration
 

@@ -1,0 +1,86 @@
+# Backend quality gate: the same commands as scripts/check.ps1, against real PostgreSQL and Redis.
+name: backend-ci
+
+on:
+  push:
+    branches: [main]
+    paths: ["backend/**", ".github/workflows/backend-ci.yml"]
+  pull_request:
+    paths: ["backend/**", ".github/workflows/backend-ci.yml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Throwaway values for the job's own short-lived containers; not real secrets.
+  POSTGRES_USER: agentflow
+  POSTGRES_PASSWORD: ci-only-postgres-password
+  POSTGRES_DB: agentflow
+  REDIS_PASSWORD: ci-only-redis-password
+  AUTH_JWT_SIGNING_KEYS: '{"ci":"ci-only-jwt-signing-key-0123456789abcdef"}'
+  AUTH_JWT_ACTIVE_KEY_ID: ci
+  API_DB_PASSWORD: ci-only-api-db-password
+  WORKER_DB_PASSWORD: ci-only-worker-db-password
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:18.6-alpine
+        env:
+          POSTGRES_USER: agentflow
+          POSTGRES_PASSWORD: ci-only-postgres-password
+          POSTGRES_DB: agentflow
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U agentflow -d agentflow"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+
+      # Service containers cannot take a command, and Redis must require a password like locally.
+      - name: Start Redis
+        working-directory: .
+        run: |
+          docker run -d --name redis -p 6379:6379 redis:8.10.3-alpine \
+            redis-server --requirepass "$REDIS_PASSWORD"
+          for i in $(seq 1 30); do
+            docker exec redis redis-cli -a "$REDIS_PASSWORD" --no-auth-warning ping | grep -q PONG && exit 0
+            sleep 1
+          done
+          echo "Redis did not start" && exit 1
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: Install (Python version from backend/.python-version, locked dependencies)
+        run: uv sync --locked
+
+      - name: ruff format --check
+        run: uv run ruff format --check .
+      - name: ruff check
+        run: uv run ruff check .
+      - name: mypy
+        run: uv run mypy app tests alembic
+
+      - name: Migrate, seed and provision roles
+        run: |
+          uv run alembic upgrade head
+          uv run python -m app.agents.seed
+          uv run python -m app.db.roles provision
+      - name: alembic check (models match migrations)
+        run: uv run alembic check
+
+      - name: pytest
+        run: uv run pytest
