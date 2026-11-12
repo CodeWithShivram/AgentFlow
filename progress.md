@@ -1,9 +1,9 @@
 # AgentFlow Progress
 
 ## Current position
-- Phase: 1 — Foundation, **complete** (release `v0.1.0`, local tag)
-- Last completed step: 1.10 — Phase 1 integration and release v0.1.0
-- Next step: Phase 2 — Intelligent planning (await the owner's brief). The GitHub Actions workflows run for the first time when the owner pushes.
+- Phase: 2 — Intelligent planning (Phase 1 released as `v0.1.0`, pushed with its tag)
+- Last completed step: 2.1 — Model gateway abstraction and mock model adapter
+- Next step: 2.2 — Structured prompt analysis (requirements and constraints), which needs a short plan and the owner's go-ahead
 
 ## Completed steps
 | Step | Commit message | Hash |
@@ -19,21 +19,49 @@
 | 1.8 | `feat(execution): add reliable background execution with Celery` | `51e03f5` |
 | 1.9 | `feat(frontend): add AgentFlow web application` | `b3cce86` |
 | 1.9a | `feat(security): enable PostgreSQL row-level security` | `889d989` |
-| 1.10 | `release: complete AgentFlow foundation v0.1.0` | the commit tagged `v0.1.0` |
+| 1.10 | `release: complete AgentFlow foundation v0.1.0` | `04f1bc1` (tag `v0.1.0`) |
+| — | `ci: isolate unit-test settings from the environment and update actions` | `54dc11b` |
+| — | `ci: pin astral-sh/setup-uv to v10.3.3` | `19f2604` |
+| 2.1 | `feat(llm): add model gateway with usage records and mock adapter` | latest commit touching `backend/app/llm/gateway.py` |
 
 ## Environment snapshot (2026-11-12)
 | Item | Value |
 |---|---|
-| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`, nothing pushed |
+| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `19f2604` plus tag `v0.1.0` (owner-authorized) |
 | Python / uv / Node / npm | 3.12.14 via uv 0.12.9 / Node 24.13.0 / npm 11.6.2 |
 | Celery / kombu | 5.7.0 / 5.7.0 |
 | Docker | 29.8.2, Compose v5.6.0 — `agentflow` stack healthy (Docker Desktop must be started first) |
-| Dev database | `agentflow` at `0006 (head)`; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
+| Dev database | `agentflow` at `0007 (head)`; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
 | Local `.env` | holds generated `WORKER_DB_PASSWORD` and (new) `API_DB_PASSWORD` (gitignored) |
 | Port 8000 | Used by another local project (`easa`); smoke tests used 8010 |
 | E2E | API :8011 (as `agentflow_api`), frontend :3100, database `agentflow_e2e` (reset each run), Redis DBs 2/3, installed Google Chrome |
 | Frontend audit | `npm audit --omit=dev`: 0 vulnerabilities; dev-only: 8 moderate, all the existing `minimatch` chain via ESLint |
 | Test HTTP client | `httpx2` 2.16.0 (replaces `httpx`, OD-10) |
+
+## Step 2.1 — model gateway (ADR-0013)
+- **Owner decisions (2026-11-12):** usage is persisted from the start (`llm_usage`); models are called from workers only, through a sync gateway; the mock is scripted, with deterministic defaults.
+- **`app/llm/`:**
+  - `types.py`: `ModelRequest`, `ChatMessage`, `CallContext`, `ProviderUsage`, the `ModelAdapter` protocol and `ModelResponse`.
+  - `mock.py`: `MockModelAdapter`, with per-purpose scripts that may raise; `DEFAULT_RESPONSES` (empty until Step 2.2 registers purposes); deterministic usage and request IDs.
+  - `gateway.py`: `ModelGateway.complete()` resolves the model (profile `default` → `MODEL_NAME`), validates structured output, records every call, and logs metadata only. `get_model_gateway()` gives one gateway per worker process.
+- **`app/services/usage.py`:** writes each record in its own transaction, so usage survives the caller's rollback.
+- **Migration `0007`:** the `llm_usage` table with composite FKs; checks for all-or-nothing costs, error code exactly when unsuccessful, non-negative tokens and task-implies-workflow; RLS tenant and platform policies.
+- **Roles:** worker grant `SELECT, INSERT` (cannot rewrite history).
+- **Settings:** `MODEL_PROVIDER` (`mock` only) and `MODEL_NAME` (`mock-1`).
+- **Not yet called by any product code:** Step 2.2 will be the first caller (prompt analysis as a background job). No LiteLLM yet (Phase 3); no pricing (Phase 7).
+
+## Checks last executed (Step 2.1)
+- **Backend:** ruff format/check; mypy (118 files); alembic check; pytest **761 passed** (739 plus 22 new: 13 unit, 9 integration).
+- **Frontend:** eslint, typecheck, Vitest 77, `next build`.
+- **Playwright:** **14 passed** (4.2 min).
+  - The first gate run had 1 failure, caused by the environment: every local log (API, worker, Redis connection) stalled together for about 21 minutes, with no errors, and the worker reported that Redis did not reply for 1263 seconds. This looks like the machine or Docker Desktop pausing.
+  - A rerun passed fully.
+- **Deliberate-bug check** (reverted): not recording failed calls makes 2 tests fail, one unit and one integration.
+- **GitHub CI after the v0.1.0 push:**
+  - `backend-ci` first failed on GitHub only. Unit-test settings read CI's exported environment variables (`WORKER_DB_PASSWORD`).
+  - Reproduced exactly in Linux containers and fixed in `54dc11b`: unit settings are now built from constructor arguments only.
+  - `setup-uv@v10` has no moving major tag, so it is pinned in `19f2604`.
+  - Now ✔: `backend-ci` at `19f2604`, `frontend-ci` at `54dc11b`.
 
 ## Step 1.10 — release v0.1.0
 - **CI:**
@@ -46,7 +74,7 @@
   - **frontend** (`node:24-bookworm`, Node 24.22.3), on a container-local copy: `npm ci`, eslint, typecheck, Vitest **77 passed**, `next build`.
   - **It found a real Linux-only failure,** now fixed: mypy rejected `asyncio.ProactorEventLoop` in `tests/unit/test_lifecycle.py`. The call is now under a `sys.platform == "win32"` check, and `mypy --platform linux` is clean.
   - The first backend attempt hit a network timeout downloading a package; a retry with `UV_HTTP_TIMEOUT=180` passed.
-- **Not yet verified:** the workflows on GitHub itself, including the action versions `actions/checkout@v4`, `actions/setup-node@v4` and `astral-sh/setup-uv@v6`.
+- **Verified on GitHub after the push:** see Step 2.1 above; both workflows are green after two CI fixes.
 - **Full stack from a clean database:** the Playwright harness resets `agentflow_e2e`, migrates from empty, seeds and provisions, then runs the API (restricted role, RLS), the Celery worker and Beat, PostgreSQL, Redis and a production frontend build. Its journeys cover registration and login, workspace isolation and permissions, agent CRUD, workflow and task CRUD, and mock-worker execution.
 
 ## Checks last executed (Step 1.10)
@@ -126,5 +154,6 @@
 None.
 
 ## Next exact action
-1. **The owner pushes when ready:** `git push origin main` and `git push origin v0.1.0`. Confirm that `backend-ci` and `frontend-ci` pass on GitHub. If an action version needs bumping, change it in a follow-up commit.
-2. **Phase 2 starts on the owner's brief.** Settle OD-14, OD-19 and OD-20 before any hosted deployment.
+1. **Push Step 2.1** on the owner's go-ahead, and confirm `backend-ci` on GitHub.
+2. **Step 2.2: structured prompt analysis.** Present a short plan first. It will be the first gateway caller: a background job through the outbox, a Pydantic analysis schema, and a mock default for its purpose.
+3. **Before any hosted deployment:** settle OD-14, OD-19 and OD-20.

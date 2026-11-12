@@ -43,6 +43,8 @@ WORKER_GRANTS: dict[str, tuple[str, ...]] = {
     "auth_sessions": ("SELECT", "DELETE"),
     "refresh_tokens": ("SELECT", "DELETE"),
     "workspace_invitations": ("SELECT", "DELETE"),
+    # Model gateway usage records (ADR-0013); the worker is the only caller of models.
+    "llm_usage": ("SELECT", "INSERT"),
 }
 API_PRIVILEGES = ("SELECT", "INSERT", "UPDATE", "DELETE")
 # Tables the API never touches: migration bookkeeping and worker-only state.

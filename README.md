@@ -238,6 +238,10 @@ uv run pytest -m "not integration"        # unit tests only, no infrastructure n
 
 Integration tests create throwaway databases named `agentflow_test_*` on the local server, migrate them, and drop them afterwards. Your development database is never touched.
 
+## Model gateway
+
+Every language-model call goes through one gateway in the Celery workers (`app/llm/gateway.py`, [ADR-0013](docs/ADR/0013-model-gateway.md)), and every call is recorded in `llm_usage` with the token counts the provider reported. Costs stay unpriced until Phase 7. The only provider so far is a deterministic mock (`MODEL_PROVIDER=mock`, `MODEL_NAME=mock-1`), so no API key is needed; real providers arrive behind LiteLLM in Phase 3.
+
 ## Background workers (Celery)
 
 Workflow tasks are executed by Celery workers, fed through a transactional outbox: the API only writes outbox rows, and the relay publishes them to Redis. In this step the worker runs a harmless mock agent; there is no LLM call. The design is in [ADR-0010](docs/ADR/0010-background-execution-outbox-and-workers.md).

@@ -77,6 +77,10 @@ class Settings(BaseSettings):
     # is the administrator and schema owner: migrations, seeding and role provisioning only.
     api_db_user: str = Field(default="agentflow_api", min_length=1, max_length=63)
     api_db_password: SecretStr | None = None
+    # --- Model gateway (ADR-0013) ---
+    # Only the deterministic mock exists until LiteLLM-backed providers arrive (Phase 3).
+    model_provider: Literal["mock"] = "mock"
+    model_name: str = Field(default="mock-1", min_length=1, max_length=200)
     # --- Background execution (ADR-0010) ---
     # Celery broker: the same Redis server, separate logical database from rate limiting.
     celery_broker_redis_db: int = Field(default=1, ge=0, le=15)

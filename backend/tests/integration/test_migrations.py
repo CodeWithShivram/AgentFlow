@@ -33,6 +33,7 @@ EXPECTED_TABLES = {
     "outbox_events",
     "inbox_messages",
     "agent_executions",
+    "llm_usage",
 }
 
 

@@ -128,7 +128,7 @@ The UI states each of these where it applies; none is faked.
 
 | Step | Title | Status |
 |---|---|---|
-| 2.1 | Model gateway abstraction and mock model adapter | NOT_STARTED |
+| 2.1 | Model gateway abstraction and mock model adapter | DONE (ADR-0013) — see `progress.md` |
 | 2.2 | Structured prompt analysis (requirements/constraints) | NOT_STARTED |
 | 2.3 | Planner output schema, task decomposition, acceptance criteria | NOT_STARTED |
 | 2.4 | DAG validation and plan preview API | NOT_STARTED |

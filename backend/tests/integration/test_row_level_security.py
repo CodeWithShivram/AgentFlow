@@ -42,6 +42,7 @@ ROW_LEVEL_SECURED = {
     "idempotency_keys",
     "outbox_events",
     "agent_executions",
+    "llm_usage",
 }
 # Read before any workspace context exists (login, refresh, invitation by token) or worker-only.
 OUTSIDE_RLS = {

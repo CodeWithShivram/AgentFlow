@@ -25,6 +25,7 @@ from app.models.execution import (
 )
 from app.models.idempotency import IdempotencyKey, IdempotencyStatus
 from app.models.tenancy import User, Workspace, WorkspaceMember, WorkspaceRole
+from app.models.usage import LlmCallStatus, LlmUsage
 from app.models.workflow import (
     AutonomyPolicy,
     TaskDependency,
@@ -52,6 +53,8 @@ __all__ = [
     "IdempotencyKey",
     "IdempotencyStatus",
     "InboxMessage",
+    "LlmCallStatus",
+    "LlmUsage",
     "OutboxEvent",
     "OutboxStatus",
     "RefreshToken",

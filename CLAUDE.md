@@ -55,7 +55,11 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
 - Errors use the standard shape in `app/core/errors.py`; never return exception text. Log through `logging` (JSON + redaction), never `print`.
 - PostgreSQL is authoritative state; Redis is transport/cache only. Dispatch uses a transactional outbox.
 - Agents submit results; only platform verification accepts a task. LLM output is untrusted until validated.
-- All LLM calls go through one model gateway that records usage. Never label estimated cost/tokens as actual.
+- All LLM calls go through `app/llm/gateway.py` (`get_model_gateway().complete(...)`, ADR-0013), in workers only; the
+  API never calls a model. Each call writes an `llm_usage` row (its own transaction) with provider-reported usage; costs
+  stay NULL until Phase 7 pricing. Validate structured output with a Pydantic `response_format`; never log prompts or
+  outputs. Tests use `MockModelAdapter.script(...)`; register schema-valid mock defaults for new purposes. Never label
+  estimated cost/tokens as actual.
 - Workflow events are append-only.
 
 ## Security
