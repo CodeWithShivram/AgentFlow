@@ -127,6 +127,17 @@ export function createEndpoints(client: ApiClient) {
         client.get<{ items: PlanDraftSummary[] }>(`${wf(workspaceId, workflowId)}/plan-drafts`),
       planDraft: (workspaceId: Uuid, workflowId: Uuid, version: number) =>
         client.get<PlanDraftPreview>(`${wf(workspaceId, workflowId)}/plan-drafts/${version}`),
+      /** Turns a plan draft into the workflow's tasks (Step 2.5). */
+      confirmPlanDraft: (
+        workspaceId: Uuid,
+        workflowId: Uuid,
+        version: number,
+        body: {
+          revision: number;
+          existing_tasks?: "replace" | "append";
+          acknowledge_warnings: boolean;
+        },
+      ) => client.post<Workflow>(`${wf(workspaceId, workflowId)}/plan-drafts/${version}/confirm`, body),
       /** Requests a new plan draft from the current analysis; it runs in a worker. */
       regeneratePlan: (workspaceId: Uuid, workflowId: Uuid) =>
         client.post<Workflow>(`${wf(workspaceId, workflowId)}/plan-drafts`),

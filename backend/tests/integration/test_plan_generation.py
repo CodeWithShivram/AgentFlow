@@ -329,3 +329,174 @@ def test_previews_are_scoped_and_versioned(
     assert missing.json()["error"]["code"] == "PLAN_DRAFT_NOT_FOUND"
     assert owner.get(f"{url}/0").status_code == 422
     assert stranger.get(f"{url}/1").status_code == 404
+
+
+# --- confirmation (Step 2.5) ------------------------------------------------------------------
+
+
+def _workflow(owner: TestClient, workflow_id: str) -> dict[str, Any]:
+    body: dict[str, Any] = owner.get(_url(owner, workflow_id)).json()
+    return body
+
+
+def _confirm(owner: TestClient, workflow_id: str, version: int = 1, **body: Any) -> Any:
+    revision = body.pop("revision", None) or _workflow(owner, workflow_id)["revision"]
+    return owner.post(
+        _url(owner, workflow_id, f"/plan-drafts/{version}/confirm"),
+        json={"revision": revision, **body},
+        headers=csrf(owner),
+    )
+
+
+def _tasks(owner: TestClient, workflow_id: str) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = owner.get(_url(owner, workflow_id, "/tasks")).json()["items"]
+    return items
+
+
+def test_confirming_a_draft_creates_its_tasks_and_dependencies(
+    owner: TestClient,
+    admin_factory: Factory,
+    jobs: dict[str, Callable[..., str]],
+    seeded_builtins: Settings,
+) -> None:
+    workflow_id = _drafted(owner, admin_factory, jobs)
+    before = _workflow(owner, workflow_id)
+
+    response = _confirm(owner, workflow_id)
+
+    assert response.status_code == 200
+    after = response.json()
+    assert after["confirmed_plan_version"] == 1
+    assert after["revision"] > before["revision"]
+    assert after["status"] == "PLANNING"
+    tasks = _tasks(owner, workflow_id)
+    draft = plan.PlanProposal.model_validate(
+        owner.get(_url(owner, workflow_id, "/plan-drafts/1")).json()["plan"]
+    )
+    by_title = {t["title"]: t for t in tasks}
+    assert sorted(by_title) == sorted(t.title for t in draft.tasks)
+    ids = {planned.key: by_title[planned.title]["id"] for planned in draft.tasks}
+    for planned in draft.tasks:
+        created = by_title[planned.title]
+        assert sorted(created["depends_on"]) == sorted(ids[k] for k in planned.depends_on)
+        assert created["required_skills"] == planned.required_skills
+        assert created["required"] == planned.required
+        assert created["acceptance_criteria"] == [
+            c.model_dump() for c in planned.acceptance_criteria
+        ]
+        assert created["status"] == "PENDING"
+    events = owner.get(_url(owner, workflow_id, "/events")).json()["items"]
+    confirmed = events[-1]
+    assert confirmed["event_type"] == "PLAN_CONFIRMED"
+    assert confirmed["payload"]["tasks_created"] == 4
+    assert confirmed["payload"]["tasks_removed"] == 0
+    keys = {e["payload"].get("plan_task_key") for e in events if e["event_type"] == "TASK_CREATED"}
+    assert keys == {"t1", "t2", "t3", "t4"}
+
+
+def test_warnings_must_be_acknowledged(
+    owner: TestClient, admin_factory: Factory, jobs: dict[str, Callable[..., str]]
+) -> None:
+    workflow_id = _drafted(owner, admin_factory, jobs)  # no active agents: skill warnings
+
+    refused = _confirm(owner, workflow_id)
+    assert refused.status_code == 409
+    assert refused.json()["error"]["code"] == "PLAN_WARNINGS_NOT_ACKNOWLEDGED"
+    assert refused.json()["error"]["details"]["codes"] == ["SKILL_NOT_AVAILABLE"]
+    assert _tasks(owner, workflow_id) == []
+
+    accepted = _confirm(owner, workflow_id, acknowledge_warnings=True)
+    assert accepted.status_code == 200
+    events = owner.get(_url(owner, workflow_id, "/events")).json()["items"]
+    assert events[-1]["payload"]["acknowledged_warnings"] == ["SKILL_NOT_AVAILABLE"]
+
+
+def test_existing_tasks_are_replaced_or_kept_as_the_user_chooses(
+    owner: TestClient,
+    admin_factory: Factory,
+    jobs: dict[str, Callable[..., str]],
+    seeded_builtins: Settings,
+) -> None:
+    workflow_id = _drafted(owner, admin_factory, jobs)
+    manual = owner.post(
+        _url(owner, workflow_id, "/tasks"), json={"title": "Manual task"}, headers=csrf(owner)
+    ).json()
+
+    undecided = _confirm(owner, workflow_id)
+    assert undecided.status_code == 409
+    assert undecided.json()["error"]["code"] == "EXISTING_TASKS_MODE_REQUIRED"
+    assert undecided.json()["error"]["details"]["existing_tasks"] == 1
+
+    assert _confirm(owner, workflow_id, existing_tasks="append").status_code == 200
+    appended = _tasks(owner, workflow_id)
+    assert len(appended) == 5 and not any(t["removed"] for t in appended)
+
+    assert _confirm(owner, workflow_id, existing_tasks="replace").status_code == 200
+    replaced = _tasks(owner, workflow_id)
+    active = [t for t in replaced if not t["removed"]]
+    removed = [t for t in replaced if t["removed"]]
+    assert len(active) == 4
+    assert len(removed) == 5 and all(t["status"] == "CANCELLED" for t in removed)
+    assert manual["id"] in {t["id"] for t in removed}
+    payload = owner.get(_url(owner, workflow_id, "/events")).json()["items"][-1]["payload"]
+    assert (payload["existing_tasks"], payload["tasks_removed"]) == ("replace", 5)
+
+
+def test_confirmation_is_refused_when_stale_unknown_forbidden_or_running(
+    owner: TestClient,
+    new_client: ClientFactory,
+    admin_factory: Factory,
+    jobs: dict[str, Callable[..., str]],
+    seeded_builtins: Settings,
+) -> None:
+    workflow_id = _drafted(owner, admin_factory, jobs)
+    # Any revision other than the current one is stale client state.
+    stale = _workflow(owner, workflow_id)["revision"] + 1
+
+    conflict = _confirm(owner, workflow_id, revision=stale)
+    assert conflict.status_code == 409
+    assert conflict.json()["error"]["code"] == "WORKFLOW_REVISION_CONFLICT"
+    assert _confirm(owner, workflow_id, version=9).status_code == 404
+    viewer = member(new_client, owner, "VIEWER")
+    url = f"{API}/workspaces/{my_workspace(owner)}/workflows/{workflow_id}/plan-drafts/1/confirm"
+    forbidden = viewer.post(
+        url, json={"revision": _workflow(owner, workflow_id)["revision"]}, headers=csrf(viewer)
+    )
+    assert forbidden.status_code == 403
+
+    # Confirm, then run the workflow: the plan can no longer be replaced.
+    assert _confirm(owner, workflow_id).status_code == 200
+    for target in ("AWAITING_APPROVAL", "READY", "RUNNING"):
+        moved = owner.post(
+            _url(owner, workflow_id, "/transitions"),
+            json={"to_status": target, "revision": _workflow(owner, workflow_id)["revision"]},
+            headers=csrf(owner),
+        )
+        assert moved.status_code == 200, moved.json()
+    running = _confirm(owner, workflow_id, existing_tasks="replace")
+    assert running.status_code == 409
+    assert running.json()["error"]["code"] == "PLAN_NOT_EDITABLE"
+
+
+def test_confirming_after_approval_reopens_planning(
+    owner: TestClient,
+    admin_factory: Factory,
+    jobs: dict[str, Callable[..., str]],
+    seeded_builtins: Settings,
+) -> None:
+    workflow_id = _drafted(owner, admin_factory, jobs)
+    assert _confirm(owner, workflow_id).status_code == 200
+    owner.post(
+        _url(owner, workflow_id, "/transitions"),
+        json={
+            "to_status": "AWAITING_APPROVAL",
+            "revision": _workflow(owner, workflow_id)["revision"],
+        },
+        headers=csrf(owner),
+    )
+    assert _workflow(owner, workflow_id)["status"] == "AWAITING_APPROVAL"
+
+    again = _confirm(owner, workflow_id, existing_tasks="replace")
+
+    assert again.status_code == 200
+    assert again.json()["status"] == "PLANNING"  # the approval request is invalidated

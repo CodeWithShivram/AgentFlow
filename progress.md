@@ -1,9 +1,9 @@
 # AgentFlow Progress
 
 ## Current position
-- Phase: 2 — Intelligent planning (Phase 1 released as `v0.1.0`, pushed with its tag)
-- Last completed step: 2.4 — DAG validation and plan preview
-- Next step: 2.5 — User plan confirmation before execution, which needs a short plan and the owner's go-ahead
+- Phase: 2 — Intelligent planning, complete (Phase 1 released as `v0.1.0`, pushed with its tag)
+- Last completed step: 2.5 — User plan confirmation before execution
+- Next step: 3.1 — BaseAgent contract and AgentSubmission schema (Phase 3, specialized agents), which needs a short plan and the owner's go-ahead
 
 ## Completed steps
 | Step | Commit message | Hash |
@@ -25,21 +25,48 @@
 | 2.1 | `feat(llm): add model gateway with usage records and mock adapter` | `d2aef8f` (pushed, CI ✔) |
 | 2.2 | `feat(planning): add structured prompt analysis` | `8dffe47` (pushed, CI ✔) |
 | 2.3 | `feat(planning): add versioned plan drafts with task decomposition` | `f1d8476` (pushed, CI ✔) |
-| 2.4 | `feat(planning): add plan DAG validation and draft preview` | latest commit touching `backend/app/planning/dag.py` |
+| 2.4 | `feat(planning): add plan DAG validation and draft preview` | `8389c82` (pushed, CI ✔) |
+| 2.5 | `feat(planning): confirm plan drafts into workflow tasks` | latest commit touching `docs/ADR/0017-plan-confirmation.md` |
 
 ## Environment snapshot (2026-11-12)
 | Item | Value |
 |---|---|
-| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `f1d8476` plus tag `v0.1.0` (owner-authorized) |
+| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `8389c82` plus tag `v0.1.0` (owner-authorized) |
 | Python / uv / Node / npm | 3.12.14 via uv 0.12.9 / Node 24.13.0 / npm 11.6.2 |
 | Celery / kombu | 5.7.0 / 5.7.0 |
 | Docker | 29.8.2, Compose v5.6.0 — `agentflow` stack healthy (Docker Desktop must be started first) |
-| Dev database | `agentflow` at `0009 (head)`; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
+| Dev database | `agentflow` at `0010 (head)`; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
 | Local `.env` | holds generated `WORKER_DB_PASSWORD` and (new) `API_DB_PASSWORD` (gitignored) |
 | Port 8000 | Used by another local project (`easa`); smoke tests used 8010 |
 | E2E | API :8011 (as `agentflow_api`), frontend :3100, database `agentflow_e2e` (reset each run), Redis DBs 2/3, installed Google Chrome |
 | Frontend audit | `npm audit --omit=dev`: 0 vulnerabilities; dev-only: 8 moderate, all the existing `minimatch` chain via ESLint |
 | Test HTTP client | `httpx2` 2.16.0 (replaces `httpx`, OD-10) |
+
+## Step 2.5 — plan confirmation (ADR-0017)
+- **Owner decisions (2026-11-13):**
+  - when tasks exist, the user chooses whether the draft replaces them or is added;
+  - confirmation creates tasks only, and the existing Submit / Mark ready and Start actions come next;
+  - warnings need explicit acknowledgement, and errors always block.
+- **Migration `0010_plan_confirmation`:** adds `workflows.confirmed_plan_version` and the `PLAN_CONFIRMED` event type.
+- **Service `tasks.confirm_plan_draft`:**
+  - runs under the workflow lock and revision, and re-validates the draft against the active agents;
+  - refuses with `PLAN_DRAFT_INVALID`, `PLAN_WARNINGS_NOT_ACKNOWLEDGED` or `EXISTING_TASKS_MODE_REQUIRED` (all 409);
+  - reopens PLANNING from AWAITING_APPROVAL/READY;
+  - on replace, removes active tasks as history (shared `_remove_from_plan` with manual removal);
+  - creates PENDING tasks and dependencies with their events, then writes `PLAN_CONFIRMED`.
+- **API:** `POST …/plan-drafts/{version}/confirm` (Member).
+- **Frontend:**
+  - "Confirm this draft" in the Plan draft tab (members, editable plans, drafts without errors);
+  - `confirm-plan-dialog.tsx` with the Replace/Add choice and the warning acknowledgement;
+  - a "Confirmed" badge; success switches to the Tasks tab.
+
+## Checks last executed (Step 2.5)
+- **Full gate (`check.ps1 -E2E`) ✔, exit 0:**
+  - backend: ruff format (132 files), ruff check, mypy (132 files), alembic check;
+  - pytest **829 passed** (824 plus 5 new confirmation integration tests);
+  - frontend: eslint, typecheck, Vitest **92** (3 new), Playwright **14 passed** (journey 7 now confirms the draft and sees its task on the Tasks tab), build.
+- **Deliberate-bug check** (reverted): skipping the warning-acknowledgement check makes `test_warnings_must_be_acknowledged` fail.
+- **Environment:** the dev DB is at `0010` and both roles were re-provisioned; no servers were left running after E2E.
 
 ## Step 2.4 — DAG validation and plan preview (ADR-0016)
 - **Owner decisions (2026-11-13):** a cyclic model reply is invalid output and is retried; skills no active agent provides are warnings; a separate "Plan draft" tab; any version can be previewed, newest first.
@@ -52,7 +79,7 @@
   - `plan-draft-preview.tsx`: a "Plan draft" tab with a version selector, errors and warnings naming tasks, stage columns of expandable task cards, and risks;
   - "Review draft" in the Requirements status card opens the tab.
 
-## Checks last executed (Step 2.4)
+## Checks (Step 2.4)
 - **Backend gate (`check.ps1 -E2E`, backend part) ✔:**
   - ruff; mypy (131 files); alembic check;
   - pytest **824 passed** (814 plus 10 new: 7 unit DAG/schema, 3 preview integration).
@@ -238,6 +265,6 @@
 None.
 
 ## Next exact action
-1. **Push Step 2.4** on the owner's go-ahead, and confirm CI on GitHub.
-2. **Step 2.5: user plan confirmation before execution.** Present a short plan first. It confirms a draft into workflow tasks and dependencies, decides how existing manual tasks are treated, and refuses drafts with errors.
+1. **Push Step 2.5** on the owner's go-ahead, and confirm CI on GitHub.
+2. **Step 3.1 (BaseAgent contract and AgentSubmission schema):** present a short plan and get the owner's go-ahead.
 3. **Before any hosted deployment:** settle OD-14, OD-19 and OD-20.

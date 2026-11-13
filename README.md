@@ -246,6 +246,8 @@ Every language-model call goes through one gateway in the Celery workers (`app/l
 
 **Plan drafts** ([ADR-0015](docs/ADR/0015-plan-drafts.md)). A ready analysis is turned into a draft plan: at most 25 small tasks with skills, deliverables, acceptance criteria and dependencies. Each draft is an immutable version, and members can regenerate it. Drafts never change a workflow's tasks until one is confirmed. The **Plan draft** tab previews any version by stage, with validation: dependency cycles are errors, and skills no active agent provides, optional prerequisites and over-wide stages are warnings ([ADR-0016](docs/ADR/0016-plan-dag-validation-and-preview.md)).
 
+**Plan confirmation** ([ADR-0017](docs/ADR/0017-plan-confirmation.md)). A member confirms a draft to turn it into the workflow's tasks and dependencies. Warnings must be acknowledged, drafts with errors cannot be confirmed, and existing tasks are replaced or kept, as the member chooses. Nothing runs until the plan is approved and started with the usual actions.
+
 ## Background workers (Celery)
 
 Workflow tasks are executed by Celery workers, fed through a transactional outbox: the API only writes outbox rows, and the relay publishes them to Redis. In this step the worker runs a harmless mock agent; there is no LLM call. The design is in [ADR-0010](docs/ADR/0010-background-execution-outbox-and-workers.md).

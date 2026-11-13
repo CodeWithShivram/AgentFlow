@@ -14,7 +14,7 @@ Plan rules:
 
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,18 +27,22 @@ from app.models import (
     WorkflowStatus,
     WorkflowTask,
 )
+from app.planning.dag import analyse_plan
+from app.planning.schema import PlanProposal
+from app.repositories import agents as agents_repository
 from app.repositories import workflows as repository
 from app.schemas.agents import AgentConfiguration
 from app.schemas.workflows import TaskCreateRequest, TaskUpdateRequest
 from app.services import agents as agent_service
 from app.services.authorization import WorkspaceAccess
 from app.services.transitions import record_event, transition_task, transition_workflow
-from app.services.workflows import lock_for_change
+from app.services.workflows import PlanDraftNotFoundError, lock_for_change
 from app.workflows.state_machine import PLAN_EDIT_REOPENS, PLAN_EDITABLE, Actor
 
 T, W = TaskStatus, WorkflowStatus
 MAX_TASKS_PER_WORKFLOW = 200
 MAX_DEPENDENCIES_PER_TASK = 50
+ExistingTasksMode = Literal["replace", "append"]
 
 
 class TaskNotFoundError(AppError):
@@ -87,6 +91,24 @@ class AgentLacksSkillsError(AppError):
     status_code = 422
     code = "AGENT_LACKS_SKILLS"
     message = "The agent does not have every skill this task requires."
+
+
+class PlanDraftInvalidError(AppError):
+    status_code = 409
+    code = "PLAN_DRAFT_INVALID"
+    message = "This plan draft has errors and cannot be confirmed."
+
+
+class PlanWarningsNotAcknowledgedError(AppError):
+    status_code = 409
+    code = "PLAN_WARNINGS_NOT_ACKNOWLEDGED"
+    message = "This plan draft has warnings; review and acknowledge them to confirm it."
+
+
+class ExistingTasksModeRequiredError(AppError):
+    status_code = 409
+    code = "EXISTING_TASKS_MODE_REQUIRED"
+    message = "The workflow already has tasks; choose whether to replace them or add the draft."
 
 
 # --- helpers ---------------------------------------------------------------------------------
@@ -159,6 +181,27 @@ async def _add_dependency(
         WorkflowEventType.DEPENDENCY_ADDED,
         task_id=task.id,
         payload={"depends_on_task_id": str(depends_on)},
+    )
+
+
+async def _remove_from_plan(
+    session: AsyncSession, workflow: Workflow, task: WorkflowTask, *, reason: str
+) -> None:
+    """Removes a task from the plan, keeping it as CANCELLED history without dependency edges."""
+    removed_edges = await repository.delete_edges_touching(
+        session, workflow_id=workflow.id, task_id=task.id
+    )
+    task.removed_at = datetime.now(UTC)
+    await transition_task(
+        session,
+        workflow,
+        task,
+        T.CANCELLED,
+        actor=Actor.USER,
+        reason=reason,
+        event_type=WorkflowEventType.TASK_REMOVED,
+        extra={"removed_dependency_edges": removed_edges},
+        reconcile=False,
     )
 
 
@@ -278,21 +321,7 @@ async def remove_task(
     if task.removed_at is not None:
         raise TaskNotFoundError()
     await _open_plan_for_edit(session, workflow)
-    removed_edges = await repository.delete_edges_touching(
-        session, workflow_id=workflow.id, task_id=task.id
-    )
-    task.removed_at = datetime.now(UTC)
-    await transition_task(
-        session,
-        workflow,
-        task,
-        T.CANCELLED,
-        actor=Actor.USER,
-        reason="removed from plan",
-        event_type=WorkflowEventType.TASK_REMOVED,
-        extra={"removed_dependency_edges": removed_edges},
-        reconcile=False,
-    )
+    await _remove_from_plan(session, workflow, task, reason="removed from plan")
     workflow.revision += 1
     await session.commit()
 
@@ -408,3 +437,116 @@ async def cancel_task(
     await transition_task(session, workflow, task, T.CANCELLED, actor=Actor.USER, reason=reason)
     await session.commit()
     return task
+
+
+async def confirm_plan_draft(
+    session: AsyncSession,
+    access: WorkspaceAccess,
+    workflow_id: uuid.UUID,
+    version: int,
+    *,
+    revision: int,
+    existing_tasks: ExistingTasksMode | None,
+    acknowledge_warnings: bool,
+) -> Workflow:
+    """Turns a plan draft into the workflow's tasks and dependencies (Step 2.5, ADR-0017).
+
+    One transaction under the workflow lock and the caller's `revision`. Drafts with errors are
+    refused; warnings must be acknowledged. Existing tasks are replaced (kept as removed
+    history) or kept alongside, as the user chooses. Like any plan edit, confirming in
+    AWAITING_APPROVAL or READY sends the workflow back to PLANNING.
+    """
+    workflow = await lock_for_change(session, access, workflow_id, revision)
+    draft = await repository.get_plan_draft(session, workflow, version)
+    if draft is None:
+        raise PlanDraftNotFoundError()
+    proposal = PlanProposal.model_validate(draft.plan)
+    skills = await agents_repository.active_capabilities(session, workspace_id=access.workspace_id)
+    report = analyse_plan(
+        proposal.tasks, max_parallel_tasks=workflow.max_parallel_tasks, available_skills=skills
+    )
+    if report.has_errors:
+        raise PlanDraftInvalidError(details={"codes": [i.code for i in report.issues]})
+    warnings = sorted({i.code for i in report.issues if i.severity == "warning"})
+    if warnings and not acknowledge_warnings:
+        raise PlanWarningsNotAcknowledgedError(details={"codes": warnings})
+    active = [t for t in await repository.list_tasks(session, workflow) if t.removed_at is None]
+    if active and existing_tasks is None:
+        raise ExistingTasksModeRequiredError(details={"existing_tasks": len(active)})
+
+    await _open_plan_for_edit(session, workflow)
+    removed = 0
+    if active and existing_tasks == "replace":
+        for task in active:
+            await _remove_from_plan(session, workflow, task, reason="replaced by plan draft")
+            removed += 1
+    total = await repository.count_tasks(session, workflow.id) + len(proposal.tasks)
+    if total > MAX_TASKS_PER_WORKFLOW:
+        raise PlanLimitError(f"A workflow may have at most {MAX_TASKS_PER_WORKFLOW} tasks.")
+
+    ids: dict[str, uuid.UUID] = {}
+    for planned in proposal.tasks:
+        task = WorkflowTask(
+            id=uuid.uuid4(),
+            workspace_id=workflow.workspace_id,
+            workflow_id=workflow.id,
+            title=planned.title,
+            description=planned.description,
+            required_skills=list(planned.required_skills),
+            input_references=[],
+            expected_output_schema=None,
+            acceptance_criteria=[c.model_dump() for c in planned.acceptance_criteria],
+            priority=planned.priority,
+            required=planned.required,
+            status=T.PENDING,
+            revision=1,
+        )
+        session.add(task)
+        ids[planned.key] = task.id
+    await session.flush()
+    for planned in proposal.tasks:
+        record_event(
+            session,
+            workflow,
+            WorkflowEventType.TASK_CREATED,
+            task_id=ids[planned.key],
+            payload={
+                "actor": Actor.USER.value,
+                "user_id": str(access.user_id),
+                "plan_version": version,
+                "plan_task_key": planned.key,
+            },
+        )
+    # New tasks depend only on new tasks, and drafts are acyclic, so no cycle can form.
+    for planned in proposal.tasks:
+        for key in planned.depends_on:
+            session.add(
+                TaskDependency(
+                    task_id=ids[planned.key], depends_on_task_id=ids[key], workflow_id=workflow.id
+                )
+            )
+            record_event(
+                session,
+                workflow,
+                WorkflowEventType.DEPENDENCY_ADDED,
+                task_id=ids[planned.key],
+                payload={"depends_on_task_id": str(ids[key])},
+            )
+    workflow.confirmed_plan_version = version
+    record_event(
+        session,
+        workflow,
+        WorkflowEventType.PLAN_CONFIRMED,
+        payload={
+            "actor": Actor.USER.value,
+            "user_id": str(access.user_id),
+            "version": version,
+            "existing_tasks": existing_tasks,
+            "tasks_created": len(proposal.tasks),
+            "tasks_removed": removed,
+            "acknowledged_warnings": warnings,
+        },
+    )
+    workflow.revision += 1
+    await session.commit()
+    return workflow

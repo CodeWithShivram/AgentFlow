@@ -120,6 +120,8 @@ class WorkflowEventType(StrEnum):
     PLAN_REQUESTED = "PLAN_REQUESTED"
     PLAN_GENERATED = "PLAN_GENERATED"
     PLAN_GENERATION_FAILED = "PLAN_GENERATION_FAILED"
+    # Added in Step 2.5: a draft became the workflow's tasks.
+    PLAN_CONFIRMED = "PLAN_CONFIRMED"
 
 
 class Workflow(Base):
@@ -157,6 +159,8 @@ class Workflow(Base):
     )
     # The outbox event of the current plan-generation request.
     plan_request_id: Mapped[uuid.UUID | None]
+    # The draft version most recently confirmed into tasks (Step 2.5).
+    confirmed_plan_version: Mapped[int | None]
     status: Mapped[WorkflowStatus] = mapped_column(
         str_enum(WorkflowStatus, "status"), default=WorkflowStatus.PENDING
     )

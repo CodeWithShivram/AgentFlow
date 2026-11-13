@@ -301,6 +301,7 @@ export interface Workflow {
   analysis_status: AnalysisStatus;
   normalized_requirements: PromptAnalysis | null;
   plan_status: PlanStatus;
+  confirmed_plan_version: number | null;
   autonomy_policy: AutonomyPolicy;
   budget_limit: string | null;
   currency: string;

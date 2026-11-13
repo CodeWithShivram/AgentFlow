@@ -131,8 +131,8 @@ The UI states each of these where it applies; none is faked.
 | 2.1 | Model gateway abstraction and mock model adapter | DONE (ADR-0013) — `d2aef8f` |
 | 2.2 | Structured prompt analysis (requirements/constraints) | DONE (ADR-0014) — `8dffe47` |
 | 2.3 | Planner output schema, task decomposition, acceptance criteria | DONE (ADR-0015) — `f1d8476` |
-| 2.4 | DAG validation and plan preview API | DONE (ADR-0016) — see `progress.md` |
-| 2.5 | User plan confirmation before execution | NOT_STARTED |
+| 2.4 | DAG validation and plan preview API | DONE (ADR-0016) — `8389c82` |
+| 2.5 | User plan confirmation before execution | DONE (ADR-0017) — see `progress.md` |
 
 Acceptance (phase): deterministic tests with mock model responses; invalid plans/cycles rejected; plan visible before execution.
 

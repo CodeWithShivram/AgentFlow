@@ -20,6 +20,7 @@ from app.schemas.workflows import (
     EventPage,
     ExecutionList,
     ExecutionResponse,
+    PlanConfirmRequest,
     PlanDraftList,
     PlanDraftPreview,
     PlanDraftSummary,
@@ -185,6 +186,28 @@ async def preview_plan_draft(
             for i in report.issues
         ],
     )
+
+
+@router.post("/{workflow_id}/plan-drafts/{version}/confirm")
+async def confirm_plan_draft(
+    workflow_id: uuid.UUID,
+    version: Annotated[int, Path(ge=1)],
+    body: PlanConfirmRequest,
+    access: Member,
+    session: DbSession,
+) -> WorkflowResponse:
+    """Turns a plan draft into the workflow's tasks and dependencies (Step 2.5). Requires the
+    workflow's `revision`; drafts with errors are refused and warnings must be acknowledged."""
+    workflow = await task_service.confirm_plan_draft(
+        session,
+        access,
+        workflow_id,
+        version,
+        revision=body.revision,
+        existing_tasks=body.existing_tasks,
+        acknowledge_warnings=body.acknowledge_warnings,
+    )
+    return service.workflow_response(workflow)
 
 
 @router.post("/{workflow_id}/plan-drafts")

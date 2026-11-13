@@ -3,7 +3,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { PlanDraftPreview as Preview, PlannedTask, Workflow } from "@/lib/api/types";
+import type { PlanDraftPreview as Preview, PlannedTask, Workflow, WorkspaceRole } from "@/lib/api/types";
 import { createQueryClient } from "@/lib/query-client";
 import { WorkspaceProvider } from "@/lib/workspace";
 
@@ -42,8 +42,10 @@ function preview(overrides: Partial<Preview> = {}): Preview {
 }
 
 function stub(draft: Preview) {
-  const fetchMock = vi.fn(async (input: string) => {
-    const body = input.endsWith("/plan-drafts")
+  const fetchMock = vi.fn<(input: string, init?: RequestInit) => Promise<Response>>(async (input) => {
+    const body = input.endsWith("/confirm")
+      ? { id: "wf-1", status: "PLANNING", plan_status: "READY", revision: 8, confirmed_plan_version: draft.version }
+      : input.endsWith("/plan-drafts")
       ? { items: [{ ...draft, plan: undefined }, { version: 1, task_count: 1, prompt_version: "v", created_at: draft.created_at }] }
       : draft;
     return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
@@ -52,11 +54,23 @@ function stub(draft: Preview) {
   return fetchMock;
 }
 
-function renderPreview(wf: Partial<Workflow> = {}) {
+const onConfirmed = vi.fn();
+
+function renderPreview(
+  wf: Partial<Workflow> = {},
+  { role = "MEMBER", existingTaskCount = 0 }: { role?: WorkspaceRole; existingTaskCount?: number } = {},
+) {
   return render(
     <QueryClientProvider client={createQueryClient()}>
-      <WorkspaceProvider value={{ id: "ws-1", name: "W", role: "MEMBER" }}>
-        <PlanDraftPreview workflow={{ id: "wf-1", status: "PLANNING", plan_status: "READY", ...wf } as Workflow} />
+      <WorkspaceProvider value={{ id: "ws-1", name: "W", role }}>
+        <PlanDraftPreview
+          workflow={
+            { id: "wf-1", status: "PLANNING", plan_status: "READY", revision: 7, confirmed_plan_version: null, ...wf } as Workflow
+          }
+          existingTaskCount={existingTaskCount}
+          onConfirmed={onConfirmed}
+          onConflict={() => undefined}
+        />
       </WorkspaceProvider>
     </QueryClientProvider>,
   );
@@ -110,5 +124,55 @@ describe("PlanDraftPreview", () => {
   it("explains when no draft exists yet", () => {
     renderPreview({ plan_status: "NOT_REQUESTED" });
     expect(screen.getByText("No plan draft yet")).toBeInTheDocument();
+  });
+});
+
+describe("Confirming a draft", () => {
+  const WARNED = preview({
+    issues: [{ code: "SKILL_NOT_AVAILABLE", severity: "warning", message: "No active agent has research.", task_keys: ["t1"] }],
+  });
+
+  it("requires acknowledging warnings and choosing what happens to existing tasks", async () => {
+    document.cookie = "agentflow_csrf=t-1";
+    const fetchMock = stub(WARNED);
+    renderPreview({}, { existingTaskCount: 2 });
+
+    await userEvent.click(await screen.findByRole("button", { name: "Confirm this draft" }, LOAD));
+    const dialog = screen.getByRole("dialog", { name: "Confirm draft version 2" });
+    const confirm = within(dialog).getByRole("button", { name: "Confirm plan" });
+    expect(confirm).toBeDisabled();
+    expect(within(dialog).getByText("The workflow already has 2 tasks")).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByLabelText(/Add the draft alongside/));
+    await userEvent.click(within(dialog).getByRole("checkbox"));
+    await userEvent.click(confirm);
+
+    await vi.waitFor(() => expect(onConfirmed).toHaveBeenCalled());
+    const call = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/plan-drafts/2/confirm"));
+    expect(call).toBeDefined();
+    expect(JSON.parse(String(call?.[1]?.body))).toEqual({
+      revision: 7,
+      existing_tasks: "append",
+      acknowledge_warnings: true,
+    });
+  });
+
+  it("is not offered to viewers or for drafts with errors", async () => {
+    stub(preview());
+    const { unmount } = renderPreview({}, { role: "VIEWER" });
+    await screen.findByRole("region", { name: "Draft stage 1" }, LOAD);
+    expect(screen.queryByRole("button", { name: "Confirm this draft" })).not.toBeInTheDocument();
+    unmount();
+
+    stub(preview({ issues: [{ code: "DEPENDENCY_CYCLE", severity: "error", message: "Cycle.", task_keys: ["t1"] }] }));
+    renderPreview();
+    await screen.findByText("This draft cannot be used", {}, LOAD);
+    expect(screen.queryByRole("button", { name: "Confirm this draft" })).not.toBeInTheDocument();
+  });
+
+  it("marks the confirmed version", async () => {
+    stub(preview());
+    renderPreview({ confirmed_plan_version: 2 });
+    expect(await screen.findByText("Confirmed", {}, LOAD)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Confirm again" })).toBeInTheDocument();
   });
 });

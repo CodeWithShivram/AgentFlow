@@ -8,6 +8,7 @@ import { RelativeTime } from "@/components/common/relative-time";
 import { EmptyState, ErrorState, ListSkeleton } from "@/components/common/states";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -19,15 +20,25 @@ import {
 import { api } from "@/lib/api";
 import type { PlanDraftPreview as Preview, PlannedTask, Workflow } from "@/lib/api/types";
 import { humanize } from "@/lib/format";
-import { useWorkspace } from "@/lib/workspace";
+import { useCan, useWorkspace } from "@/lib/workspace";
 
+import { ConfirmPlanDialog } from "./confirm-plan-dialog";
+import { PLAN_EDITABLE } from "./status";
 import { workflowKeys } from "./use-workflow";
 
 /**
- * Full preview of a plan draft with its DAG validation (Step 2.4). Read-only: confirming a draft
- * into tasks is Step 2.5. All model-generated text is rendered as plain text.
+ * Full preview of a plan draft with its DAG validation (Step 2.4), from which members confirm a
+ * draft into tasks (Step 2.5). All model-generated text is rendered as plain text.
  */
-export function PlanDraftPreview({ workflow }: { workflow: Workflow }) {
+interface PlanDraftPreviewProps {
+  workflow: Workflow;
+  existingTaskCount: number;
+  onConfirmed(): void;
+  onConflict(error: unknown): void;
+}
+
+export function PlanDraftPreview({ workflow, existingTaskCount, onConfirmed, onConflict }: PlanDraftPreviewProps) {
+  const canConfirm = useCan("MEMBER") && PLAN_EDITABLE.has(workflow.status);
   const workspace = useWorkspace();
   const [chosen, setChosen] = useState<number | null>(null);
   const drafts = useQuery({
@@ -94,13 +105,31 @@ export function PlanDraftPreview({ workflow }: { workflow: Workflow }) {
       ) : preview.isError ? (
         <ErrorState error={preview.error} onRetry={() => void preview.refetch()} />
       ) : (
-        <DraftView preview={preview.data} />
+        <DraftView
+          preview={preview.data}
+          workflow={workflow}
+          canConfirm={canConfirm}
+          existingTaskCount={existingTaskCount}
+          onConfirmed={onConfirmed}
+          onConflict={onConflict}
+        />
       )}
     </div>
   );
 }
 
-function DraftView({ preview }: { preview: Preview }) {
+interface DraftViewProps {
+  preview: Preview;
+  workflow: Workflow;
+  canConfirm: boolean;
+  existingTaskCount: number;
+  onConfirmed(): void;
+  onConflict(error: unknown): void;
+}
+
+function DraftView({ preview, workflow, canConfirm, existingTaskCount, onConfirmed, onConflict }: DraftViewProps) {
+  const [confirming, setConfirming] = useState(false);
+  const confirmed = workflow.confirmed_plan_version === preview.version;
   const byKey = new Map(preview.plan.tasks.map((t) => [t.key, t]));
   const errors = preview.issues.filter((i) => i.severity === "error");
   const warnings = preview.issues.filter((i) => i.severity === "warning");
@@ -108,12 +137,31 @@ function DraftView({ preview }: { preview: Preview }) {
 
   return (
     <div className="space-y-4">
-      <p className="text-sm">
-        <span className="font-medium">{preview.plan.summary}</span>{" "}
-        <span className="text-muted-foreground">
-          · Version {preview.version}, generated <RelativeTime value={preview.created_at} />
-        </span>
-      </p>
+      <div className="flex flex-wrap items-center gap-3">
+        <p className="min-w-0 flex-1 text-sm">
+          <span className="font-medium">{preview.plan.summary}</span>{" "}
+          <span className="text-muted-foreground">
+            · Version {preview.version}, generated <RelativeTime value={preview.created_at} />
+          </span>
+          {confirmed ? (
+            <Badge variant="secondary" className="ml-2">
+              Confirmed
+            </Badge>
+          ) : null}
+        </p>
+        {canConfirm && errors.length === 0 ? (
+          <Button onClick={() => setConfirming(true)}>{confirmed ? "Confirm again" : "Confirm this draft"}</Button>
+        ) : null}
+      </div>
+      <ConfirmPlanDialog
+        open={confirming}
+        onOpenChange={setConfirming}
+        workflow={workflow}
+        preview={preview}
+        existingTaskCount={existingTaskCount}
+        onConfirmed={onConfirmed}
+        onConflict={onConflict}
+      />
 
       {errors.length > 0 ? (
         <Alert variant="destructive">

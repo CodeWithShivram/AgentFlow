@@ -142,6 +142,18 @@ class DependencyRequest(BaseModel):
     depends_on_task_id: uuid.UUID
 
 
+class PlanConfirmRequest(BaseModel):
+    """Confirms a plan draft into tasks (Step 2.5)."""
+
+    model_config = _FORBID
+
+    revision: int = Field(ge=1)
+    # Required when the workflow already has tasks: replace them, or add the draft alongside.
+    existing_tasks: Literal["replace", "append"] | None = None
+    # Required when the draft has warnings.
+    acknowledge_warnings: bool = False
+
+
 class AssignRequest(BaseModel):
     model_config = _FORBID
 
@@ -163,6 +175,8 @@ class WorkflowResponse(BaseModel):
     normalized_requirements: dict[str, Any] | None
     # Plan generation (Step 2.3); drafts are listed at /plan-drafts.
     plan_status: PlanStatus
+    # The draft version last confirmed into tasks (Step 2.5).
+    confirmed_plan_version: int | None
     autonomy_policy: AutonomyPolicy
     budget_limit: Decimal | None
     currency: str

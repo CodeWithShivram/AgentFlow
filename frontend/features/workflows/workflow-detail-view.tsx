@@ -160,7 +160,12 @@ export function WorkflowDetailView() {
         </TabsContent>
 
         <TabsContent value="plan" className="pt-2">
-          <PlanDraftPreview workflow={wf} />
+          <PlanDraftPreview
+            workflow={wf}
+            existingTaskCount={activeTasks.length}
+            onConfirmed={() => setTab("tasks")}
+            onConflict={errors.handle}
+          />
         </TabsContent>
 
         <TabsContent value="graph" className="pt-2">

@@ -52,7 +52,12 @@ test("journey 7: plan tasks with dependencies", async ({ browser }) => {
   const draftStage = page.getByRole("region", { name: "Draft stage 1" });
   await expect(draftStage.getByText("Write a market report", { exact: true })).toBeVisible();
   await expect(page.getByRole("tabpanel", { name: /Plan draft/ }).getByText("No problems found.")).toBeVisible();
-  await page.getByRole("tab", { name: /Tasks/ }).click();
+  // Step 2.5: confirming the draft creates its task; the page switches to the Tasks tab.
+  await page.getByRole("button", { name: "Confirm this draft" }).click();
+  const confirmDialog = page.getByRole("dialog", { name: "Confirm draft version 1" });
+  await confirmDialog.getByRole("button", { name: "Confirm plan" }).click();
+  await expect(confirmDialog).toBeHidden();
+  await expect(page.getByRole("heading", { level: 3, name: "Write a market report" })).toBeVisible();
 
   await addTask(page, "Collect sources");
   await addTask(page, "Draft report", ["Collect sources"]);

@@ -65,7 +65,9 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   outbox payloads and events carry identifiers and counts, never prompt text. Analysis and plan drafts never bump
   `revision`; drafts (`workflow_plans`, ADR-0015) are immutable versions and only become tasks on confirmation (2.5).
   Plan schema and DAG checks live in `app/planning/schema.py` and `dag.py` (ADR-0016), which import no gateway code,
-  so the API may use them; drafts are always acyclic.
+  so the API may use them; drafts are always acyclic. Confirming a draft (ADR-0017, `tasks.confirm_plan_draft`) is a plan
+  edit under the workflow lock and revision: errors block, warnings need acknowledgement, existing tasks are replaced
+  (removed as history) or appended by explicit choice; it never starts work.
 - Workflow events are append-only.
 
 ## Security
