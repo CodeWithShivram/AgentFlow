@@ -12,17 +12,20 @@ from typing import final
 
 from app.agents.contract import TaskContract, ValidationResult, validate_submission
 from app.schemas.agents import AgentConfiguration
+from app.tools.gateway import ToolGateway
 
 
 @dataclass(frozen=True)
 class AgentContext:
-    """Runtime identifiers for tracing and usage records; not instructions."""
+    """Runtime identifiers for tracing and usage records, and the only way to call tools."""
 
     execution_id: uuid.UUID
     dispatch_event_id: uuid.UUID
     agent_id: uuid.UUID
     agent_version_id: uuid.UUID
     agent_version: int
+    # Enforces the contract's allowed tools on every call (ADR-0019).
+    tools: ToolGateway
 
 
 @dataclass(frozen=True)

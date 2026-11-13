@@ -16,6 +16,8 @@ from app.agents.contract import (
 from app.agents.mock import MockAgent
 from app.execution import runner
 from app.schemas.agents import AgentConfiguration
+from app.tools.gateway import InvocationRecord, ToolGateway
+from app.tools.registry import ToolCallContext
 
 CONFIG: dict[str, Any] = {
     "schema_version": 1,
@@ -53,6 +55,10 @@ def _claim(**changes: Any) -> runner.Claim:
     return runner.Claim(**{**values, **changes})
 
 
+def _no_records(record: InvocationRecord) -> uuid.UUID:
+    raise AssertionError("the mock agent calls no tools")
+
+
 def _contract(**changes: Any) -> TaskContract:
     return runner.build_contract(_claim(**changes), AgentConfiguration.model_validate(CONFIG))
 
@@ -68,10 +74,11 @@ def _submission(**changes: Any) -> dict[str, Any]:
     }
 
 
-def test_contract_grants_only_enabled_tools_and_caps_the_timeout() -> None:
+def test_contract_grants_no_tools_until_they_are_implemented_and_caps_the_timeout() -> None:
     contract = _contract()
+    # web_search is granted and enabled, but has no implementation yet (ADR-0019);
     # python_analysis is granted but code execution is disabled on the platform.
-    assert contract.allowed_tools == ["web_search"]
+    assert contract.allowed_tools == []
     assert contract.timeout_seconds == runner.AGENT_TIME_LIMIT_SECONDS
     assert contract.token_budget == 5000
     assert contract.retry_policy.max_attempts == runner.MAX_ATTEMPTS_PER_TASK
@@ -136,6 +143,13 @@ def test_the_mock_agent_returns_a_valid_deterministic_submission() -> None:
         agent_id=claim.agent_id,
         agent_version_id=claim.agent_version_id,
         agent_version=claim.agent_version,
+        tools=ToolGateway(
+            ToolCallContext(
+                claim.workspace_id, claim.workflow_id, claim.task_id, claim.execution_id
+            ),
+            contract.allowed_tools,
+            _no_records,
+        ),
     )
 
     first = agent.execute(contract, context)
@@ -143,7 +157,7 @@ def test_the_mock_agent_returns_a_valid_deterministic_submission() -> None:
     assert agent.validate_output(contract, first).valid
     assert first.summary == "Mock result for task 'Compare vendors' (agent version 3, attempt 2)."
     assert first.outputs == {"Comparison table": "Mock content for: Comparison table"}
-    assert runner.run_agent(claim) == first
+    assert runner.run_agent(claim, record_tool_call=_no_records) == first
 
     capabilities = agent.get_capabilities()
     assert capabilities.capabilities == {"research", "evidence_summary"}

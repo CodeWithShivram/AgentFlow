@@ -45,6 +45,7 @@ function execution(overrides: Partial<Execution> = {}): Execution {
       limitations: ["Prices are list prices."],
       open_questions: ["Which region?"],
     },
+    tool_invocations: [],
     ...overrides,
   };
 }

@@ -22,6 +22,8 @@ from app.models.execution import (
     InboxMessage,
     OutboxEvent,
     OutboxStatus,
+    ToolInvocation,
+    ToolInvocationStatus,
 )
 from app.models.idempotency import IdempotencyKey, IdempotencyStatus
 from app.models.plan import WorkflowPlan
@@ -66,6 +68,8 @@ __all__ = [
     "SessionRevocationReason",
     "TaskDependency",
     "TaskStatus",
+    "ToolInvocation",
+    "ToolInvocationStatus",
     "User",
     "Workflow",
     "WorkflowEvent",

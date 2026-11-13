@@ -29,6 +29,15 @@ class SecurityClassification(StrEnum):
     INTERNAL = "INTERNAL"
 
 
+class ToolGrant(BaseModel):
+    """A tool this attempt may call through the tool gateway, with the access it was granted."""
+
+    model_config = _STRICT
+
+    tool: str
+    access: Literal["read", "write"]
+
+
 class RetryPolicy(BaseModel):
     model_config = _STRICT
 
@@ -55,8 +64,9 @@ class TaskContract(BaseModel):
     acceptance_criteria: list[AcceptanceCriterion]
     # The tasks this one depends on; all are COMPLETED before it is dispatched.
     dependencies: list[uuid.UUID]
-    # Granted to the agent version and enabled on the platform. Enforcement is Step 3.2.
-    allowed_tools: list[str]
+    # Granted to the agent version, enabled and implemented on the platform, with enough access.
+    # The tool gateway enforces this list on every call (ADR-0019).
+    allowed_tools: list[ToolGrant]
     timeout_seconds: int
     token_budget: int | None
     retry_policy: RetryPolicy

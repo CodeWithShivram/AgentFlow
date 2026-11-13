@@ -254,6 +254,8 @@ Workflow tasks are executed by Celery workers, fed through a transactional outbo
 
 **Agent contract** ([ADR-0018](docs/ADR/0018-agent-contract-and-submissions.md)). Each attempt gives the agent a task contract: objective, inputs, deliverables, acceptance criteria, dependencies, allowed tools, timeout and retry policy. The agent returns a structured submission: a summary, outputs, one claim per criterion, assumptions, limitations and open questions. Output that fails validation counts as a failed attempt. A valid submission is stored with the attempt and shown in the task's execution history. The agent's claims are not verified yet, so the task waits as Submitted.
 
+**Tool gateway** ([ADR-0019](docs/ADR/0019-tool-registry-and-gateway.md)). Agents reach tools only through a server-side gateway. It checks each call against the tools the agent version was granted, the access each tool needs and a limit of 50 calls per attempt. It validates arguments and results, and records every call with a hash of its arguments. Calling a tool outside the contract fails the attempt. No tool is implemented yet: file and artifact tools wait for artifact storage, web search for a provider, and code execution stays disabled.
+
 One-time setup, after `alembic upgrade head`: set `WORKER_DB_PASSWORD` (and `API_DB_PASSWORD`) in `.env`, then run `uv run python -m app.db.roles provision`. Re-run the provisioning after future migrations.
 
 Run each in its own terminal from `backend/`, with the infrastructure up:

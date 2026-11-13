@@ -494,6 +494,10 @@ def test_execution_history_lists_attempts_with_agent_versions(
 ) -> None:
     from app.db.sync_session import session_scope
     from app.execution import runner
+    from app.models import ToolInvocationStatus
+    from app.services.usage import record_tool_invocation
+    from app.tools.gateway import InvocationRecord
+    from app.tools.registry import ToolCallContext
 
     task = add_task(
         owner,
@@ -533,6 +537,19 @@ def test_execution_history_lists_attempts_with_agent_versions(
     assert isinstance(claim, runner.Claim)
     with session_scope(worker_factory) as s:
         runner.finish(s, claim, runner.run_agent(claim))
+    record_tool_invocation(
+        worker_factory,
+        InvocationRecord(
+            context=ToolCallContext(
+                claim.workspace_id, claim.workflow_id, claim.task_id, claim.execution_id
+            ),
+            tool_name="web_search",
+            status=ToolInvocationStatus.DENIED,
+            error_code="TOOL_PERMISSION_DENIED",
+            duration_ms=3,
+            input_hash="a" * 64,
+        ),
+    )
 
     (attempt,) = owner.get(url).json()["items"]
 
@@ -543,6 +560,20 @@ def test_execution_history_lists_attempts_with_agent_versions(
     assert submission["summary"] == attempt["result_summary"]
     assert submission["outputs"] == {"Report draft": "Mock content for: Report draft"}
     assert [(c["criterion_id"], c["status"]) for c in submission["criteria"]] == [("c1", "MET")]
+    (call,) = attempt["tool_invocations"]
+    assert call["tool_name"] == "web_search" and call["status"] == "DENIED"
+    assert call["error_code"] == "TOOL_PERMISSION_DENIED" and call["duration_ms"] == 3
+    assert call["input_hash"] == "a" * 64 and call["output_reference"] is None
+    assert set(call) == {
+        "id",
+        "tool_name",
+        "status",
+        "error_code",
+        "duration_ms",
+        "input_hash",
+        "output_reference",
+        "created_at",
+    }
     assert task_of(owner, workspace, workflow, task["id"])["status"] == "SUBMITTED"
 
 

@@ -22,6 +22,7 @@ from app.models import (
     ExecutionStatus,
     PlanStatus,
     TaskStatus,
+    ToolInvocationStatus,
     WorkflowEventType,
     WorkflowStatus,
 )
@@ -232,6 +233,19 @@ class WorkflowEventResponse(BaseModel):
     created_at: datetime
 
 
+class ToolInvocationResponse(BaseModel):
+    """One tool gateway call (ADR-0019). Metadata only: no arguments or output."""
+
+    id: uuid.UUID
+    tool_name: str
+    status: ToolInvocationStatus
+    error_code: str | None
+    duration_ms: int
+    input_hash: str
+    output_reference: str | None
+    created_at: datetime
+
+
 class ExecutionResponse(BaseModel):
     """One attempt of a task. Error and result text are short, safe summaries."""
 
@@ -249,6 +263,8 @@ class ExecutionResponse(BaseModel):
     result_summary: str | None
     # The validated AgentSubmission (ADR-0018); its criterion claims are unverified.
     submission: dict[str, Any] | None
+    # Tool calls of this attempt, oldest first (ADR-0019).
+    tool_invocations: list[ToolInvocationResponse]
 
 
 class ExecutionList(BaseModel):

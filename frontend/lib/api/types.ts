@@ -386,6 +386,21 @@ export interface Execution {
   error_summary: string | null;
   result_summary: string | null;
   submission: AgentSubmission | null;
+  tool_invocations: ToolInvocation[];
+}
+
+export type ToolInvocationStatus = "SUCCEEDED" | "DENIED" | "FAILED";
+
+/** One tool gateway call (ADR-0019): metadata only, never arguments or output. */
+export interface ToolInvocation {
+  id: Uuid;
+  tool_name: string;
+  status: ToolInvocationStatus;
+  error_code: string | null;
+  duration_ms: number;
+  input_hash: string;
+  output_reference: string | null;
+  created_at: IsoDateTime;
 }
 
 /** The agent's own claim about one acceptance criterion; platform verification checks it. */

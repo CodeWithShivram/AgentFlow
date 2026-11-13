@@ -12,6 +12,7 @@ from app.db.sync_session import get_worker_session_factory, session_scope
 from app.execution import cleanup, outbox, relay, runner
 from app.llm.gateway import get_model_gateway
 from app.planning import analysis, plan
+from app.tools.gateway import ToolError
 from app.worker.celery_app import EXECUTION_QUEUE, celery_app, settings
 
 logger = logging.getLogger("agentflow.worker")
@@ -95,6 +96,8 @@ def execute_task(
         result = runner.Failure("EXECUTION_TIMED_OUT", "The agent exceeded its time limit.", True)
     except runner.InvalidSubmissionError as exc:  # only issue codes; never the agent's output
         result = runner.Failure("INVALID_SUBMISSION", f"Invalid submission: {exc}")
+    except ToolError as exc:  # a tool policy violation, or a tool error the agent did not handle
+        result = runner.Failure(exc.code, exc.message)
     except Exception as exc:  # the agent failed; record it instead of losing the attempt
         result = runner.Failure("EXECUTION_FAILED", f"{type(exc).__name__}")
 

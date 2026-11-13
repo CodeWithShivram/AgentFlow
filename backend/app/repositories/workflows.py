@@ -11,6 +11,7 @@ from app.models import (
     AgentExecution,
     AgentVersion,
     TaskDependency,
+    ToolInvocation,
     Workflow,
     WorkflowEvent,
     WorkflowPlan,
@@ -182,6 +183,22 @@ async def list_executions(
         .order_by(AgentExecution.attempt_number)
     )
     return [(row[0], row[1]) for row in rows]
+
+
+async def list_tool_invocations(
+    session: AsyncSession, workflow: Workflow, task_id: uuid.UUID
+) -> list[ToolInvocation]:
+    """Tool calls of every attempt of one task, oldest first."""
+    rows = await session.execute(
+        select(ToolInvocation)
+        .where(
+            ToolInvocation.task_id == task_id,
+            ToolInvocation.workflow_id == workflow.id,
+            ToolInvocation.workspace_id == workflow.workspace_id,
+        )
+        .order_by(ToolInvocation.created_at, ToolInvocation.id)
+    )
+    return list(rows.scalars())
 
 
 async def list_plan_drafts(session: AsyncSession, workflow: Workflow) -> list[WorkflowPlan]:

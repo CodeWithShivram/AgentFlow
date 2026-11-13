@@ -60,6 +60,11 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   must parse as `AgentSubmission` with exactly one claim per acceptance criterion (`validate_output` is platform-owned
   and `@final`); invalid output is a failed attempt (`INVALID_SUBMISSION`). Submissions are stored per attempt in
   `agent_executions.submission`; criterion claims are unverified. Never put parser or agent text in error summaries.
+- Tools (ADR-0019): agents call tools only via `context.tools.invoke(...)` (`app/tools/gateway.py`). A tool needs a
+  `ToolDefinition` with an implementation in `app/tools/registry.py` (strict argument/result models) plus catalog policy;
+  contracts list only usable grants. Calls outside the contract or over 50 per attempt are violations that fail the
+  attempt even if the agent catches them. Each call writes a `tool_invocations` row (own transaction) with an argument
+  hash only, never arguments or output. Handlers scope everything to their `ToolCallContext`; errors use fixed messages.
 - All LLM calls go through `app/llm/gateway.py` (`get_model_gateway().complete(...)`, ADR-0013), in workers only; the
   API never calls a model. Each call writes an `llm_usage` row (its own transaction) with provider-reported usage; costs
   stay NULL until Phase 7 pricing. Validate structured output with a Pydantic `response_format`; never log prompts or

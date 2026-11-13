@@ -16,6 +16,7 @@ An execution is three bounded steps; no transaction stays open while the agent w
 
 import logging
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -25,9 +26,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.agents.base import AgentContext, BaseAgent
-from app.agents.catalog import TOOLS
 from app.agents.contract import AgentSubmission, RetryPolicy, TaskContract
 from app.agents.mock import MockAgent
+from app.db.sync_session import get_worker_session_factory
 from app.execution import outbox
 from app.models import (
     AgentExecution,
@@ -40,6 +41,9 @@ from app.models import (
     WorkflowTask,
 )
 from app.schemas.agents import AgentConfiguration
+from app.services.usage import record_tool_invocation
+from app.tools.gateway import InvocationRecord, InvocationRecorder, ToolGateway
+from app.tools.registry import REGISTRY, ToolCallContext, ToolDefinition, usable_grants
 from app.workflows import engine
 from app.workflows.state_machine import Actor
 
@@ -213,7 +217,11 @@ def claim(
     return claimed
 
 
-def build_contract(claim: Claim, configuration: AgentConfiguration) -> TaskContract:
+def build_contract(
+    claim: Claim,
+    configuration: AgentConfiguration,
+    registry: Mapping[str, ToolDefinition] = REGISTRY,
+) -> TaskContract:
     """The contract for this attempt (handoff section 5.3), built only from platform data."""
     return TaskContract.model_validate(
         {
@@ -228,10 +236,7 @@ def build_contract(claim: Claim, configuration: AgentConfiguration) -> TaskContr
             "output_schema": claim.output_schema,
             "acceptance_criteria": claim.acceptance_criteria,
             "dependencies": claim.dependencies,
-            # Tools granted to the version that the platform currently enables.
-            "allowed_tools": [
-                name for name in configuration.tool_names() if TOOLS[name].available_in_phase_1
-            ],
+            "allowed_tools": usable_grants(configuration, registry),
             "timeout_seconds": min(configuration.limits.timeout_seconds, AGENT_TIME_LIMIT_SECONDS),
             "token_budget": configuration.limits.max_tokens_per_task,
             "retry_policy": RetryPolicy(
@@ -241,21 +246,53 @@ def build_contract(claim: Claim, configuration: AgentConfiguration) -> TaskContr
     )
 
 
-def run_agent(claim: Claim, agent_type: type[BaseAgent] = MockAgent) -> AgentSubmission:
+def _record_tool_call(record: InvocationRecord) -> uuid.UUID:
+    return record_tool_invocation(get_worker_session_factory(), record)
+
+
+def run_agent(
+    claim: Claim,
+    agent_type: type[BaseAgent] = MockAgent,
+    *,
+    registry: Mapping[str, ToolDefinition] = REGISTRY,
+    record_tool_call: InvocationRecorder = _record_tool_call,
+) -> AgentSubmission:
     """Runs one attempt outside any transaction. Every version runs the harmless `MockAgent`
-    until the specialist agents exist (Step 3.4). Raises `InvalidSubmissionError` when the
-    output fails validation."""
+    until the specialist agents exist (Step 3.4).
+
+    Raises `InvalidSubmissionError` when the output fails validation, and the attempt's first
+    tool policy violation (a `ToolError`) even if the agent caught it (ADR-0019)."""
     configuration = AgentConfiguration.model_validate(claim.configuration)
-    contract = build_contract(claim, configuration)
+    contract = build_contract(claim, configuration, registry)
     agent = agent_type(configuration)
+    tools = ToolGateway(
+        ToolCallContext(
+            workspace_id=claim.workspace_id,
+            workflow_id=claim.workflow_id,
+            task_id=claim.task_id,
+            execution_id=claim.execution_id,
+        ),
+        contract.allowed_tools,
+        record_tool_call,
+        registry=registry,
+    )
     context = AgentContext(
         execution_id=claim.execution_id,
         dispatch_event_id=claim.dispatch_event_id,
         agent_id=claim.agent_id,
         agent_version_id=claim.agent_version_id,
         agent_version=claim.agent_version,
+        tools=tools,
     )
-    validation = agent.validate_output(contract, agent.execute(contract, context))
+    try:
+        result = agent.execute(contract, context)
+    except Exception:
+        if tools.violation is not None:
+            raise tools.violation from None
+        raise
+    if tools.violation is not None:
+        raise tools.violation
+    validation = agent.validate_output(contract, result)
     if validation.submission is None or validation.issues:
         raise InvalidSubmissionError(validation.issues)
     return validation.submission

@@ -29,6 +29,7 @@ from app.schemas.workflows import (
     TaskCreateRequest,
     TaskResponse,
     TaskUpdateRequest,
+    ToolInvocationResponse,
     WorkflowCreateRequest,
     WorkflowEventResponse,
     WorkflowResponse,
@@ -380,6 +381,20 @@ async def list_executions(
     workflow = await service.get_workflow(session, access, workflow_id)
     await task_service.get_task(session, workflow, task_id)  # 404 for unknown/foreign tasks
     rows = await repository.list_executions(session, workflow, task_id)
+    invocations: dict[uuid.UUID, list[ToolInvocationResponse]] = {}
+    for call in await repository.list_tool_invocations(session, workflow, task_id):
+        invocations.setdefault(call.execution_id, []).append(
+            ToolInvocationResponse(
+                id=call.id,
+                tool_name=call.tool_name,
+                status=call.status,
+                error_code=call.error_code,
+                duration_ms=call.duration_ms,
+                input_hash=call.input_hash,
+                output_reference=call.output_reference,
+                created_at=call.created_at,
+            )
+        )
     items = [
         ExecutionResponse(
             id=e.id,
@@ -395,6 +410,7 @@ async def list_executions(
             error_summary=e.error_summary,
             result_summary=e.result_summary,
             submission=e.submission,
+            tool_invocations=invocations.get(e.id, []),
         )
         for e, version in rows
     ]

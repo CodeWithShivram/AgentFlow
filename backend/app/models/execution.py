@@ -1,4 +1,5 @@
-"""Background execution: transactional outbox, consumer inbox and agent execution attempts."""
+"""Background execution: transactional outbox, consumer inbox, agent execution attempts and
+their tool invocations."""
 
 import uuid
 from datetime import datetime
@@ -35,6 +36,12 @@ class ExecutionStatus(StrEnum):
     FAILED = "FAILED"
     TIMED_OUT = "TIMED_OUT"
     CANCELLED = "CANCELLED"
+
+
+class ToolInvocationStatus(StrEnum):
+    SUCCEEDED = "SUCCEEDED"
+    DENIED = "DENIED"  # refused by policy (not granted, insufficient access, call limit)
+    FAILED = "FAILED"  # invalid arguments, the tool failed, or its output was invalid
 
 
 class OutboxEvent(Base):
@@ -166,3 +173,51 @@ class AgentExecution(Base):
     submission: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = created_at_column()
     updated_at: Mapped[datetime] = updated_at_column()
+
+
+class ToolInvocation(Base):
+    """One tool call made through the tool gateway (handoff §11 `tool_invocations`, ADR-0019).
+
+    Holds metadata only: a SHA-256 hash of the arguments, never the arguments or the output.
+    Written in its own transaction, so a call is recorded even when its attempt fails.
+    """
+
+    __tablename__ = "tool_invocations"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["workspace_id", "workflow_id"],
+            ["workflows.workspace_id", "workflows.id"],
+            ondelete="CASCADE",
+            name="fk_tool_invocations_workflow",
+        ),
+        ForeignKeyConstraint(
+            ["workflow_id", "task_id"],
+            ["workflow_tasks.workflow_id", "workflow_tasks.id"],
+            ondelete="CASCADE",
+            name="fk_tool_invocations_task",
+        ),
+        CheckConstraint(
+            "(status = 'SUCCEEDED') = (error_code IS NULL)", name="error_code_iff_unsuccessful"
+        ),
+        CheckConstraint("duration_ms >= 0", name="duration_non_negative"),
+        CheckConstraint("input_hash ~ '^[0-9a-f]{64}$'", name="input_hash_is_sha256"),
+        Index("ix_tool_invocations_workspace_id_created_at", "workspace_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = uuid_pk()
+    workspace_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("workspaces.id", ondelete="CASCADE"))
+    workflow_id: Mapped[uuid.UUID]
+    task_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    execution_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("agent_executions.id", ondelete="CASCADE"), index=True
+    )
+    # As the agent asked for it (truncated); unknown names are recorded as DENIED calls.
+    tool_name: Mapped[str] = mapped_column(String(100))
+    status: Mapped[ToolInvocationStatus] = mapped_column(str_enum(ToolInvocationStatus, "status"))
+    # A short code only; never tool error text, arguments or output.
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    duration_ms: Mapped[int]
+    input_hash: Mapped[str] = mapped_column(String(64))
+    # Where a stored output lives, once artifact storage exists (Step 8.3).
+    output_reference: Mapped[str | None] = mapped_column(String(500))
+    created_at: Mapped[datetime] = created_at_column()

@@ -2,8 +2,8 @@
 
 ## Current position
 - Phase: 3 — Specialized agents (Phase 2 complete; Phase 1 released as `v0.1.0`, pushed with its tag)
-- Last completed step: 3.1 — BaseAgent contract and AgentSubmission schema
-- Next step: 3.2 — Tool registry and server-side permission enforcement, which needs a short plan and the owner's go-ahead
+- Last completed step: 3.2 — Tool registry and server-side permission enforcement
+- Next step: 3.3 — LiteLLM integration behind the gateway adapter, with provider usage capture; it needs a short plan and the owner's go-ahead
 
 ## Completed steps
 | Step | Commit message | Hash |
@@ -27,21 +27,54 @@
 | 2.3 | `feat(planning): add versioned plan drafts with task decomposition` | `f1d8476` (pushed, CI ✔) |
 | 2.4 | `feat(planning): add plan DAG validation and draft preview` | `8389c82` (pushed, CI ✔) |
 | 2.5 | `feat(planning): confirm plan drafts into workflow tasks` | `83b7ccc` (pushed, CI ✔) |
-| 3.1 | `feat(agents): add task contract, BaseAgent and structured submissions` | latest commit touching `docs/ADR/0018-agent-contract-and-submissions.md` |
+| 3.1 | `feat(agents): add task contract, BaseAgent and structured submissions` | `61ac0ef` (pushed, CI ✔) |
+| 3.2 | `feat(tools): add tool registry and server-side tool gateway` | latest commit touching `docs/ADR/0019-tool-registry-and-gateway.md` |
 
 ## Environment snapshot (2026-11-13)
 | Item | Value |
 |---|---|
-| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `83b7ccc` plus tag `v0.1.0` (owner-authorized) |
+| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `61ac0ef` plus tag `v0.1.0` (owner-authorized) |
 | Python / uv / Node / npm | 3.12.14 via uv 0.12.9 / Node 24.13.0 / npm 11.6.2 |
 | Celery / kombu | 5.7.0 / 5.7.0 |
 | Docker | 29.9.3 — `agentflow` stack healthy (Docker Desktop must be started first; it had stopped and was restarted during Step 3.1) |
-| Dev database | `agentflow` at `0011 (head)`; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
+| Dev database | `agentflow` at `0012 (head)`; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
 | Local `.env` | holds generated `WORKER_DB_PASSWORD` and (new) `API_DB_PASSWORD` (gitignored) |
 | Port 8000 | Used by another local project (`easa`); smoke tests used 8010 |
 | E2E | API :8011 (as `agentflow_api`), frontend :3100, database `agentflow_e2e` (reset each run), Redis DBs 2/3, installed Google Chrome |
 | Frontend audit | `npm audit --omit=dev`: 0 vulnerabilities; dev-only: 8 moderate, all the existing `minimatch` chain via ESLint |
 | Test HTTP client | `httpx2` 2.16.0 (replaces `httpx`, OD-10) |
+
+## Step 3.2 — tool registry and gateway (ADR-0019)
+- **Owner decisions (2026-11-13):**
+  - no tool gets a working implementation yet;
+  - a call outside the contract fails the attempt;
+  - tool calls go in the API only, with no UI yet.
+- **`app/tools/registry.py`:**
+  - a `ToolDefinition` for every catalog tool (required access, optional implementation with strict schemas);
+  - none implemented, so none available;
+  - `usable_grants`.
+- **`app/tools/gateway.py`:** `ToolGateway.invoke` checks:
+  - the call limit (50 per attempt);
+  - the contract grant and its access;
+  - arguments, the handler, and the result and its size.
+  - Fixed-message `ToolError`s; violations (permission, limit) are remembered.
+- **Contract:** `allowed_tools` is a list of `ToolGrant {tool, access}` holding only usable grants.
+- **Runner and worker:**
+  - `AgentContext.tools` is the gateway;
+  - `run_agent` raises the first violation even if the agent swallowed it;
+  - the worker maps `ToolError` to a failed attempt with its code.
+- **Migration `0012_tool_invocations`:**
+  - one row per call (argument hash only), written in its own transaction;
+  - RLS tenant and platform policies; worker SELECT and INSERT.
+- **API:** `GET …/executions` includes each attempt's `tool_invocations`. Frontend types only, with no UI.
+
+## Checks last executed (Step 3.2)
+- **Full gate (`check.ps1 -E2E`) ✔, exit 0:**
+  - backend: ruff format (142 files), ruff check, mypy (142 files), alembic check;
+  - pytest **870 passed** (850 plus 20 new: 18 unit registry/gateway/runner, 1 worker-role integration test recording calls and failing the attempt, 1 API test of `tool_invocations`);
+  - frontend: eslint, typecheck, Vitest **94**, Playwright **14 passed**, build.
+- **Deliberate-bug check** (reverted): making the gateway forget violations makes 9 tests fail.
+- **Environment:** the dev DB is at `0012`, and both roles were re-provisioned; no servers were left running after E2E.
 
 ## Step 3.1 — agent contract and submissions (ADR-0018)
 - **Owner decisions (2026-11-13):**
@@ -68,7 +101,7 @@
   - the executions panel shows the agent's claims as "not verified yet", plus open questions, assumptions and limitations;
   - the task form has a Deliverables field, and task details list deliverables.
 
-## Checks last executed (Step 3.1)
+## Checks (Step 3.1)
 - **Full gate (`check.ps1 -E2E`) ✔, exit 0:**
   - backend: ruff format (137 files), ruff check, mypy (137 files), alembic check;
   - pytest **850 passed** (829 plus 21 new: 17 unit contract/submission/mock agent, 3 runner integration, 1 task deliverables API);
@@ -303,6 +336,6 @@
 None.
 
 ## Next exact action
-1. **Push Step 3.1** on the owner's go-ahead, and confirm CI on GitHub.
-2. **Step 3.2 (tool registry and server-side permission enforcement):** present a short plan and get the owner's go-ahead.
+1. **Push Step 3.2** on the owner's go-ahead, and confirm CI on GitHub.
+2. **Step 3.3 (LiteLLM integration behind the gateway adapter):** present a short plan and get the owner's go-ahead. It adds a new dependency and provider settings, so it needs explicit decisions.
 3. **Before any hosted deployment:** settle OD-14, OD-19 and OD-20.

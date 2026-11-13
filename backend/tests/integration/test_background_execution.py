@@ -8,9 +8,11 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from typing import Any
 
 import pytest
+from pydantic import BaseModel
 from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.orm import Session, sessionmaker
@@ -37,6 +39,8 @@ from app.models import (
     SessionRevocationReason,
     TaskDependency,
     TaskStatus,
+    ToolInvocation,
+    ToolInvocationStatus,
     User,
     Workflow,
     WorkflowStatus,
@@ -46,6 +50,9 @@ from app.models import (
     WorkspaceRole,
 )
 from app.schemas.agents import AgentConfiguration
+from app.services.usage import record_tool_invocation
+from app.tools.gateway import ToolError, ToolPermissionDeniedError
+from app.tools.registry import ToolCallContext, ToolDefinition, ToolImplementation
 from app.workflows import engine
 from app.workflows.state_machine import Actor
 
@@ -878,3 +885,86 @@ def test_only_a_successful_attempt_can_hold_a_submission(
     with session_scope(admin_factory) as s, pytest.raises(IntegrityError):
         s.execute(update(AgentExecution).values(submission={"summary": "forged"}))
         s.flush()
+
+
+# --- tool gateway (Step 3.2, ADR-0019) -----------------------------------------------------------
+
+
+class _Note(BaseModel):
+    text: str
+
+
+def _note(arguments: _Note, context: ToolCallContext) -> _Note:
+    return _Note(text=arguments.text.upper())
+
+
+# A test implementation of a catalog tool; nothing in the platform registry runs yet.
+_REGISTRY = {
+    "web_search": ToolDefinition("web_search", "read", ToolImplementation(_Note, _Note, _note))
+}
+
+
+class _ProbingAgent(MockAgent):
+    """Uses its permitted tool, then calls a tool it was never granted and hides the refusal."""
+
+    def execute(self, contract: TaskContract, context: AgentContext) -> AgentSubmission:
+        context.tools.invoke("web_search", {"text": "allowed"})
+        try:
+            context.tools.invoke("artifact_writer", {"text": "probe"})
+        except ToolPermissionDeniedError:
+            pass
+        return super().execute(contract, context)
+
+
+def test_a_tool_permission_violation_fails_the_attempt_and_every_call_is_recorded(
+    admin_factory: Factory, worker_factory: Factory
+) -> None:
+    world = _world(admin_factory)
+    with session_scope(admin_factory) as s:
+        version = s.get(AgentVersion, world.version_id)
+        assert version is not None
+        # Versions are immutable (a trigger rejects UPDATE), so the test agent gets a new one.
+        granted = AgentVersion(
+            agent_id=world.agent_id,
+            version=2,
+            configuration={**CONFIG, "tools": [{"tool": "web_search"}]},
+        )
+        s.add(granted)
+        s.commit()
+        granted_id = granted.id
+    with session_scope(admin_factory) as s:
+        workflow, task = _locked(s, world), _task(s, world.task_ids[0])
+        task.assigned_agent_id, task.assigned_agent_version_id = world.agent_id, granted_id
+        engine.transition_task(s, workflow, task, TaskStatus.ASSIGNED, actor=Actor.USER)
+        s.commit()
+    (event,) = _dispatch_events(admin_factory)
+    claim = _claim(worker_factory, event)
+    assert isinstance(claim, runner.Claim)
+
+    with pytest.raises(ToolError) as error:
+        runner.run_agent(
+            claim,
+            _ProbingAgent,
+            registry=_REGISTRY,
+            record_tool_call=partial(record_tool_invocation, worker_factory),
+        )
+    assert error.value.code == "TOOL_PERMISSION_DENIED"
+    outcome = runner.Failure(error.value.code, error.value.message)
+    assert _finish(worker_factory, claim, outcome) == "rework_required"
+
+    with session_scope(admin_factory) as s:
+        calls = list(
+            s.execute(select(ToolInvocation).order_by(ToolInvocation.created_at)).scalars()
+        )
+        execution = s.execute(select(AgentExecution)).scalar_one()
+    assert [(c.tool_name, c.status, c.error_code) for c in calls] == [
+        ("web_search", ToolInvocationStatus.SUCCEEDED, None),
+        ("artifact_writer", ToolInvocationStatus.DENIED, "TOOL_PERMISSION_DENIED"),
+    ]
+    assert {(c.execution_id, c.task_id, c.workspace_id) for c in calls} == {
+        (claim.execution_id, world.task_ids[0], world.workspace_id)
+    }
+    assert all(len(c.input_hash) == 64 and c.output_reference is None for c in calls)
+    assert execution.status == ExecutionStatus.FAILED and execution.submission is None
+    assert execution.error_code == "TOOL_PERMISSION_DENIED"
+    assert execution.error_summary == "The agent called a tool it is not permitted to use."

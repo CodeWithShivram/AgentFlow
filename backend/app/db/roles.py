@@ -47,6 +47,8 @@ WORKER_GRANTS: dict[str, tuple[str, ...]] = {
     "llm_usage": ("SELECT", "INSERT"),
     # Plan drafts (ADR-0015) are written by the planning job and never changed.
     "workflow_plans": ("SELECT", "INSERT"),
+    # Tool invocation records (ADR-0019), written by the tool gateway in workers.
+    "tool_invocations": ("SELECT", "INSERT"),
 }
 API_PRIVILEGES = ("SELECT", "INSERT", "UPDATE", "DELETE")
 # Tables the API never touches: migration bookkeeping and worker-only state.

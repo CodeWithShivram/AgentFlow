@@ -140,8 +140,8 @@ Acceptance (phase): deterministic tests with mock model responses; invalid plans
 
 | Step | Title | Status |
 |---|---|---|
-| 3.1 | BaseAgent contract and AgentSubmission schema | DONE (ADR-0018) — see `progress.md` |
-| 3.2 | Tool registry and server-side permission enforcement | NOT_STARTED |
+| 3.1 | BaseAgent contract and AgentSubmission schema | DONE (ADR-0018) — `61ac0ef` |
+| 3.2 | Tool registry and server-side permission enforcement | DONE (ADR-0019) — see `progress.md` |
 | 3.3 | LiteLLM integration behind gateway adapter + provider usage capture | NOT_STARTED |
 | 3.4 | Research, Analyst, Writer, General agents | NOT_STARTED |
 | 3.5 | Developer and QA agents (no unsafe shell/code execution) | NOT_STARTED |
