@@ -240,7 +240,9 @@ Integration tests create throwaway databases named `agentflow_test_*` on the loc
 
 ## Model gateway
 
-Every language-model call goes through one gateway in the Celery workers (`app/llm/gateway.py`, [ADR-0013](docs/ADR/0013-model-gateway.md)), and every call is recorded in `llm_usage` with the token counts the provider reported. Costs stay unpriced until Phase 7. The only provider so far is a deterministic mock (`MODEL_PROVIDER=mock`, `MODEL_NAME=mock-1`), so no API key is needed; real providers arrive behind LiteLLM in Phase 3.
+Every language-model call goes through one gateway in the Celery workers (`app/llm/gateway.py`, [ADR-0013](docs/ADR/0013-model-gateway.md)), and every call is recorded in `llm_usage` with the token counts the provider reported. Costs stay unpriced until Phase 7. The default provider is a deterministic mock (`MODEL_PROVIDER=mock`, `MODEL_NAME=mock-1`), so no API key is needed.
+
+**Real models** ([ADR-0020](docs/ADR/0020-litellm-provider-adapter.md)). Set `MODEL_PROVIDER=litellm`, a LiteLLM model string in `MODEL_NAME` (for example `anthropic/claude-sonnet-5-5`) and `MODEL_API_KEY` in `.env`. Workers then use that model for every call. `MODEL_API_BASE` can point at a local server such as Ollama, and `MODEL_TIMEOUT_SECONDS` sets the request timeout (default 60). LiteLLM runs in offline mode: it downloads nothing on its own and never retries. The tokens the provider reported are recorded, but LiteLLM's cost estimates are ignored until Phase 7.
 
 **Prompt analysis** ([ADR-0014](docs/ADR/0014-prompt-analysis.md)). When planning starts, a worker analyses the workflow's goal into an objective, requirements, constraints, deliverables, assumptions and open questions. The result is shown on the workflow's Requirements tab. Failed analyses can be retried; open questions are informational until clarification requests arrive (Phase 6).
 

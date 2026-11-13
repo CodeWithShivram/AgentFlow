@@ -45,9 +45,12 @@ class ModelOutputInvalidError(ModelGatewayError):
 
 
 def create_adapter(settings: Settings) -> ModelAdapter:
-    """The adapter for MODEL_PROVIDER. Real providers arrive behind LiteLLM in Phase 3."""
-    adapters: dict[str, Callable[[], ModelAdapter]] = {"mock": MockModelAdapter}
-    return adapters[settings.model_provider]()
+    """The adapter for MODEL_PROVIDER. LiteLLM is imported only when it is configured."""
+    if settings.model_provider == "litellm":
+        from app.llm.litellm_adapter import LiteLLMAdapter
+
+        return LiteLLMAdapter(settings)
+    return MockModelAdapter()
 
 
 UsageRecorder = Callable[[CallRecord], uuid.UUID]

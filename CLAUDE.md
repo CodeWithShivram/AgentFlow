@@ -70,6 +70,10 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   stay NULL until Phase 7 pricing. Validate structured output with a Pydantic `response_format`; never log prompts or
   outputs. Tests use `MockModelAdapter.script(...)`; register schema-valid mock defaults for new purposes. Never label
   estimated cost/tokens as actual.
+- Real models (ADR-0020): `MODEL_PROVIDER=litellm` uses `app/llm/litellm_adapter.py`, the only module that imports
+  LiteLLM (it forces offline mode before import and routes LiteLLM logs through ours). Keys come only from
+  `Settings.model_api_key`; LiteLLM retries stay off (`max_retries=0`, `num_retries=0`); never read LiteLLM's
+  `response_cost`. Tests stay offline: pass `partial(litellm.completion, mock_response=...)`, never a real key.
 - Planning jobs (ADR-0014, `app/planning/`) follow claim -> model call outside any transaction -> finish, keyed by a
   request id on the workflow so superseded deliveries change nothing. Prompts reach models only inside delimiters;
   outbox payloads and events carry identifiers and counts, never prompt text. Analysis and plan drafts never bump

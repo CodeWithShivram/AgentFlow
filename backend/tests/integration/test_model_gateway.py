@@ -6,7 +6,7 @@ from functools import partial
 from typing import Any
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, SecretStr
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
@@ -208,3 +208,37 @@ def test_the_database_rejects_inconsistent_usage_rows(
     params = ", ".join(f":{c}" for c in row)
     with pytest.raises(IntegrityError):
         sql(api_settings, f"INSERT INTO llm_usage ({columns}) VALUES ({params})", **row)  # noqa: S608
+
+
+def test_a_litellm_call_is_recorded_with_provider_usage_and_no_cost(
+    new_client: ClientFactory,
+    api_settings: Settings,
+    worker_factory: Factory,
+    admin_factory: Factory,
+) -> None:
+    """Step 3.3 (ADR-0020): LiteLLM's real code path, offline through its `mock_response`."""
+    import litellm
+
+    from app.llm.litellm_adapter import LiteLLMAdapter
+
+    tenant = _tenant(new_client)
+    settings = api_settings.model_copy(
+        update={
+            "model_provider": "litellm",
+            "model_name": "anthropic/claude-sonnet-5-5",
+            "model_api_key": SecretStr("integration-test-model-key"),
+        }
+    )
+    adapter = LiteLLMAdapter(settings, partial(litellm.completion, mock_response='{"ok": true}'))
+    gateway = ModelGateway(settings, adapter, partial(record_model_call, worker_factory))
+
+    response = gateway.complete(_context(tenant), _request(), Verdict)
+
+    (row,) = _rows(admin_factory)
+    assert row.id == response.usage_id and response.parsed == Verdict(ok=True)
+    assert (row.provider, row.model) == ("anthropic", "anthropic/claude-sonnet-5-5")
+    assert (row.input_tokens, row.output_tokens) == (10, 20)
+    assert row.other_usage["total_tokens"] == 30 and row.other_usage["reported_via"] == "litellm"
+    assert row.provider_request_id == response.provider_request_id
+    assert (row.input_cost, row.output_cost, row.total_cost, row.currency) == (None,) * 4
+    assert row.pricing_version is None

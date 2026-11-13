@@ -2,8 +2,8 @@
 
 ## Current position
 - Phase: 3 — Specialized agents (Phase 2 complete; Phase 1 released as `v0.1.0`, pushed with its tag)
-- Last completed step: 3.2 — Tool registry and server-side permission enforcement
-- Next step: 3.3 — LiteLLM integration behind the gateway adapter, with provider usage capture; it needs a short plan and the owner's go-ahead
+- Last completed step: 3.3 — LiteLLM integration behind the gateway adapter, with provider usage capture
+- Next step: 3.4 — Research, Analyst, Writer and General agents, which needs a short plan and the owner's go-ahead
 
 ## Completed steps
 | Step | Commit message | Hash |
@@ -28,12 +28,13 @@
 | 2.4 | `feat(planning): add plan DAG validation and draft preview` | `8389c82` (pushed, CI ✔) |
 | 2.5 | `feat(planning): confirm plan drafts into workflow tasks` | `83b7ccc` (pushed, CI ✔) |
 | 3.1 | `feat(agents): add task contract, BaseAgent and structured submissions` | `61ac0ef` (pushed, CI ✔) |
-| 3.2 | `feat(tools): add tool registry and server-side tool gateway` | latest commit touching `docs/ADR/0019-tool-registry-and-gateway.md` |
+| 3.2 | `feat(tools): add tool registry and server-side tool gateway` | `54bf1d4` (pushed, CI ✔) |
+| 3.3 | `feat(llm): add LiteLLM provider adapter with usage capture` | latest commit touching `docs/ADR/0020-litellm-provider-adapter.md` |
 
 ## Environment snapshot (2026-11-13)
 | Item | Value |
 |---|---|
-| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `61ac0ef` plus tag `v0.1.0` (owner-authorized) |
+| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `54bf1d4` plus tag `v0.1.0` (owner-authorized) |
 | Python / uv / Node / npm | 3.12.14 via uv 0.12.9 / Node 24.13.0 / npm 11.6.2 |
 | Celery / kombu | 5.7.0 / 5.7.0 |
 | Docker | 29.9.3 — `agentflow` stack healthy (Docker Desktop must be started first; it had stopped and was restarted during Step 3.1) |
@@ -42,7 +43,46 @@
 | Port 8000 | Used by another local project (`easa`); smoke tests used 8010 |
 | E2E | API :8011 (as `agentflow_api`), frontend :3100, database `agentflow_e2e` (reset each run), Redis DBs 2/3, installed Google Chrome |
 | Frontend audit | `npm audit --omit=dev`: 0 vulnerabilities; dev-only: 8 moderate, all the existing `minimatch` chain via ESLint |
-| Test HTTP client | `httpx2` 2.16.0 (replaces `httpx`, OD-10) |
+| Test HTTP client | `httpx2` 2.16.0 (replaces `httpx`, OD-10); `httpx` is back only as a LiteLLM dependency |
+| LiteLLM | 1.109.1, imported by workers only when `MODEL_PROVIDER=litellm`; `.env` keeps the mock |
+
+## Step 3.3 — LiteLLM provider adapter (ADR-0020)
+- **Owner decisions (2026-11-13):**
+  - any LiteLLM provider, configured through settings;
+  - offline verification only;
+  - one model for every profile.
+- **New dependency:** `litellm` 1.109.1 (handoff §3), locked in `uv.lock`. It brings the `openai` SDK, `tiktoken`, `tokenizers`, `huggingface-hub`, `boto3`, `aiohttp` and `httpx`.
+- **Settings:**
+  - `MODEL_PROVIDER` is `mock` (default) or `litellm`;
+  - `MODEL_API_KEY` (secret, redacted, rejected as a placeholder in production) is required unless `MODEL_API_BASE` is set;
+  - `MODEL_TIMEOUT_SECONDS` defaults to 60.
+  - `.env.example` documents an Anthropic example.
+- **`app/llm/litellm_adapter.py`:**
+  - offline mode set before import (no price-map, tokenizer or other downloads);
+  - callbacks and message logging off, with LiteLLM's loggers routed through ours at WARNING;
+  - the key passed per call; retries off; `drop_params`; a non-strict JSON schema when the model supports it;
+  - the provider recorded as the routed one (e.g. `anthropic`).
+- **Usage capture:**
+  - the provider's input, output and cached tokens;
+  - the other usage fields plus `reported_via: "litellm"`;
+  - the request ID.
+  - LiteLLM's `response_cost` is never read.
+- **Findings:**
+  - `claude-sonnet-5-5` accepts only `temperature=1` in LiteLLM, hence `drop_params`;
+  - for Ollama, LiteLLM silently estimates missing token counts (new OD-21);
+  - pydantic warns about LiteLLM's internal types, so that one message is filtered.
+
+## Checks last executed (Step 3.3)
+- **Full gate (`check.ps1 -E2E`) ✔, exit 0:**
+  - backend: ruff format (144 files), ruff check, mypy (144 files), alembic check;
+  - pytest **884 passed** (870 plus 14 new: 13 unit adapter/settings/hardening tests, 1 integration test writing an `llm_usage` row as the worker role, all offline);
+  - frontend: eslint, typecheck, Vitest **94**, Playwright **14 passed**, build.
+- **Warnings.** pytest reports 12 warnings, all pydantic `ReadOnly` notices about LiteLLM's internal types. pytest resets warning filters per test; a plain process confirmed the adapter's filter silences them in workers. The old `httpx` deprecation warning did not return.
+- **Deliberate-bug check** (reverted): turning LiteLLM retries back on (`num_retries=2`) makes the argument test fail. LiteLLM's offline mock does not retry, so the failure test cannot detect retries by behaviour.
+- **Environment:**
+  - the local `.env` is unchanged, so it still uses the mock;
+  - the dev DB stays at `0012` (no migration);
+  - no live provider call was made, by owner decision.
 
 ## Step 3.2 — tool registry and gateway (ADR-0019)
 - **Owner decisions (2026-11-13):**
@@ -68,7 +108,7 @@
   - RLS tenant and platform policies; worker SELECT and INSERT.
 - **API:** `GET …/executions` includes each attempt's `tool_invocations`. Frontend types only, with no UI.
 
-## Checks last executed (Step 3.2)
+## Checks (Step 3.2)
 - **Full gate (`check.ps1 -E2E`) ✔, exit 0:**
   - backend: ruff format (142 files), ruff check, mypy (142 files), alembic check;
   - pytest **870 passed** (850 plus 20 new: 18 unit registry/gateway/runner, 1 worker-role integration test recording calls and failing the attempt, 1 API test of `tool_invocations`);
@@ -323,6 +363,8 @@
 
 ## Known issues / limitations
 - **OD-20:** a non-superuser schema owner for migrations, before any hosted deployment.
+- **OD-21:** token counts LiteLLM estimates for providers that don't report usage (e.g. Ollama) look like reported ones. Phase 7 pricing must treat them as unverified.
+- **Live provider path unverified:** Step 3.3 was verified offline only, by owner decision.
 - **OD-14:** trusted proxy IP handling, before hosted deployment.
 - **OD-19:** the hosted frontend must share a host with the API (CSRF cookie readability); a CSP with nonces is not set yet.
 - **OD-17:** a worker crash after claim leaves the task IN_PROGRESS; recovery is Phase 4.
@@ -336,6 +378,6 @@
 None.
 
 ## Next exact action
-1. **Push Step 3.2** on the owner's go-ahead, and confirm CI on GitHub.
-2. **Step 3.3 (LiteLLM integration behind the gateway adapter):** present a short plan and get the owner's go-ahead. It adds a new dependency and provider settings, so it needs explicit decisions.
+1. **Push Step 3.3** on the owner's go-ahead, and confirm CI on GitHub.
+2. **Step 3.4 (Research, Analyst, Writer and General agents):** present a short plan and get the owner's go-ahead.
 3. **Before any hosted deployment:** settle OD-14, OD-19 and OD-20.

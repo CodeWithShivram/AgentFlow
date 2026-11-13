@@ -141,8 +141,8 @@ Acceptance (phase): deterministic tests with mock model responses; invalid plans
 | Step | Title | Status |
 |---|---|---|
 | 3.1 | BaseAgent contract and AgentSubmission schema | DONE (ADR-0018) — `61ac0ef` |
-| 3.2 | Tool registry and server-side permission enforcement | DONE (ADR-0019) — see `progress.md` |
-| 3.3 | LiteLLM integration behind gateway adapter + provider usage capture | NOT_STARTED |
+| 3.2 | Tool registry and server-side permission enforcement | DONE (ADR-0019) — `54bf1d4` |
+| 3.3 | LiteLLM integration behind gateway adapter + provider usage capture | DONE (ADR-0020) — see `progress.md` |
 | 3.4 | Research, Analyst, Writer, General agents | NOT_STARTED |
 | 3.5 | Developer and QA agents (no unsafe shell/code execution) | NOT_STARTED |
 | 3.6 | Rule-based agent selection with persisted rationale | NOT_STARTED |
@@ -225,4 +225,5 @@ Acceptance (phase): deterministic tests with mock model responses; invalid plans
 | OD-17 | Recover executions stranded by a worker crash after claim (task stays IN_PROGRESS) | Phase 4 | Needs heartbeat/time-out sweep (ADR-0010). |
 | OD-18 | Surface and replay FAILED outbox events; dead-letter tooling | Phase 4 | Rows are kept, not yet visible (ADR-0010). |
 | OD-19 | Hosted frontend topology and Content-Security-Policy | before any hosted deployment | The app must read the API's CSRF cookie, so the frontend and API must share a host (e.g. a reverse proxy routing `/api`). A CSP needs per-request nonces for Next.js inline scripts (ADR-0011). |
+| OD-21 | Token counts LiteLLM estimates for providers that do not report usage (e.g. Ollama) are indistinguishable from reported ones | Phase 7 pricing | Recorded with `reported_via: "litellm"` (ADR-0020); pricing must treat such providers' counts as unverified. |
 | OD-20 | Non-superuser schema owner for migrations | before any hosted deployment | Migrations still run as the administrator (`POSTGRES_USER`); applications never connect as it (ADR-0012). |

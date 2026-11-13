@@ -77,10 +77,17 @@ class Settings(BaseSettings):
     # is the administrator and schema owner: migrations, seeding and role provisioning only.
     api_db_user: str = Field(default="agentflow_api", min_length=1, max_length=63)
     api_db_password: SecretStr | None = None
-    # --- Model gateway (ADR-0013) ---
-    # Only the deterministic mock exists until LiteLLM-backed providers arrive (Phase 3).
-    model_provider: Literal["mock"] = "mock"
+    # --- Model gateway (ADR-0013, ADR-0020) ---
+    # "mock" (default: deterministic, no keys) or "litellm" (real providers). With litellm,
+    # MODEL_NAME is a LiteLLM model string such as "anthropic/<model>", and every profile uses it.
+    model_provider: Literal["mock", "litellm"] = "mock"
     model_name: str = Field(default="mock-1", min_length=1, max_length=200)
+    model_api_key: SecretStr | None = None
+    # Optional endpoint, e.g. a local Ollama server or a provider-compatible proxy.
+    model_api_base: str | None = Field(
+        default=None, max_length=500, pattern=r"^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/\S*)?$"
+    )
+    model_timeout_seconds: float = Field(default=60.0, gt=0, le=600)
     # --- Background execution (ADR-0010) ---
     # Celery broker: the same Redis server, separate logical database from rate limiting.
     celery_broker_redis_db: int = Field(default=1, ge=0, le=15)
@@ -117,6 +124,12 @@ class Settings(BaseSettings):
                 raise ValueError(f"CORS_ALLOWED_ORIGINS entry is not a plain origin: {origin!r}")
         if self.auth_refresh_token_ttl_seconds > self.auth_session_max_age_seconds:
             raise ValueError("AUTH_REFRESH_TOKEN_TTL_SECONDS cannot exceed the session max age")
+        if (
+            self.model_provider == "litellm"
+            and self.model_api_key is None
+            and self.model_api_base is None
+        ):
+            raise ValueError("MODEL_API_KEY is required for litellm unless MODEL_API_BASE is set")
         if self.is_production:
             if self.auth_cookie_secure is False:
                 raise ValueError("AUTH_COOKIE_SECURE cannot be false in production")
@@ -137,6 +150,8 @@ class Settings(BaseSettings):
             secrets.append(("WORKER_DB_PASSWORD", self.worker_db_password))
         if self.api_db_password is not None:
             secrets.append(("API_DB_PASSWORD", self.api_db_password))
+        if self.model_api_key is not None:
+            secrets.append(("MODEL_API_KEY", self.model_api_key))
         weak = [
             name
             for name, secret in secrets
@@ -221,6 +236,7 @@ class Settings(BaseSettings):
             *(key.get_secret_value() for key in self.auth_jwt_signing_keys.values()),
             *([self.worker_db_password.get_secret_value()] if self.worker_db_password else []),
             *([self.api_db_password.get_secret_value()] if self.api_db_password else []),
+            *([self.model_api_key.get_secret_value()] if self.model_api_key else []),
         ]
         return [v for v in values if len(v) >= _MIN_REDACTABLE_SECRET_LENGTH]
 
