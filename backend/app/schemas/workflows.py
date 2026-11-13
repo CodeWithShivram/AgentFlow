@@ -4,7 +4,7 @@ import json
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import (
     AfterValidator,
@@ -241,6 +241,22 @@ class PlanDraftSummary(BaseModel):
 
 class PlanDraftList(BaseModel):
     items: list[PlanDraftSummary]
+
+
+class PlanIssueResponse(BaseModel):
+    code: str
+    severity: Literal["error", "warning"]
+    message: str
+    task_keys: list[str]
+
+
+class PlanDraftPreview(PlanDraftSummary):
+    """A full plan draft with its DAG validation (Step 2.4). Stages list task keys that can run
+    in parallel; warnings reflect the workspace's agents at preview time."""
+
+    plan: dict[str, Any]
+    stages: list[list[str]]
+    issues: list[PlanIssueResponse]
 
 
 class EventPage(BaseModel):

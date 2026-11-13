@@ -17,9 +17,9 @@ import { workflowKeys } from "./use-workflow";
 
 /**
  * Status of the generated plan draft (Step 2.3). Drafts are proposals: the plan itself changes
- * only when a draft is confirmed. The full draft preview arrives with Step 2.4.
+ * only when a draft is confirmed. "Review draft" opens the full preview (Step 2.4).
  */
-export function PlanDraftStatus({ workflow }: { workflow: Workflow }) {
+export function PlanDraftStatus({ workflow, onReview }: { workflow: Workflow; onReview?: () => void }) {
   const workspace = useWorkspace();
   const canRegenerate = useCan("MEMBER") && PLAN_EDITABLE.has(workflow.status) && workflow.status !== "PENDING";
   const queryClient = useQueryClient();
@@ -89,7 +89,14 @@ export function PlanDraftStatus({ workflow }: { workflow: Workflow }) {
             </>
           ) : null}
         </p>
-        {regenerateButton}
+        <div className="flex flex-wrap gap-2">
+          {onReview ? (
+            <Button size="sm" onClick={onReview}>
+              Review draft
+            </Button>
+          ) : null}
+          {regenerateButton}
+        </div>
       </AlertDescription>
     </Alert>
   );

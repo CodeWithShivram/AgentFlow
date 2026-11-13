@@ -47,6 +47,11 @@ test("journey 7: plan tasks with dependencies", async ({ browser }) => {
   await expect(requirements.getByText("Draft plan version 1 is ready with 1 task")).toBeVisible({
     timeout: 60_000,
   });
+  // Step 2.4: the preview shows the draft by stage, validated against the workspace's agents.
+  await requirements.getByRole("button", { name: "Review draft" }).click();
+  const draftStage = page.getByRole("region", { name: "Draft stage 1" });
+  await expect(draftStage.getByText("Write a market report", { exact: true })).toBeVisible();
+  await expect(page.getByRole("tabpanel", { name: /Plan draft/ }).getByText("No problems found.")).toBeVisible();
   await page.getByRole("tab", { name: /Tasks/ }).click();
 
   await addTask(page, "Collect sources");

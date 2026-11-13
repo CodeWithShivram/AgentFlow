@@ -24,7 +24,7 @@ const PRIORITY_LABEL = { must: "Must", should: "Should", could: "Could" } as con
  * The prompt analysis of a workflow (Step 2.2). It is produced in the background after planning
  * starts; the page polls while it is pending. Model output is shown as plain text only.
  */
-export function RequirementsPanel({ workflow }: { workflow: Workflow }) {
+export function RequirementsPanel({ workflow, onReviewPlan }: { workflow: Workflow; onReviewPlan?: () => void }) {
   const status = workflow.analysis_status;
   if (status === "PENDING") {
     return (
@@ -49,7 +49,7 @@ export function RequirementsPanel({ workflow }: { workflow: Workflow }) {
   }
   return (
     <div className="space-y-4">
-      <PlanDraftStatus workflow={workflow} />
+      <PlanDraftStatus workflow={workflow} onReview={onReviewPlan} />
       <AnalysisView analysis={workflow.normalized_requirements} />
     </div>
   );

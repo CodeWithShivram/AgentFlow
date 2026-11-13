@@ -15,6 +15,8 @@ export const workflowKeys = {
   events: (workspaceId: Uuid, workflowId: Uuid) => ["workflows", workspaceId, "detail", workflowId, "events"] as const,
   planDrafts: (workspaceId: Uuid, workflowId: Uuid) =>
     ["workflows", workspaceId, "detail", workflowId, "plan-drafts"] as const,
+  planDraft: (workspaceId: Uuid, workflowId: Uuid, version: number) =>
+    ["workflows", workspaceId, "detail", workflowId, "plan-drafts", version] as const,
   executions: (workspaceId: Uuid, workflowId: Uuid, taskId: Uuid) =>
     ["workflows", workspaceId, "detail", workflowId, "executions", taskId] as const,
 };

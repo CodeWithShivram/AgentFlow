@@ -64,6 +64,8 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   request id on the workflow so superseded deliveries change nothing. Prompts reach models only inside delimiters;
   outbox payloads and events carry identifiers and counts, never prompt text. Analysis and plan drafts never bump
   `revision`; drafts (`workflow_plans`, ADR-0015) are immutable versions and only become tasks on confirmation (2.5).
+  Plan schema and DAG checks live in `app/planning/schema.py` and `dag.py` (ADR-0016), which import no gateway code,
+  so the API may use them; drafts are always acyclic.
 - Workflow events are append-only.
 
 ## Security

@@ -25,6 +25,7 @@ import { AssignAgentDialog } from "./assign-agent-dialog";
 import { DependenciesDialog } from "./dependencies-dialog";
 import { DependencyGraph } from "./dependency-graph";
 import { EventTimeline } from "./event-timeline";
+import { PlanDraftPreview } from "./plan-draft-preview";
 import { RequirementsPanel } from "./requirements-panel";
 import { PLAN_EDIT_REOPENS, PLAN_EDITABLE, WORKFLOW_STATUS_HELP } from "./status";
 import { type TaskAction, TaskList } from "./task-list";
@@ -50,6 +51,7 @@ export function WorkflowDetailView() {
   const [dependencyTask, setDependencyTask] = useState<Task | null>(null);
   const [assignTask, setAssignTask] = useState<Task | null>(null);
   const [confirmTask, setConfirmTask] = useState<{ action: "cancel" | "remove"; task: Task } | null>(null);
+  const [tab, setTab] = useState("tasks");
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: workflowKeys.detail(workspace.id, workflowId) });
   const reloadAfterConflict = () => {
@@ -119,11 +121,14 @@ export function WorkflowDetailView() {
         </Alert>
       ) : null}
 
-      <Tabs defaultValue="tasks">
-        <TabsList>
+      <Tabs value={tab} onValueChange={setTab}>
+        <TabsList className="max-w-full justify-start overflow-x-auto">
           <TabsTrigger value="tasks">Tasks ({activeTasks.length})</TabsTrigger>
           <TabsTrigger value="requirements">
             Requirements{wf.analysis_status === "PENDING" ? " (analysing…)" : ""}
+          </TabsTrigger>
+          <TabsTrigger value="plan">
+            Plan draft{wf.plan_status === "PENDING" ? " (drafting…)" : ""}
           </TabsTrigger>
           <TabsTrigger value="graph">Dependencies</TabsTrigger>
           <TabsTrigger value="timeline">Timeline</TabsTrigger>
@@ -151,7 +156,11 @@ export function WorkflowDetailView() {
         </TabsContent>
 
         <TabsContent value="requirements" className="pt-2">
-          <RequirementsPanel workflow={wf} />
+          <RequirementsPanel workflow={wf} onReviewPlan={() => setTab("plan")} />
+        </TabsContent>
+
+        <TabsContent value="plan" className="pt-2">
+          <PlanDraftPreview workflow={wf} />
         </TabsContent>
 
         <TabsContent value="graph" className="pt-2">

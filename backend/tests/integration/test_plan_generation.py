@@ -270,3 +270,62 @@ def test_viewers_see_drafts_but_cannot_request_them(
 
     assert viewer.get(url).json()["items"][0]["version"] == 1
     assert viewer.post(url, headers=csrf(viewer)).status_code == 403
+
+
+# --- preview with DAG validation (Step 2.4) ---------------------------------------------------
+
+
+def _drafted(owner: TestClient, admin: Factory, jobs: dict[str, Callable[..., str]]) -> str:
+    workflow = _analysed_workflow(owner, admin, jobs)
+    assert jobs["plan"](_requests(admin, workflow["id"], outbox.WORKFLOW_PLAN)[0]) == "ready"
+    workflow_id: str = workflow["id"]
+    return workflow_id
+
+
+def test_the_preview_shows_the_full_draft_with_stages(
+    owner: TestClient,
+    admin_factory: Factory,
+    jobs: dict[str, Callable[..., str]],
+    seeded_builtins: Settings,
+) -> None:
+    workflow_id = _drafted(owner, admin_factory, jobs)
+
+    preview = owner.get(_url(owner, workflow_id, "/plan-drafts/1")).json()
+
+    assert preview["version"] == 1 and preview["task_count"] == 4
+    proposal = plan.PlanProposal.model_validate(preview["plan"])
+    assert [t.key for t in proposal.tasks] == ["t1", "t2", "t3", "t4"]
+    assert preview["stages"] == [["t1", "t2", "t3"], ["t4"]]
+    # Built-in agents are active and cover every planned skill; 3 parallel tasks fit the limit.
+    assert preview["issues"] == []
+
+
+def test_the_preview_warns_about_skills_no_active_agent_has(
+    owner: TestClient, admin_factory: Factory, jobs: dict[str, Callable[..., str]]
+) -> None:
+    workflow_id = _drafted(owner, admin_factory, jobs)  # no agents at all in this database
+
+    issues = owner.get(_url(owner, workflow_id, "/plan-drafts/1")).json()["issues"]
+
+    assert issues and {i["code"] for i in issues} == {"SKILL_NOT_AVAILABLE"}
+    assert all(i["severity"] == "warning" and i["task_keys"] for i in issues)
+
+
+def test_previews_are_scoped_and_versioned(
+    owner: TestClient,
+    new_client: ClientFactory,
+    admin_factory: Factory,
+    jobs: dict[str, Callable[..., str]],
+) -> None:
+    workflow_id = _drafted(owner, admin_factory, jobs)
+    viewer = member(new_client, owner, "VIEWER")
+    stranger = new_client()
+    register(stranger, new_email())
+    url = f"{API}/workspaces/{my_workspace(owner)}/workflows/{workflow_id}/plan-drafts"
+
+    assert viewer.get(f"{url}/1").status_code == 200
+    missing = owner.get(f"{url}/2")
+    assert missing.status_code == 404
+    assert missing.json()["error"]["code"] == "PLAN_DRAFT_NOT_FOUND"
+    assert owner.get(f"{url}/0").status_code == 422
+    assert stranger.get(f"{url}/1").status_code == 404

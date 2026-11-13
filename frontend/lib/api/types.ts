@@ -64,6 +64,39 @@ export interface PlanDraftSummary {
   created_at: IsoDateTime;
 }
 
+export interface PlannedTask {
+  key: string;
+  title: string;
+  description: string;
+  required_skills: string[];
+  deliverables: string[];
+  acceptance_criteria: AcceptanceCriterion[];
+  priority: number;
+  required: boolean;
+  depends_on: string[];
+}
+
+export interface PlanProposal {
+  schema_version: number;
+  summary: string;
+  tasks: PlannedTask[];
+  risks: string[];
+}
+
+export interface PlanIssue {
+  code: string;
+  severity: "error" | "warning";
+  message: string;
+  task_keys: string[];
+}
+
+/** A plan draft with its DAG validation (Step 2.4). */
+export interface PlanDraftPreview extends PlanDraftSummary {
+  plan: PlanProposal;
+  stages: string[][];
+  issues: PlanIssue[];
+}
+
 /** The validated prompt analysis (backend app/planning/analysis.py PromptAnalysis). */
 export interface PromptAnalysis {
   schema_version: 1;

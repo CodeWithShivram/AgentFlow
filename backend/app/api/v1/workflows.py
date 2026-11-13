@@ -8,7 +8,7 @@ import uuid
 from datetime import timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, Query, Response, status
+from fastapi import APIRouter, Depends, Header, Path, Query, Response, status
 from fastapi.responses import JSONResponse
 
 from app.api.deps import DbSession, SettingsDep, workspace_role
@@ -21,7 +21,9 @@ from app.schemas.workflows import (
     ExecutionList,
     ExecutionResponse,
     PlanDraftList,
+    PlanDraftPreview,
     PlanDraftSummary,
+    PlanIssueResponse,
     RevisionReasonRequest,
     TaskCreateRequest,
     TaskResponse,
@@ -156,6 +158,32 @@ async def list_plan_drafts(
     drafts = await service.list_plan_drafts(session, access, workflow_id)
     return PlanDraftList(
         items=[PlanDraftSummary.model_validate(d, from_attributes=True) for d in drafts]
+    )
+
+
+@router.get("/{workflow_id}/plan-drafts/{version}")
+async def preview_plan_draft(
+    workflow_id: uuid.UUID,
+    version: Annotated[int, Path(ge=1)],
+    access: Viewer,
+    session: DbSession,
+) -> PlanDraftPreview:
+    """One plan draft with its DAG validation: stages and issues (Step 2.4)."""
+    preview = await service.preview_plan_draft(session, access, workflow_id, version)
+    draft, report = preview.draft, preview.report
+    return PlanDraftPreview(
+        version=draft.version,
+        task_count=draft.task_count,
+        prompt_version=draft.prompt_version,
+        created_at=draft.created_at,
+        plan=draft.plan,
+        stages=report.stages,
+        issues=[
+            PlanIssueResponse(
+                code=i.code, severity=i.severity, message=i.message, task_keys=list(i.task_keys)
+            )
+            for i in report.issues
+        ],
     )
 
 

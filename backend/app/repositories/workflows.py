@@ -195,3 +195,16 @@ async def list_plan_drafts(session: AsyncSession, workflow: Workflow) -> list[Wo
         .order_by(WorkflowPlan.version.desc())
     )
     return list(rows.scalars())
+
+
+async def get_plan_draft(
+    session: AsyncSession, workflow: Workflow, version: int
+) -> WorkflowPlan | None:
+    result = await session.execute(
+        select(WorkflowPlan).where(
+            WorkflowPlan.workflow_id == workflow.id,
+            WorkflowPlan.workspace_id == workflow.workspace_id,
+            WorkflowPlan.version == version,
+        )
+    )
+    return result.scalar_one_or_none()

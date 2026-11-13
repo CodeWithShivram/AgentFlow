@@ -150,3 +150,17 @@ async def lock_proposal(
         .execution_options(populate_existing=True)
     )
     return (await session.execute(statement)).scalar_one_or_none()
+
+
+async def active_capabilities(session: AsyncSession, *, workspace_id: uuid.UUID) -> set[str]:
+    """Capabilities offered by the active versions of the workspace's ACTIVE agents and of
+    active built-ins. Configurations are validated on write, so they are read as stored."""
+    rows = await session.execute(
+        select(AgentVersion.configuration)
+        .join(Agent, Agent.active_version_id == AgentVersion.id)
+        .where(_visible_to(workspace_id), Agent.status == AgentStatus.ACTIVE)
+    )
+    skills: set[str] = set()
+    for configuration in rows.scalars():
+        skills.update(str(c) for c in configuration.get("capabilities", []))
+    return skills

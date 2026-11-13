@@ -23,6 +23,9 @@ from app.models import (
     WorkflowStatus,
     WorkspaceRole,
 )
+from app.planning.dag import DagReport, analyse_plan
+from app.planning.schema import PlanProposal
+from app.repositories import agents as agents_repository
 from app.repositories import workflows as repository
 from app.schemas.workflows import WorkflowCreateRequest, WorkflowResponse
 from app.services.authorization import InsufficientRoleError, WorkspaceAccess, role_at_least
@@ -69,6 +72,18 @@ class PlanNotRegeneratableError(AppError):
     status_code = 409
     code = "PLAN_NOT_REGENERATABLE"
     message = "A new plan draft needs a ready analysis, while planning, and no draft in progress."
+
+
+class PlanDraftNotFoundError(AppError):
+    status_code = 404
+    code = "PLAN_DRAFT_NOT_FOUND"
+    message = "Plan draft not found."
+
+
+@dataclass(frozen=True)
+class DraftPreview:
+    draft: WorkflowPlan
+    report: DagReport
 
 
 @dataclass(frozen=True)
@@ -257,3 +272,19 @@ async def regenerate_plan(
     await request_plan(session, workflow, actor=Actor.USER)
     await session.commit()
     return workflow
+
+
+async def preview_plan_draft(
+    session: AsyncSession, access: WorkspaceAccess, workflow_id: uuid.UUID, version: int
+) -> DraftPreview:
+    """A draft with its DAG validation against the workspace's current agents (Step 2.4)."""
+    workflow = await get_workflow(session, access, workflow_id)
+    draft = await repository.get_plan_draft(session, workflow, version)
+    if draft is None:
+        raise PlanDraftNotFoundError()
+    proposal = PlanProposal.model_validate(draft.plan)
+    skills = await agents_repository.active_capabilities(session, workspace_id=access.workspace_id)
+    report = analyse_plan(
+        proposal.tasks, max_parallel_tasks=workflow.max_parallel_tasks, available_skills=skills
+    )
+    return DraftPreview(draft=draft, report=report)

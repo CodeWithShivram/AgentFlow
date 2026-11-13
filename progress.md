@@ -2,8 +2,8 @@
 
 ## Current position
 - Phase: 2 — Intelligent planning (Phase 1 released as `v0.1.0`, pushed with its tag)
-- Last completed step: 2.3 — Plan drafts: task decomposition and acceptance criteria
-- Next step: 2.4 — DAG validation and plan preview API, which needs a short plan and the owner's go-ahead
+- Last completed step: 2.4 — DAG validation and plan preview
+- Next step: 2.5 — User plan confirmation before execution, which needs a short plan and the owner's go-ahead
 
 ## Completed steps
 | Step | Commit message | Hash |
@@ -24,12 +24,13 @@
 | — | `ci: pin astral-sh/setup-uv to v10.3.3` | `19f2604` |
 | 2.1 | `feat(llm): add model gateway with usage records and mock adapter` | `d2aef8f` (pushed, CI ✔) |
 | 2.2 | `feat(planning): add structured prompt analysis` | `8dffe47` (pushed, CI ✔) |
-| 2.3 | `feat(planning): add versioned plan drafts with task decomposition` | latest commit touching `backend/app/planning/plan.py` |
+| 2.3 | `feat(planning): add versioned plan drafts with task decomposition` | `f1d8476` (pushed, CI ✔) |
+| 2.4 | `feat(planning): add plan DAG validation and draft preview` | latest commit touching `backend/app/planning/dag.py` |
 
 ## Environment snapshot (2026-11-12)
 | Item | Value |
 |---|---|
-| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `8dffe47` plus tag `v0.1.0` (owner-authorized) |
+| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `f1d8476` plus tag `v0.1.0` (owner-authorized) |
 | Python / uv / Node / npm | 3.12.14 via uv 0.12.9 / Node 24.13.0 / npm 11.6.2 |
 | Celery / kombu | 5.7.0 / 5.7.0 |
 | Docker | 29.8.2, Compose v5.6.0 — `agentflow` stack healthy (Docker Desktop must be started first) |
@@ -39,6 +40,32 @@
 | E2E | API :8011 (as `agentflow_api`), frontend :3100, database `agentflow_e2e` (reset each run), Redis DBs 2/3, installed Google Chrome |
 | Frontend audit | `npm audit --omit=dev`: 0 vulnerabilities; dev-only: 8 moderate, all the existing `minimatch` chain via ESLint |
 | Test HTTP client | `httpx2` 2.16.0 (replaces `httpx`, OD-10) |
+
+## Step 2.4 — DAG validation and plan preview (ADR-0016)
+- **Owner decisions (2026-11-13):** a cyclic model reply is invalid output and is retried; skills no active agent provides are warnings; a separate "Plan draft" tab; any version can be previewed, newest first.
+- **`app/planning/dag.py`** (pure functions):
+  - `find_cycle` (Kahn) and `stages` (longest-path levels);
+  - `analyse_plan`: `DEPENDENCY_CYCLE` (error); `REQUIRED_DEPENDS_ON_OPTIONAL`, `SKILL_NOT_AVAILABLE` and `STAGE_EXCEEDS_PARALLEL_LIMIT` (warnings).
+- **`app/planning/schema.py`:** `PlanProposal`/`PlannedTask` moved here (no gateway imports) and the schema now rejects cycles. `plan.py` re-exports the names.
+- **API:** `GET …/plan-drafts/{version}` (Viewer) returns the full draft, stages and issues. Skill coverage is computed against the ACTIVE agents' active versions at preview time (`agents_repository.active_capabilities`). An unknown version gets 404 `PLAN_DRAFT_NOT_FOUND`; a version below 1 gets 422.
+- **Frontend:**
+  - `plan-draft-preview.tsx`: a "Plan draft" tab with a version selector, errors and warnings naming tasks, stage columns of expandable task cards, and risks;
+  - "Review draft" in the Requirements status card opens the tab.
+
+## Checks last executed (Step 2.4)
+- **Backend gate (`check.ps1 -E2E`, backend part) ✔:**
+  - ruff; mypy (131 files); alembic check;
+  - pytest **824 passed** (814 plus 10 new: 7 unit DAG/schema, 3 preview integration).
+- **Frontend, rerun after two test fixes ✔:**
+  - eslint, typecheck;
+  - Vitest **89** (4 new);
+  - Playwright **14 passed**: journey 7 now opens the preview and checks Stage 1 shows "No problems found.";
+  - build.
+- **The two test fixes:**
+  - A new component test's waits now allow 5 s, because the preview makes two requests in sequence; it timed out under gate load. The assertions are unchanged.
+  - An E2E locator now uses an exact match: it also matched the collapsed task details.
+- **Deliberate-bug check** (reverted): removing the schema's cycle rejection makes 2 tests fail.
+- **Environment:** Docker Desktop's engine failed to start mid-step; the owner restarted Docker. The dev DB stays at `0009`; there is no migration in this step.
 
 ## Step 2.3 — plan drafts (ADR-0015)
 - **Owner decisions (2026-11-13):** generation starts automatically when the analysis is READY; versioned drafts, applied only on confirmation (2.5); a minimal status UI; at most 25 tasks.
@@ -211,6 +238,6 @@
 None.
 
 ## Next exact action
-1. **Push Step 2.3** on the owner's go-ahead, and confirm CI on GitHub.
-2. **Step 2.4: DAG validation and plan preview API.** Present a short plan first. It covers cycle detection and the full draft preview (API and UI).
+1. **Push Step 2.4** on the owner's go-ahead, and confirm CI on GitHub.
+2. **Step 2.5: user plan confirmation before execution.** Present a short plan first. It confirms a draft into workflow tasks and dependencies, decides how existing manual tasks are treated, and refuses drafts with errors.
 3. **Before any hosted deployment:** settle OD-14, OD-19 and OD-20.
