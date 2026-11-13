@@ -43,6 +43,7 @@ ROW_LEVEL_SECURED = {
     "outbox_events",
     "agent_executions",
     "llm_usage",
+    "workflow_plans",
 }
 # Read before any workspace context exists (login, refresh, invitation by token) or worker-only.
 OUTSIDE_RLS = {

@@ -52,6 +52,14 @@ class AnalysisStatus(StrEnum):
     FAILED = "FAILED"
 
 
+class PlanStatus(StrEnum):
+    # Plan generation by the model gateway (Step 2.3). Drafts are kept in workflow_plans.
+    NOT_REQUESTED = "NOT_REQUESTED"
+    PENDING = "PENDING"
+    READY = "READY"
+    FAILED = "FAILED"
+
+
 class AutonomyPolicy(StrEnum):
     # approval_required: a plan must be approved (AWAITING_APPROVAL) before it can run.
     # autonomous: a submitted plan goes straight to READY.
@@ -108,6 +116,10 @@ class WorkflowEventType(StrEnum):
     ANALYSIS_REQUESTED = "ANALYSIS_REQUESTED"
     REQUIREMENTS_ANALYZED = "REQUIREMENTS_ANALYZED"
     ANALYSIS_FAILED = "ANALYSIS_FAILED"
+    # Added in Step 2.3 for plan drafts.
+    PLAN_REQUESTED = "PLAN_REQUESTED"
+    PLAN_GENERATED = "PLAN_GENERATED"
+    PLAN_GENERATION_FAILED = "PLAN_GENERATION_FAILED"
 
 
 class Workflow(Base):
@@ -138,6 +150,13 @@ class Workflow(Base):
     )
     # The outbox event of the current analysis request; older deliveries are ignored.
     analysis_request_id: Mapped[uuid.UUID | None]
+    plan_status: Mapped[PlanStatus] = mapped_column(
+        str_enum(PlanStatus, "plan_status"),
+        server_default=text("'NOT_REQUESTED'"),
+        default=PlanStatus.NOT_REQUESTED,
+    )
+    # The outbox event of the current plan-generation request.
+    plan_request_id: Mapped[uuid.UUID | None]
     status: Mapped[WorkflowStatus] = mapped_column(
         str_enum(WorkflowStatus, "status"), default=WorkflowStatus.PENDING
     )

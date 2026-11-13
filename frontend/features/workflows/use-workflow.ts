@@ -13,6 +13,8 @@ export const workflowKeys = {
   detail: (workspaceId: Uuid, workflowId: Uuid) => ["workflows", workspaceId, "detail", workflowId] as const,
   tasks: (workspaceId: Uuid, workflowId: Uuid) => ["workflows", workspaceId, "detail", workflowId, "tasks"] as const,
   events: (workspaceId: Uuid, workflowId: Uuid) => ["workflows", workspaceId, "detail", workflowId, "events"] as const,
+  planDrafts: (workspaceId: Uuid, workflowId: Uuid) =>
+    ["workflows", workspaceId, "detail", workflowId, "plan-drafts"] as const,
   executions: (workspaceId: Uuid, workflowId: Uuid, taskId: Uuid) =>
     ["workflows", workspaceId, "detail", workflowId, "executions", taskId] as const,
 };
@@ -54,7 +56,7 @@ export async function fetchNewEvents(
 
 /**
  * Live view of one workflow. There is no push channel (no SSE/WebSocket endpoint), so while the
- * workflow is executing or its prompt analysis is pending, the append-only event log is polled;
+ * workflow is executing or its prompt analysis or plan draft is pending, the append-only event log is polled;
  * new events refresh the workflow, its tasks and their executions.
  */
 export function useWorkflow(workspaceId: Uuid, workflowId: Uuid) {
@@ -74,6 +76,7 @@ export function useWorkflow(workspaceId: Uuid, workflowId: Uuid) {
   const live =
     (workflow.data !== undefined && WORKFLOW_ACTIVE.has(workflow.data.status)) ||
     workflow.data?.analysis_status === "PENDING" ||
+    workflow.data?.plan_status === "PENDING" ||
     (tasks.data ?? []).some((t) => TASK_IN_FLIGHT.has(t.status));
 
   const eventsKey = workflowKeys.events(workspaceId, workflowId);

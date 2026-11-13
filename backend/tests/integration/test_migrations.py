@@ -34,6 +34,7 @@ EXPECTED_TABLES = {
     "inbox_messages",
     "agent_executions",
     "llm_usage",
+    "workflow_plans",
 }
 
 

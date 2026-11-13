@@ -43,6 +43,10 @@ test("journey 7: plan tasks with dependencies", async ({ browser }) => {
   await expect(requirements.getByText("Write a market report", { exact: true }).first()).toBeVisible();
   // The request is brief, so the analysis lists an open question.
   await expect(requirements.getByText("Open questions (1)")).toBeVisible();
+  // Step 2.3: the ready analysis is turned into a plan draft by the worker; tasks stay unchanged.
+  await expect(requirements.getByText("Draft plan version 1 is ready with 1 task")).toBeVisible({
+    timeout: 60_000,
+  });
   await page.getByRole("tab", { name: /Tasks/ }).click();
 
   await addTask(page, "Collect sources");

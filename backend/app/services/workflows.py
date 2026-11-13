@@ -15,9 +15,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import AppError
 from app.models import (
     AnalysisStatus,
+    PlanStatus,
     Workflow,
     WorkflowEvent,
     WorkflowEventType,
+    WorkflowPlan,
     WorkflowStatus,
     WorkspaceRole,
 )
@@ -25,7 +27,12 @@ from app.repositories import workflows as repository
 from app.schemas.workflows import WorkflowCreateRequest, WorkflowResponse
 from app.services.authorization import InsufficientRoleError, WorkspaceAccess, role_at_least
 from app.services.idempotency import IdempotencyService, NewRequest, StoredResponse
-from app.services.transitions import record_event, request_analysis, transition_workflow
+from app.services.transitions import (
+    record_event,
+    request_analysis,
+    request_plan,
+    transition_workflow,
+)
 from app.workflows.state_machine import Actor
 
 logger = logging.getLogger("agentflow.workflows")
@@ -56,6 +63,12 @@ class AnalysisNotRetryableError(AppError):
 # Analysis may be (re)requested only while the plan can still change.
 _ANALYSIS_RETRY_STATUSES = frozenset({W.PLANNING, W.AWAITING_APPROVAL, W.READY})
 _ANALYSIS_RETRYABLE = frozenset({AnalysisStatus.FAILED, AnalysisStatus.NOT_REQUESTED})
+
+
+class PlanNotRegeneratableError(AppError):
+    status_code = 409
+    code = "PLAN_NOT_REGENERATABLE"
+    message = "A new plan draft needs a ready analysis, while planning, and no draft in progress."
 
 
 @dataclass(frozen=True)
@@ -216,5 +229,31 @@ async def retry_analysis(
             }
         )
     await request_analysis(session, workflow, actor=Actor.USER)
+    await session.commit()
+    return workflow
+
+
+async def list_plan_drafts(
+    session: AsyncSession, access: WorkspaceAccess, workflow_id: uuid.UUID
+) -> list[WorkflowPlan]:
+    workflow = await get_workflow(session, access, workflow_id)
+    return await repository.list_plan_drafts(session, workflow)
+
+
+async def regenerate_plan(
+    session: AsyncSession, access: WorkspaceAccess, workflow_id: uuid.UUID
+) -> Workflow:
+    """Requests another plan draft (Step 2.3). Earlier drafts are kept; the plan and the
+    workflow's revision are untouched until a draft is confirmed (Step 2.5)."""
+    workflow = await lock_for_change(session, access, workflow_id, revision=None)
+    if (
+        workflow.status not in _ANALYSIS_RETRY_STATUSES
+        or workflow.analysis_status != AnalysisStatus.READY
+        or workflow.plan_status == PlanStatus.PENDING
+    ):
+        raise PlanNotRegeneratableError(
+            details={"status": workflow.status.value, "plan_status": workflow.plan_status.value}
+        )
+    await request_plan(session, workflow, actor=Actor.USER)
     await session.commit()
     return workflow

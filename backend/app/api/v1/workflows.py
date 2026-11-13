@@ -20,6 +20,8 @@ from app.schemas.workflows import (
     EventPage,
     ExecutionList,
     ExecutionResponse,
+    PlanDraftList,
+    PlanDraftSummary,
     RevisionReasonRequest,
     TaskCreateRequest,
     TaskResponse,
@@ -144,6 +146,25 @@ async def retry_analysis(
     """Requests the prompt analysis again after it failed (Step 2.2). It runs in a worker;
     poll the workflow or its events for the result."""
     return service.workflow_response(await service.retry_analysis(session, access, workflow_id))
+
+
+@router.get("/{workflow_id}/plan-drafts")
+async def list_plan_drafts(
+    workflow_id: uuid.UUID, access: Viewer, session: DbSession
+) -> PlanDraftList:
+    """Generated plan drafts, newest first (Step 2.3). Summaries only."""
+    drafts = await service.list_plan_drafts(session, access, workflow_id)
+    return PlanDraftList(
+        items=[PlanDraftSummary.model_validate(d, from_attributes=True) for d in drafts]
+    )
+
+
+@router.post("/{workflow_id}/plan-drafts")
+async def regenerate_plan(
+    workflow_id: uuid.UUID, access: Member, session: DbSession
+) -> WorkflowResponse:
+    """Requests a new plan draft from the current analysis. It runs in a worker."""
+    return service.workflow_response(await service.regenerate_plan(session, access, workflow_id))
 
 
 @router.post("/{workflow_id}/start")

@@ -130,9 +130,12 @@ def test_the_worker_stores_a_validated_analysis(
     assert parsed.objective == "Research three CRM vendors."
     # Analysis never touches the plan, so the user's revision stays valid.
     assert stored["revision"] == workflow["revision"]
-    event = _events(owner, workflow["id"])[-1]
+    *_, event, planning = _events(owner, workflow["id"])
     assert event["event_type"] == "REQUIREMENTS_ANALYZED"
     assert event["payload"]["prompt_version"] == analysis.PROMPT_VERSION
+    # A ready analysis requests a plan draft in the same transaction (Step 2.3).
+    assert planning["event_type"] == "PLAN_REQUESTED"
+    assert stored["plan_status"] == "PENDING"
     assert PROMPT not in json.dumps(event["payload"])
     with session_scope(admin_factory) as s:
         usage = s.scalars(select(LlmUsage)).one()

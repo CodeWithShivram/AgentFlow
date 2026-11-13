@@ -29,6 +29,7 @@ function workflow(overrides: Partial<Workflow>): Workflow {
     status: "PLANNING",
     analysis_status: "READY",
     normalized_requirements: ANALYSIS,
+    plan_status: "NOT_REQUESTED",
     ...overrides,
   } as Workflow;
 }
@@ -93,5 +94,38 @@ describe("RequirementsPanel", () => {
     renderPanel(workflow({ analysis_status: "FAILED", normalized_requirements: null }), "VIEWER");
     expect(screen.getByText("The analysis failed")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Retry analysis" })).not.toBeInTheDocument();
+  });
+});
+
+describe("PlanDraftStatus", () => {
+  function stubDrafts(items: unknown[]) {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ items }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  it("announces a pending draft", () => {
+    stubDrafts([]);
+    renderPanel(workflow({ plan_status: "PENDING" }));
+    expect(screen.getByText("Drafting a plan from the analysis…")).toBeInTheDocument();
+  });
+
+  it("summarises the latest draft and offers regeneration to members", async () => {
+    stubDrafts([{ version: 2, task_count: 4, prompt_version: "plan_generation/v1", created_at: new Date().toISOString() }]);
+    renderPanel(workflow({ plan_status: "READY" }));
+    expect(await screen.findByText("Draft plan version 2 is ready with 4 tasks")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Regenerate plan" })).toBeInTheDocument();
+  });
+
+  it("explains a failed draft and hides regeneration from viewers", () => {
+    stubDrafts([]);
+    renderPanel(workflow({ plan_status: "FAILED" }), "VIEWER");
+    expect(screen.getByText("The plan draft failed")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Regenerate plan" })).not.toBeInTheDocument();
   });
 });

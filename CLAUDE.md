@@ -62,7 +62,8 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   estimated cost/tokens as actual.
 - Planning jobs (ADR-0014, `app/planning/`) follow claim -> model call outside any transaction -> finish, keyed by a
   request id on the workflow so superseded deliveries change nothing. Prompts reach models only inside delimiters;
-  outbox payloads and events carry identifiers and counts, never prompt text. Analysis never bumps `revision`.
+  outbox payloads and events carry identifiers and counts, never prompt text. Analysis and plan drafts never bump
+  `revision`; drafts (`workflow_plans`, ADR-0015) are immutable versions and only become tasks on confirmation (2.5).
 - Workflow events are append-only.
 
 ## Security

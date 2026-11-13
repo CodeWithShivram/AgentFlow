@@ -17,6 +17,7 @@ import type {
   Me,
   Member,
   Page,
+  PlanDraftSummary,
   Proposal,
   ProposalInput,
   ProposalStatus,
@@ -121,6 +122,11 @@ export function createEndpoints(client: ApiClient) {
       /** Requests the prompt analysis again after it failed; it runs in a worker. */
       retryAnalysis: (workspaceId: Uuid, workflowId: Uuid) =>
         client.post<Workflow>(`${wf(workspaceId, workflowId)}/analysis`),
+      planDrafts: (workspaceId: Uuid, workflowId: Uuid) =>
+        client.get<{ items: PlanDraftSummary[] }>(`${wf(workspaceId, workflowId)}/plan-drafts`),
+      /** Requests a new plan draft from the current analysis; it runs in a worker. */
+      regeneratePlan: (workspaceId: Uuid, workflowId: Uuid) =>
+        client.post<Workflow>(`${wf(workspaceId, workflowId)}/plan-drafts`),
       start: (workspaceId: Uuid, workflowId: Uuid, revision: number) =>
         client.post<Workflow>(`${wf(workspaceId, workflowId)}/start`, { revision }),
       cancel: (workspaceId: Uuid, workflowId: Uuid, revision: number, reason?: string) =>

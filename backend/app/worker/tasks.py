@@ -10,7 +10,7 @@ from sqlalchemy.exc import OperationalError
 from app.db.sync_session import get_worker_session_factory, session_scope
 from app.execution import cleanup, outbox, relay, runner
 from app.llm.gateway import get_model_gateway
-from app.planning import analysis
+from app.planning import analysis, plan
 from app.worker.celery_app import EXECUTION_QUEUE, celery_app, settings
 
 logger = logging.getLogger("agentflow.worker")
@@ -19,12 +19,13 @@ logger = logging.getLogger("agentflow.worker")
 EVENT_ROUTES = {
     outbox.TASK_DISPATCH: ("agentflow.execute_task", EXECUTION_QUEUE),
     outbox.WORKFLOW_ANALYZE: ("agentflow.analyze_workflow", EXECUTION_QUEUE),
+    outbox.WORKFLOW_PLAN: ("agentflow.plan_workflow", EXECUTION_QUEUE),
 }
 _FINISH_ATTEMPTS = 3
 # Default agent timeout (handoff section 6): 600 s. Hard limit gives the soft one room to finish.
 EXECUTION_SOFT_TIME_LIMIT = 600
 EXECUTION_TIME_LIMIT = 660
-# Prompt analysis: three model attempts with short backoff.
+# Prompt analysis and plan generation: three model attempts with short backoff.
 ANALYSIS_SOFT_TIME_LIMIT = 300
 ANALYSIS_TIME_LIMIT = 330
 
@@ -138,6 +139,33 @@ def analyze_workflow(event_id: str, workspace_id: str, workflow_id: str) -> str:
         outcome = analysis.AnalysisFailure(code="ANALYSIS_TIMED_OUT", attempts=0)
     with session_scope(factory) as session:
         return analysis.finish(session, job, outcome)
+
+
+@celery_app.task(
+    name="agentflow.plan_workflow",
+    soft_time_limit=ANALYSIS_SOFT_TIME_LIMIT,
+    time_limit=ANALYSIS_TIME_LIMIT,
+)
+def plan_workflow(event_id: str, workspace_id: str, workflow_id: str) -> str:
+    """Drafts a plan from the workflow's analysis (Step 2.3). Idempotent on `event_id`."""
+    factory = get_worker_session_factory()
+    with session_scope(factory) as session:
+        job = plan.claim(
+            session,
+            event_id=uuid.UUID(event_id),
+            workspace_id=uuid.UUID(workspace_id),
+            workflow_id=uuid.UUID(workflow_id),
+        )
+    if isinstance(job, plan.Skipped):
+        logger.info("plan generation skipped", extra={"event_id": event_id, "outcome": job.value})
+        return job.value
+    outcome: plan.PlanProposal | plan.PlanFailure
+    try:
+        outcome = plan.generate(get_model_gateway(), job)
+    except SoftTimeLimitExceeded:
+        outcome = plan.PlanFailure(code="PLAN_GENERATION_TIMED_OUT", attempts=0)
+    with session_scope(factory) as session:
+        return plan.finish(session, job, outcome)
 
 
 @celery_app.task(name="agentflow.cleanup", ignore_result=True)

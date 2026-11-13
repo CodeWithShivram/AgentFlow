@@ -24,11 +24,13 @@ from app.models.execution import (
     OutboxStatus,
 )
 from app.models.idempotency import IdempotencyKey, IdempotencyStatus
+from app.models.plan import WorkflowPlan
 from app.models.tenancy import User, Workspace, WorkspaceMember, WorkspaceRole
 from app.models.usage import LlmCallStatus, LlmUsage
 from app.models.workflow import (
     AnalysisStatus,
     AutonomyPolicy,
+    PlanStatus,
     TaskDependency,
     TaskStatus,
     Workflow,
@@ -59,6 +61,7 @@ __all__ = [
     "LlmUsage",
     "OutboxEvent",
     "OutboxStatus",
+    "PlanStatus",
     "RefreshToken",
     "SessionRevocationReason",
     "TaskDependency",
@@ -67,6 +70,7 @@ __all__ = [
     "Workflow",
     "WorkflowEvent",
     "WorkflowEventType",
+    "WorkflowPlan",
     "WorkflowStatus",
     "WorkflowTask",
     "Workspace",

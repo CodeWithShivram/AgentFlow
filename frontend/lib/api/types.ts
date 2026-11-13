@@ -53,6 +53,17 @@ export type AutonomyPolicy = "approval_required" | "autonomous";
 export const ANALYSIS_STATUSES = ["NOT_REQUESTED", "PENDING", "READY", "FAILED"] as const;
 export type AnalysisStatus = (typeof ANALYSIS_STATUSES)[number];
 
+export const PLAN_STATUSES = ["NOT_REQUESTED", "PENDING", "READY", "FAILED"] as const;
+export type PlanStatus = (typeof PLAN_STATUSES)[number];
+
+/** A generated plan draft (Step 2.3); the full draft is previewed in Step 2.4. */
+export interface PlanDraftSummary {
+  version: number;
+  task_count: number;
+  prompt_version: string;
+  created_at: IsoDateTime;
+}
+
 /** The validated prompt analysis (backend app/planning/analysis.py PromptAnalysis). */
 export interface PromptAnalysis {
   schema_version: 1;
@@ -256,6 +267,7 @@ export interface Workflow {
   status: WorkflowStatus;
   analysis_status: AnalysisStatus;
   normalized_requirements: PromptAnalysis | null;
+  plan_status: PlanStatus;
   autonomy_policy: AutonomyPolicy;
   budget_limit: string | null;
   currency: string;

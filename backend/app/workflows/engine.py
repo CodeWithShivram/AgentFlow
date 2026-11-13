@@ -32,6 +32,7 @@ from app.execution import outbox
 from app.models import (
     AnalysisStatus,
     AutonomyPolicy,
+    PlanStatus,
     TaskDependency,
     TaskStatus,
     Workflow,
@@ -187,6 +188,28 @@ def request_analysis(session: Session, workflow: Workflow, *, actor: Actor) -> u
         session,
         workflow,
         WorkflowEventType.ANALYSIS_REQUESTED,
+        payload={"actor": actor.value, "request_id": str(event_id)},
+    )
+    return event_id
+
+
+def request_plan(session: Session, workflow: Workflow, *, actor: Actor) -> uuid.UUID:
+    """Asks a worker to draft a plan from the workflow's analysis (Step 2.3): writes a
+    `workflow.plan` outbox row and marks plan generation PENDING, in the caller's transaction.
+    A newer request supersedes older ones."""
+    event_id = outbox.enqueue(
+        session,
+        outbox.WORKFLOW_PLAN,
+        workspace_id=workflow.workspace_id,
+        workflow_id=workflow.id,
+        payload={"workspace_id": str(workflow.workspace_id), "workflow_id": str(workflow.id)},
+    )
+    workflow.plan_status = PlanStatus.PENDING
+    workflow.plan_request_id = event_id
+    record_event(
+        session,
+        workflow,
+        WorkflowEventType.PLAN_REQUESTED,
         payload={"actor": actor.value, "request_id": str(event_id)},
     )
     return event_id

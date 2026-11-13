@@ -25,6 +25,7 @@ __all__ = [
     "reconcile_workflow",
     "record_event",
     "request_analysis",
+    "request_plan",
     "transition_task",
     "transition_workflow",
 ]
@@ -45,6 +46,10 @@ async def transition_workflow(
 
 async def request_analysis(session: AsyncSession, workflow: Workflow, *, actor: Actor) -> None:
     await session.run_sync(lambda sync: engine.request_analysis(sync, workflow, actor=actor))
+
+
+async def request_plan(session: AsyncSession, workflow: Workflow, *, actor: Actor) -> None:
+    await session.run_sync(lambda sync: engine.request_plan(sync, workflow, actor=actor))
 
 
 async def transition_task(

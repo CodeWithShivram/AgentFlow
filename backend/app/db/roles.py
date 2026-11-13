@@ -45,6 +45,8 @@ WORKER_GRANTS: dict[str, tuple[str, ...]] = {
     "workspace_invitations": ("SELECT", "DELETE"),
     # Model gateway usage records (ADR-0013); the worker is the only caller of models.
     "llm_usage": ("SELECT", "INSERT"),
+    # Plan drafts (ADR-0015) are written by the planning job and never changed.
+    "workflow_plans": ("SELECT", "INSERT"),
 }
 API_PRIVILEGES = ("SELECT", "INSERT", "UPDATE", "DELETE")
 # Tables the API never touches: migration bookkeeping and worker-only state.

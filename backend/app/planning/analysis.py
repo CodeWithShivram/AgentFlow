@@ -38,6 +38,7 @@ from app.llm.types import CallContext, ChatMessage, ModelRequest
 from app.models import AnalysisStatus, Workflow, WorkflowEventType
 from app.schemas.agents import Capability, SafeText, Slug
 from app.workflows import engine
+from app.workflows.state_machine import Actor
 
 logger = logging.getLogger("agentflow.planning")
 
@@ -306,6 +307,8 @@ def finish(session: Session, job: AnalysisJob, outcome: PromptAnalysis | Analysi
                 "ambiguities": len(outcome.ambiguities),
             },
         )
+        # A ready analysis is the planner's input (Step 2.3).
+        engine.request_plan(session, workflow, actor=Actor.SYSTEM)
         result = "ready"
     else:
         workflow.analysis_status = AnalysisStatus.FAILED

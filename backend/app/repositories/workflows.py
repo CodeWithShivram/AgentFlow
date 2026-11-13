@@ -13,6 +13,7 @@ from app.models import (
     TaskDependency,
     Workflow,
     WorkflowEvent,
+    WorkflowPlan,
     WorkflowStatus,
     WorkflowTask,
 )
@@ -181,3 +182,16 @@ async def list_executions(
         .order_by(AgentExecution.attempt_number)
     )
     return [(row[0], row[1]) for row in rows]
+
+
+async def list_plan_drafts(session: AsyncSession, workflow: Workflow) -> list[WorkflowPlan]:
+    """Plan drafts of the workflow, newest first."""
+    rows = await session.execute(
+        select(WorkflowPlan)
+        .where(
+            WorkflowPlan.workflow_id == workflow.id,
+            WorkflowPlan.workspace_id == workflow.workspace_id,
+        )
+        .order_by(WorkflowPlan.version.desc())
+    )
+    return list(rows.scalars())

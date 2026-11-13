@@ -15,6 +15,7 @@ import type { PromptAnalysis, Workflow } from "@/lib/api/types";
 import { humanize } from "@/lib/format";
 import { useCan, useWorkspace } from "@/lib/workspace";
 
+import { PlanDraftStatus } from "./plan-draft-status";
 import { workflowKeys } from "./use-workflow";
 
 const PRIORITY_LABEL = { must: "Must", should: "Should", could: "Could" } as const;
@@ -46,7 +47,12 @@ export function RequirementsPanel({ workflow }: { workflow: Workflow }) {
       />
     );
   }
-  return <AnalysisView analysis={workflow.normalized_requirements} />;
+  return (
+    <div className="space-y-4">
+      <PlanDraftStatus workflow={workflow} />
+      <AnalysisView analysis={workflow.normalized_requirements} />
+    </div>
+  );
 }
 
 function AnalysisFailed({ workflow }: { workflow: Workflow }) {

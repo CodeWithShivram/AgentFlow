@@ -20,6 +20,7 @@ from app.models import (
     AnalysisStatus,
     AutonomyPolicy,
     ExecutionStatus,
+    PlanStatus,
     TaskStatus,
     WorkflowEventType,
     WorkflowStatus,
@@ -160,6 +161,8 @@ class WorkflowResponse(BaseModel):
     # Prompt analysis (Step 2.2): validated PromptAnalysis JSON once analysis_status is READY.
     analysis_status: AnalysisStatus
     normalized_requirements: dict[str, Any] | None
+    # Plan generation (Step 2.3); drafts are listed at /plan-drafts.
+    plan_status: PlanStatus
     autonomy_policy: AutonomyPolicy
     budget_limit: Decimal | None
     currency: str
@@ -225,6 +228,19 @@ class ExecutionResponse(BaseModel):
 
 class ExecutionList(BaseModel):
     items: list[ExecutionResponse]
+
+
+class PlanDraftSummary(BaseModel):
+    """A generated plan draft (Step 2.3). The full draft is previewed in Step 2.4."""
+
+    version: int
+    task_count: int
+    prompt_version: str
+    created_at: datetime
+
+
+class PlanDraftList(BaseModel):
+    items: list[PlanDraftSummary]
 
 
 class EventPage(BaseModel):

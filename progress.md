@@ -2,8 +2,8 @@
 
 ## Current position
 - Phase: 2 — Intelligent planning (Phase 1 released as `v0.1.0`, pushed with its tag)
-- Last completed step: 2.2 — Structured prompt analysis
-- Next step: 2.3 — Planner output schema, task decomposition and acceptance criteria, which needs a short plan and the owner's go-ahead
+- Last completed step: 2.3 — Plan drafts: task decomposition and acceptance criteria
+- Next step: 2.4 — DAG validation and plan preview API, which needs a short plan and the owner's go-ahead
 
 ## Completed steps
 | Step | Commit message | Hash |
@@ -23,21 +23,48 @@
 | — | `ci: isolate unit-test settings from the environment and update actions` | `54dc11b` |
 | — | `ci: pin astral-sh/setup-uv to v10.3.3` | `19f2604` |
 | 2.1 | `feat(llm): add model gateway with usage records and mock adapter` | `d2aef8f` (pushed, CI ✔) |
-| 2.2 | `feat(planning): add structured prompt analysis` | latest commit touching `backend/app/planning/analysis.py` |
+| 2.2 | `feat(planning): add structured prompt analysis` | `8dffe47` (pushed, CI ✔) |
+| 2.3 | `feat(planning): add versioned plan drafts with task decomposition` | latest commit touching `backend/app/planning/plan.py` |
 
 ## Environment snapshot (2026-11-12)
 | Item | Value |
 |---|---|
-| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `d2aef8f` plus tag `v0.1.0` (owner-authorized) |
+| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `8dffe47` plus tag `v0.1.0` (owner-authorized) |
 | Python / uv / Node / npm | 3.12.14 via uv 0.12.9 / Node 24.13.0 / npm 11.6.2 |
 | Celery / kombu | 5.7.0 / 5.7.0 |
 | Docker | 29.8.2, Compose v5.6.0 — `agentflow` stack healthy (Docker Desktop must be started first) |
-| Dev database | `agentflow` at `0008 (head)`; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
+| Dev database | `agentflow` at `0009 (head)`; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
 | Local `.env` | holds generated `WORKER_DB_PASSWORD` and (new) `API_DB_PASSWORD` (gitignored) |
 | Port 8000 | Used by another local project (`easa`); smoke tests used 8010 |
 | E2E | API :8011 (as `agentflow_api`), frontend :3100, database `agentflow_e2e` (reset each run), Redis DBs 2/3, installed Google Chrome |
 | Frontend audit | `npm audit --omit=dev`: 0 vulnerabilities; dev-only: 8 moderate, all the existing `minimatch` chain via ESLint |
 | Test HTTP client | `httpx2` 2.16.0 (replaces `httpx`, OD-10) |
+
+## Step 2.3 — plan drafts (ADR-0015)
+- **Owner decisions (2026-11-13):** generation starts automatically when the analysis is READY; versioned drafts, applied only on confirmation (2.5); a minimal status UI; at most 25 tasks.
+- **Trigger:** a ready analysis calls `engine.request_plan` in the same transaction (`workflow.plan` outbox, `plan_status=PENDING`, `plan_request_id`, `PLAN_REQUESTED`). `POST …/plan-drafts` (Member) regenerates; otherwise 409 `PLAN_NOT_REGENERATABLE`.
+- **`app/planning/plan.py`:**
+  - the `PlanProposal`/`PlannedTask` schema: catalog skills; deliverables; acceptance criteria with unique IDs; known, non-self dependencies; unique keys; 1–25 tasks. It fits `TaskCreateRequest`.
+  - the prompt `plan_generation/v1`, with the analysis and the request delimited;
+  - a deterministic mock: parallel tasks per requirement, then a consolidation task;
+  - the job: claim → generate (3 attempts) → finish (next immutable draft version, or failure).
+- **Celery:** `agentflow.plan_workflow`.
+- **Migration `0009`:** `workflow_plans` (immutable via trigger, RLS, version unique per workflow); `workflows.plan_status` and `plan_request_id`; three event types.
+- **Grants:** the worker has `SELECT, INSERT` on `workflow_plans`.
+- **API:** `plan_status` on the workflow; `GET …/plan-drafts` lists draft summaries.
+- **Frontend:** `plan-draft-status.tsx` in the Requirements tab (drafting / failed / ready, with Regenerate for members); polling while pending.
+- **Deferred:** cycle detection and the full draft preview are Step 2.4.
+
+## Checks last executed (Step 2.3)
+- **`scripts/check.ps1 -E2E` ✔:**
+  - ruff; mypy (128 files); alembic check;
+  - pytest **814 passed** (786 plus 28 new: 21 unit, 7 integration);
+  - eslint, typecheck; Vitest **85** (3 new);
+  - Playwright **14 passed**: journey 7 checks that the real worker produces draft v1;
+  - build.
+- **One test updated for the new chaining:** the analysis test now also expects `PLAN_REQUESTED` after `REQUIREMENTS_ANALYZED`.
+- **Deliberate-bug check** (reverted): skipping the unknown-dependency validation makes 2 tests fail.
+- **Environment:** Docker Desktop had stopped after the restart; it was started again. The dev DB was migrated to `0009` and re-provisioned. No E2E processes were left running.
 
 ## Step 2.2 — structured prompt analysis (ADR-0014)
 - **Owner decisions (2026-11-12):** analysis starts automatically when planning starts; bounded retries, then a recorded failure with a user retry; ambiguities are recorded and shown, not blocking; a frontend Requirements panel.
@@ -184,6 +211,6 @@
 None.
 
 ## Next exact action
-1. **Push Step 2.2** on the owner's go-ahead, and confirm CI on GitHub.
-2. **Step 2.3: planner output schema, task decomposition and acceptance criteria.** Present a short plan first. It reads `normalized_requirements` and proposes tasks, a DAG and acceptance criteria.
+1. **Push Step 2.3** on the owner's go-ahead, and confirm CI on GitHub.
+2. **Step 2.4: DAG validation and plan preview API.** Present a short plan first. It covers cycle detection and the full draft preview (API and UI).
 3. **Before any hosted deployment:** settle OD-14, OD-19 and OD-20.

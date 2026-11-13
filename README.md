@@ -244,6 +244,8 @@ Every language-model call goes through one gateway in the Celery workers (`app/l
 
 **Prompt analysis** ([ADR-0014](docs/ADR/0014-prompt-analysis.md)). When planning starts, a worker analyses the workflow's goal into an objective, requirements, constraints, deliverables, assumptions and open questions. The result is shown on the workflow's Requirements tab. Failed analyses can be retried; open questions are informational until clarification requests arrive (Phase 6).
 
+**Plan drafts** ([ADR-0015](docs/ADR/0015-plan-drafts.md)). A ready analysis is turned into a draft plan: at most 25 small tasks with skills, deliverables, acceptance criteria and dependencies. Each draft is an immutable version, and members can regenerate it. Drafts never change a workflow's tasks until one is confirmed.
+
 ## Background workers (Celery)
 
 Workflow tasks are executed by Celery workers, fed through a transactional outbox: the API only writes outbox rows, and the relay publishes them to Redis. In this step the worker runs a harmless mock agent; there is no LLM call. The design is in [ADR-0010](docs/ADR/0010-background-execution-outbox-and-workers.md).
