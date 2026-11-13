@@ -251,6 +251,7 @@ async def create_task(
         input_references=list(request.input_references),
         expected_output_schema=request.expected_output_schema,
         acceptance_criteria=[c.model_dump() for c in request.acceptance_criteria],
+        deliverables=list(request.deliverables),
         priority=request.priority,
         required=request.required,
         status=T.PENDING,
@@ -286,7 +287,7 @@ async def update_task(
     fields = request.model_dump(exclude_unset=True, exclude={"revision"})
     changes: dict[str, Any] = {}
     for name, value in fields.items():
-        if name == "acceptance_criteria" and value is not None:
+        if name in ("acceptance_criteria", "deliverables") and value is not None:
             value = list(value)
         if value is not None or name == "expected_output_schema":
             if getattr(task, name) != value:
@@ -496,6 +497,7 @@ async def confirm_plan_draft(
             input_references=[],
             expected_output_schema=None,
             acceptance_criteria=[c.model_dump() for c in planned.acceptance_criteria],
+            deliverables=list(planned.deliverables),
             priority=planned.priority,
             required=planned.required,
             status=T.PENDING,

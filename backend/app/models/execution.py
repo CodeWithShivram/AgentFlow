@@ -136,6 +136,10 @@ class AgentExecution(Base):
         CheckConstraint(
             "(status = 'RUNNING') = (completed_at IS NULL)", name="finished_has_completed_at"
         ),
+        # Only a successful attempt has a (validated) submission.
+        CheckConstraint(
+            "submission IS NULL OR status = 'SUCCEEDED'", name="submission_only_when_succeeded"
+        ),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -158,5 +162,7 @@ class AgentExecution(Base):
     # Safe, short diagnostics only; never stack traces or secrets.
     error_summary: Mapped[str | None] = mapped_column(String(1000))
     result_summary: Mapped[str | None] = mapped_column(Text)
+    # The validated AgentSubmission of this attempt (ADR-0018); kept if verification fails.
+    submission: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = created_at_column()
     updated_at: Mapped[datetime] = updated_at_column()

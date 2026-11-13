@@ -40,16 +40,20 @@ export const taskSchema = z.object({
     .min(-100, "At least -100.")
     .max(100, "At most 100."),
   required: z.boolean(),
+  deliverables: z
+    .string()
+    .refine((v) => nonEmptyLines(v).length <= 20, "Use at most 20 deliverables.")
+    .refine((v) => nonEmptyLines(v).every((l) => l.length <= 2000), "Keep each deliverable under 2,000 characters."),
   criteria: z
     .string()
-    .refine((v) => criteriaLines(v).length <= 50, "Use at most 50 criteria.")
-    .refine((v) => criteriaLines(v).every((l) => l.length <= 2000), "Keep each criterion under 2,000 characters."),
+    .refine((v) => nonEmptyLines(v).length <= 50, "Use at most 50 criteria.")
+    .refine((v) => nonEmptyLines(v).every((l) => l.length <= 2000), "Keep each criterion under 2,000 characters."),
   dependsOn: z.array(z.string()).max(50),
 });
 type FormInput = z.input<typeof taskSchema>;
 type Values = z.output<typeof taskSchema>;
 
-function criteriaLines(text: string): string[] {
+export function nonEmptyLines(text: string): string[] {
   return text
     .split("\n")
     .map((line) => line.trim())
@@ -58,7 +62,7 @@ function criteriaLines(text: string): string[] {
 
 /** One criterion per line; ids are stable positions (c1, c2, ...) as the API expects slugs. */
 export function toCriteria(text: string): AcceptanceCriterion[] {
-  return criteriaLines(text).map((description, index) => ({ id: `c${index + 1}`, description }));
+  return nonEmptyLines(text).map((description, index) => ({ id: `c${index + 1}`, description }));
 }
 
 interface TaskFormDialogProps {
@@ -86,6 +90,7 @@ export function TaskFormDialog({ open, onOpenChange, workflowId, task, tasks, on
       requiredSkills: task?.required_skills ?? [],
       priority: String(task?.priority ?? 0),
       required: task?.required ?? true,
+      deliverables: (task?.deliverables ?? []).join("\n"),
       criteria: (task?.acceptance_criteria ?? []).map((c) => c.description).join("\n"),
       dependsOn: [],
     });
@@ -98,6 +103,7 @@ export function TaskFormDialog({ open, onOpenChange, workflowId, task, tasks, on
         description: values.description,
         required_skills: values.requiredSkills,
         acceptance_criteria: toCriteria(values.criteria),
+        deliverables: nonEmptyLines(values.deliverables),
         priority: values.priority,
         required: values.required,
       };
@@ -180,6 +186,14 @@ export function TaskFormDialog({ open, onOpenChange, workflowId, task, tasks, on
             )}
             <p className="text-xs text-muted-foreground">Only agents with every required skill can be assigned.</p>
           </fieldset>
+          <FormField
+            id="task-deliverables"
+            label="Deliverables"
+            error={errors.deliverables?.message}
+            hint="One per line: what the agent must hand over."
+          >
+            <Textarea rows={2} {...controlProps("task-deliverables", errors.deliverables?.message, true)} {...form.register("deliverables")} />
+          </FormField>
           <FormField id="task-criteria" label="Acceptance criteria" error={errors.criteria?.message} hint="One per line.">
             <Textarea rows={3} {...controlProps("task-criteria", errors.criteria?.message, true)} {...form.register("criteria")} />
           </FormField>

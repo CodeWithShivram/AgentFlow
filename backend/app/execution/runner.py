@@ -1,4 +1,4 @@
-"""Task execution for Celery workers (ADR-0010). No LLM yet: `run_mock_agent` is harmless.
+"""Task execution for Celery workers (ADR-0010, ADR-0018).
 
 An execution is three bounded steps; no transaction stays open while the agent works:
 
@@ -6,10 +6,12 @@ An execution is three bounded steps; no transaction stays open while the agent w
               stops here), check the task is still ASSIGNED to the dispatched agent version and
               the workflow is RUNNING with a free slot, then ASSIGNED -> QUEUED -> IN_PROGRESS
               and insert an `agent_executions` row for this attempt.
-2. work     - outside any transaction.
-3. `finish` - one transaction: IN_PROGRESS -> SUBMITTED (agents never complete tasks; platform
-              verification does), or, on failure/timeout, REWORK_REQUIRED (FAILED after the last
-              allowed attempt). The execution row records the outcome; earlier attempts are kept.
+2. `run_agent` - outside any transaction: build the task contract, run the agent and validate
+              its submission (invalid output is a failed attempt).
+3. `finish` - one transaction: IN_PROGRESS -> SUBMITTED with the submission stored on the
+              attempt (agents never complete tasks; platform verification does), or, on
+              failure/timeout, REWORK_REQUIRED (FAILED after the last allowed attempt). The
+              execution row records the outcome; earlier attempts are kept.
 """
 
 import logging
@@ -17,20 +19,27 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.agents.base import AgentContext, BaseAgent
+from app.agents.catalog import TOOLS
+from app.agents.contract import AgentSubmission, RetryPolicy, TaskContract
+from app.agents.mock import MockAgent
 from app.execution import outbox
 from app.models import (
     AgentExecution,
     AgentVersion,
     ExecutionStatus,
+    TaskDependency,
     TaskStatus,
     Workflow,
     WorkflowStatus,
     WorkflowTask,
 )
+from app.schemas.agents import AgentConfiguration
 from app.workflows import engine
 from app.workflows.state_machine import Actor
 
@@ -39,6 +48,9 @@ logger = logging.getLogger("agentflow.execution")
 CONSUMER = "execute_task"
 # Handoff section 6: at most 3 attempts per task.
 MAX_ATTEMPTS_PER_TASK = 3
+# The worker's soft time limit for one attempt (handoff section 6 default). A contract never
+# promises an agent more time than the worker enforces.
+AGENT_TIME_LIMIT_SECONDS = 600
 
 
 class Skipped(StrEnum):
@@ -50,13 +62,26 @@ class Skipped(StrEnum):
 
 @dataclass(frozen=True)
 class Claim:
+    """A claimed attempt, with a snapshot of the data its task contract is built from."""
+
     execution_id: uuid.UUID
     workspace_id: uuid.UUID
     workflow_id: uuid.UUID
     task_id: uuid.UUID
-    task_title: str
-    agent_version: int
     attempt_number: int
+    dispatch_event_id: uuid.UUID
+    agent_id: uuid.UUID
+    agent_version_id: uuid.UUID
+    agent_version: int
+    configuration: dict[str, Any]
+    title: str
+    description: str
+    input_references: list[str]
+    required_skills: list[str]
+    deliverables: list[str]
+    output_schema: dict[str, Any] | None
+    acceptance_criteria: list[dict[str, Any]]
+    dependencies: list[uuid.UUID]
 
 
 @dataclass(frozen=True)
@@ -64,6 +89,14 @@ class Failure:
     code: str
     summary: str
     timed_out: bool = False
+
+
+class InvalidSubmissionError(Exception):
+    """The agent's output failed the deterministic checks. Issue codes are safe to store."""
+
+    def __init__(self, issues: list[str]) -> None:
+        super().__init__(", ".join(issues))
+        self.issues = issues
 
 
 def _lock_workflow(
@@ -151,27 +184,84 @@ def claim(
         dispatch_event_id=event_id,
     )
     session.add(execution)
-    session.commit()
-    return Claim(
+    dependencies = session.execute(
+        select(TaskDependency.depends_on_task_id)
+        .where(TaskDependency.workflow_id == workflow.id, TaskDependency.task_id == task.id)
+        .order_by(TaskDependency.depends_on_task_id)
+    ).scalars()
+    claimed = Claim(
         execution_id=execution.id,
         workspace_id=workflow.workspace_id,
         workflow_id=workflow.id,
         task_id=task.id,
-        task_title=task.title,
-        agent_version=version.version,
         attempt_number=attempt_number,
+        dispatch_event_id=event_id,
+        agent_id=task.assigned_agent_id,
+        agent_version_id=agent_version_id,
+        agent_version=version.version,
+        configuration=version.configuration,
+        title=task.title,
+        description=task.description,
+        input_references=list(task.input_references),
+        required_skills=list(task.required_skills),
+        deliverables=list(task.deliverables),
+        output_schema=task.expected_output_schema,
+        acceptance_criteria=list(task.acceptance_criteria),
+        dependencies=list(dependencies),
+    )
+    session.commit()
+    return claimed
+
+
+def build_contract(claim: Claim, configuration: AgentConfiguration) -> TaskContract:
+    """The contract for this attempt (handoff section 5.3), built only from platform data."""
+    return TaskContract.model_validate(
+        {
+            "workspace_id": claim.workspace_id,
+            "workflow_id": claim.workflow_id,
+            "task_id": claim.task_id,
+            "objective": claim.title,
+            "context": claim.description,
+            "input_references": claim.input_references,
+            "required_skills": claim.required_skills,
+            "deliverables": claim.deliverables,
+            "output_schema": claim.output_schema,
+            "acceptance_criteria": claim.acceptance_criteria,
+            "dependencies": claim.dependencies,
+            # Tools granted to the version that the platform currently enables.
+            "allowed_tools": [
+                name for name in configuration.tool_names() if TOOLS[name].available_in_phase_1
+            ],
+            "timeout_seconds": min(configuration.limits.timeout_seconds, AGENT_TIME_LIMIT_SECONDS),
+            "token_budget": configuration.limits.max_tokens_per_task,
+            "retry_policy": RetryPolicy(
+                max_attempts=MAX_ATTEMPTS_PER_TASK, attempt_number=claim.attempt_number
+            ),
+        }
     )
 
 
-def run_mock_agent(claim: Claim) -> str:
-    """Stand-in for the agent runtime (Phase 3). Harmless and deterministic: no LLM, no tools."""
-    return (
-        f"Mock result for task '{claim.task_title}' "
-        f"(agent version {claim.agent_version}, attempt {claim.attempt_number})."
+def run_agent(claim: Claim, agent_type: type[BaseAgent] = MockAgent) -> AgentSubmission:
+    """Runs one attempt outside any transaction. Every version runs the harmless `MockAgent`
+    until the specialist agents exist (Step 3.4). Raises `InvalidSubmissionError` when the
+    output fails validation."""
+    configuration = AgentConfiguration.model_validate(claim.configuration)
+    contract = build_contract(claim, configuration)
+    agent = agent_type(configuration)
+    context = AgentContext(
+        execution_id=claim.execution_id,
+        dispatch_event_id=claim.dispatch_event_id,
+        agent_id=claim.agent_id,
+        agent_version_id=claim.agent_version_id,
+        agent_version=claim.agent_version,
     )
+    validation = agent.validate_output(contract, agent.execute(contract, context))
+    if validation.submission is None or validation.issues:
+        raise InvalidSubmissionError(validation.issues)
+    return validation.submission
 
 
-def finish(session: Session, claim: Claim, *, result: str | None, failure: Failure | None) -> str:
+def finish(session: Session, claim: Claim, outcome: AgentSubmission | Failure) -> str:
     workflow = _lock_workflow(session, claim.workspace_id, claim.workflow_id)
     execution = session.get(AgentExecution, claim.execution_id, with_for_update=True)
     task = _get_task(session, workflow, claim.task_id) if workflow else None
@@ -188,27 +278,28 @@ def finish(session: Session, claim: Claim, *, result: str | None, failure: Failu
         session.commit()
         return "cancelled"
     context = {"execution_id": str(execution.id), "attempt_number": claim.attempt_number}
-    if failure is None:
+    if isinstance(outcome, AgentSubmission):
         execution.status = ExecutionStatus.SUCCEEDED
-        execution.result_summary = result
+        execution.submission = outcome.model_dump(mode="json")
+        execution.result_summary = outcome.summary
         engine.transition_task(
             session, workflow, task, TaskStatus.SUBMITTED, actor=Actor.WORKER, extra=context
         )
-        outcome = "submitted"
+        result = "submitted"
     else:
         execution.status = (
-            ExecutionStatus.TIMED_OUT if failure.timed_out else ExecutionStatus.FAILED
+            ExecutionStatus.TIMED_OUT if outcome.timed_out else ExecutionStatus.FAILED
         )
-        execution.error_code = failure.code
-        execution.error_summary = failure.summary[:1000]
+        execution.error_code = outcome.code
+        execution.error_summary = outcome.summary[:1000]
         target = (
             TaskStatus.REWORK_REQUIRED
             if claim.attempt_number < MAX_ATTEMPTS_PER_TASK
             else TaskStatus.FAILED
         )
         engine.transition_task(
-            session, workflow, task, target, actor=Actor.SYSTEM, reason=failure.code, extra=context
+            session, workflow, task, target, actor=Actor.SYSTEM, reason=outcome.code, extra=context
         )
-        outcome = target.value.lower()
+        result = target.value.lower()
     session.commit()
-    return outcome
+    return result

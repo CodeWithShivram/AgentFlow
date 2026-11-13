@@ -197,6 +197,18 @@ function TaskCard({
       </div>
       {expanded ? (
         <div id={panelId} className="space-y-4 border-t px-4 py-3">
+          {task.deliverables.length > 0 ? (
+            <section>
+              <h4 className="mb-1 text-sm font-medium">Deliverables</h4>
+              <ul className="list-disc space-y-1 pl-5 text-sm">
+                {task.deliverables.map((d, i) => (
+                  <li key={i} className="break-words">
+                    {d}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
           {task.acceptance_criteria.length > 0 ? (
             <section>
               <h4 className="mb-1 text-sm font-medium">Acceptance criteria</h4>

@@ -4,9 +4,10 @@ import { useQuery } from "@tanstack/react-query";
 
 import { RelativeTime } from "@/components/common/relative-time";
 import { StatusBadge } from "@/components/common/status-badge";
+import { Badge } from "@/components/ui/badge";
 import { api } from "@/lib/api";
 import { describeError } from "@/lib/api/errors";
-import type { Agent, Task } from "@/lib/api/types";
+import type { AcceptanceCriterion, Agent, AgentSubmission, CriterionStatus, Task } from "@/lib/api/types";
 import { useWorkspace } from "@/lib/workspace";
 
 import { TASK_IN_FLIGHT } from "./status";
@@ -16,6 +17,12 @@ interface ExecutionsPanelProps {
   task: Task;
   agentsById: Map<string, Agent>;
 }
+
+const CLAIM_LABELS: Record<CriterionStatus, string> = {
+  MET: "Met",
+  PARTIAL: "Partly met",
+  NOT_MET: "Not met",
+};
 
 /** Every attempt of a task with the exact agent version it ran. Refreshed by the event poll. */
 export function ExecutionsPanel({ task, agentsById }: ExecutionsPanelProps) {
@@ -53,6 +60,7 @@ export function ExecutionsPanel({ task, agentsById }: ExecutionsPanelProps) {
             ) : null}
           </p>
           {e.result_summary ? <p className="mt-2 whitespace-pre-wrap break-words">{e.result_summary}</p> : null}
+          {e.submission ? <SubmissionDetails submission={e.submission} criteria={task.acceptance_criteria} /> : null}
           {e.error_summary ? (
             <p className="mt-2 text-destructive">
               {e.error_code ? <span className="font-mono text-xs">{e.error_code}: </span> : null}
@@ -62,5 +70,52 @@ export function ExecutionsPanel({ task, agentsById }: ExecutionsPanelProps) {
         </li>
       ))}
     </ol>
+  );
+}
+
+/**
+ * The structured submission of a successful attempt (Step 3.1). Agent output is untrusted and
+ * rendered as plain text; criterion claims are the agent's own until verification checks them.
+ */
+function SubmissionDetails({ submission, criteria }: { submission: AgentSubmission; criteria: AcceptanceCriterion[] }) {
+  const descriptions = new Map(criteria.map((c) => [c.id, c.description]));
+  return (
+    <div className="mt-2 space-y-2">
+      {submission.criteria.length > 0 ? (
+        <section aria-label="Agent's criterion claims">
+          <p className="text-xs font-medium text-muted-foreground">Agent&apos;s claims (not verified yet)</p>
+          <ul className="mt-1 space-y-1">
+            {submission.criteria.map((claim) => (
+              <li key={claim.criterion_id} className="break-words">
+                <Badge variant="outline" className="mr-2">
+                  {CLAIM_LABELS[claim.status]}
+                </Badge>
+                {descriptions.get(claim.criterion_id) ?? claim.criterion_id}
+                <span className="block text-xs text-muted-foreground">{claim.evidence}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+      <Notes title="Open questions" items={submission.open_questions} />
+      <Notes title="Assumptions" items={submission.assumptions} />
+      <Notes title="Limitations" items={submission.limitations} />
+    </div>
+  );
+}
+
+function Notes({ title, items }: { title: string; items: string[] }) {
+  if (items.length === 0) return null;
+  return (
+    <section aria-label={title}>
+      <p className="text-xs font-medium text-muted-foreground">{title}</p>
+      <ul className="mt-1 list-disc space-y-1 pl-5">
+        {items.map((item, i) => (
+          <li key={i} className="break-words">
+            {item}
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }

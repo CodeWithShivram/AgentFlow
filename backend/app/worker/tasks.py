@@ -7,6 +7,7 @@ import uuid
 from celery.exceptions import SoftTimeLimitExceeded
 from sqlalchemy.exc import OperationalError
 
+from app.agents.contract import AgentSubmission
 from app.db.sync_session import get_worker_session_factory, session_scope
 from app.execution import cleanup, outbox, relay, runner
 from app.llm.gateway import get_model_gateway
@@ -23,8 +24,8 @@ EVENT_ROUTES = {
 }
 _FINISH_ATTEMPTS = 3
 # Default agent timeout (handoff section 6): 600 s. Hard limit gives the soft one room to finish.
-EXECUTION_SOFT_TIME_LIMIT = 600
-EXECUTION_TIME_LIMIT = 660
+EXECUTION_SOFT_TIME_LIMIT = runner.AGENT_TIME_LIMIT_SECONDS
+EXECUTION_TIME_LIMIT = EXECUTION_SOFT_TIME_LIMIT + 60
 # Prompt analysis and plan generation: three model attempts with short backoff.
 ANALYSIS_SOFT_TIME_LIMIT = 300
 ANALYSIS_TIME_LIMIT = 330
@@ -87,20 +88,21 @@ def execute_task(
         logger.info("dispatch skipped", extra={"event_id": event_id, "outcome": claimed.value})
         return claimed.value
 
-    result: str | None = None
-    failure: runner.Failure | None = None
+    result: AgentSubmission | runner.Failure
     try:
-        result = runner.run_mock_agent(claimed)
+        result = runner.run_agent(claimed)
     except SoftTimeLimitExceeded:
-        failure = runner.Failure("EXECUTION_TIMED_OUT", "The agent exceeded its time limit.", True)
+        result = runner.Failure("EXECUTION_TIMED_OUT", "The agent exceeded its time limit.", True)
+    except runner.InvalidSubmissionError as exc:  # only issue codes; never the agent's output
+        result = runner.Failure("INVALID_SUBMISSION", f"Invalid submission: {exc}")
     except Exception as exc:  # the agent failed; record it instead of losing the attempt
-        failure = runner.Failure("EXECUTION_FAILED", f"{type(exc).__name__}")
+        result = runner.Failure("EXECUTION_FAILED", f"{type(exc).__name__}")
 
     # Bounded retry of the short final transaction on transient database errors.
     for attempt in range(1, _FINISH_ATTEMPTS + 1):
         try:
             with session_scope(factory) as session:
-                outcome = runner.finish(session, claimed, result=result, failure=failure)
+                outcome = runner.finish(session, claimed, result)
             break
         except OperationalError:
             if attempt == _FINISH_ATTEMPTS:

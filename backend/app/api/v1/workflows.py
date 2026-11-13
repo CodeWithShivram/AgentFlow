@@ -59,6 +59,7 @@ def _task(task: WorkflowTask, depends_on: list[uuid.UUID]) -> TaskResponse:
         input_references=task.input_references,
         expected_output_schema=task.expected_output_schema,
         acceptance_criteria=task.acceptance_criteria,
+        deliverables=task.deliverables,
         priority=task.priority,
         required=task.required,
         removed=task.removed_at is not None,
@@ -393,6 +394,7 @@ async def list_executions(
             error_code=e.error_code,
             error_summary=e.error_summary,
             result_summary=e.result_summary,
+            submission=e.submission,
         )
         for e, version in rows
     ]

@@ -1,9 +1,9 @@
 # AgentFlow Progress
 
 ## Current position
-- Phase: 2 — Intelligent planning, complete (Phase 1 released as `v0.1.0`, pushed with its tag)
-- Last completed step: 2.5 — User plan confirmation before execution
-- Next step: 3.1 — BaseAgent contract and AgentSubmission schema (Phase 3, specialized agents), which needs a short plan and the owner's go-ahead
+- Phase: 3 — Specialized agents (Phase 2 complete; Phase 1 released as `v0.1.0`, pushed with its tag)
+- Last completed step: 3.1 — BaseAgent contract and AgentSubmission schema
+- Next step: 3.2 — Tool registry and server-side permission enforcement, which needs a short plan and the owner's go-ahead
 
 ## Completed steps
 | Step | Commit message | Hash |
@@ -26,21 +26,59 @@
 | 2.2 | `feat(planning): add structured prompt analysis` | `8dffe47` (pushed, CI ✔) |
 | 2.3 | `feat(planning): add versioned plan drafts with task decomposition` | `f1d8476` (pushed, CI ✔) |
 | 2.4 | `feat(planning): add plan DAG validation and draft preview` | `8389c82` (pushed, CI ✔) |
-| 2.5 | `feat(planning): confirm plan drafts into workflow tasks` | latest commit touching `docs/ADR/0017-plan-confirmation.md` |
+| 2.5 | `feat(planning): confirm plan drafts into workflow tasks` | `83b7ccc` (pushed, CI ✔) |
+| 3.1 | `feat(agents): add task contract, BaseAgent and structured submissions` | latest commit touching `docs/ADR/0018-agent-contract-and-submissions.md` |
 
-## Environment snapshot (2026-11-12)
+## Environment snapshot (2026-11-13)
 | Item | Value |
 |---|---|
-| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `8389c82` plus tag `v0.1.0` (owner-authorized) |
+| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `83b7ccc` plus tag `v0.1.0` (owner-authorized) |
 | Python / uv / Node / npm | 3.12.14 via uv 0.12.9 / Node 24.13.0 / npm 11.6.2 |
 | Celery / kombu | 5.7.0 / 5.7.0 |
-| Docker | 29.8.2, Compose v5.6.0 — `agentflow` stack healthy (Docker Desktop must be started first) |
-| Dev database | `agentflow` at `0010 (head)`; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
+| Docker | 29.9.3 — `agentflow` stack healthy (Docker Desktop must be started first; it had stopped and was restarted during Step 3.1) |
+| Dev database | `agentflow` at `0011 (head)`; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
 | Local `.env` | holds generated `WORKER_DB_PASSWORD` and (new) `API_DB_PASSWORD` (gitignored) |
 | Port 8000 | Used by another local project (`easa`); smoke tests used 8010 |
 | E2E | API :8011 (as `agentflow_api`), frontend :3100, database `agentflow_e2e` (reset each run), Redis DBs 2/3, installed Google Chrome |
 | Frontend audit | `npm audit --omit=dev`: 0 vulnerabilities; dev-only: 8 moderate, all the existing `minimatch` chain via ESLint |
 | Test HTTP client | `httpx2` 2.16.0 (replaces `httpx`, OD-10) |
+
+## Step 3.1 — agent contract and submissions (ADR-0018)
+- **Owner decisions (2026-11-13):**
+  - each attempt's submission is stored in a column on `agent_executions`;
+  - `BaseAgent.execute` is synchronous;
+  - tasks get a `deliverables` column, filled from confirmed drafts;
+  - the executions panel shows submissions.
+- **`app/agents/contract.py`:**
+  - `TaskContract` (handoff §5.3);
+  - `AgentSubmission` with per-criterion `CriterionClaim`s;
+  - `validate_submission`, which returns safe issue codes.
+- **`app/agents/base.py`:** `BaseAgent` (`execute`, `get_capabilities`, and a `@final` `validate_output`) and `AgentContext`.
+- **`app/agents/mock.py`:** `MockAgent` replaces `run_mock_agent`.
+- **Runner:**
+  - `claim` snapshots the contract data;
+  - `build_contract` grants only enabled tools and caps the timeout at 600 s;
+  - `run_agent` validates the output;
+  - `finish(session, claim, outcome)` stores the submission.
+  - The worker maps invalid output to `INVALID_SUBMISSION`.
+- **Migration `0011_agent_contract`:**
+  - `workflow_tasks.deliverables` (copied on plan confirmation; settable on manual tasks);
+  - `agent_executions.submission`, allowed only on SUCCEEDED attempts.
+- **Frontend:**
+  - the executions panel shows the agent's claims as "not verified yet", plus open questions, assumptions and limitations;
+  - the task form has a Deliverables field, and task details list deliverables.
+
+## Checks last executed (Step 3.1)
+- **Full gate (`check.ps1 -E2E`) ✔, exit 0:**
+  - backend: ruff format (137 files), ruff check, mypy (137 files), alembic check;
+  - pytest **850 passed** (829 plus 21 new: 17 unit contract/submission/mock agent, 3 runner integration, 1 task deliverables API);
+  - frontend: eslint, typecheck, Vitest **94** (2 new: submission display), Playwright **14 passed** (journey 8/9 now adds a deliverable and a criterion, and sees the agent's unverified claim and the mock agent's limitation), build.
+- **Deliberate-bug check** (reverted): dropping the missing-claim check makes 3 tests fail.
+- **Environment:**
+  - Docker Desktop had stopped; it was restarted and the stack came back healthy;
+  - the dev DB is at `0011`, and both roles were re-provisioned;
+  - no servers were left running after E2E.
+- **Mistake, corrected:** `npx prettier` (not a project dependency) was run once by mistake. It reformatted four frontend files, which were restored and re-edited; `package.json` and the lockfile were untouched.
 
 ## Step 2.5 — plan confirmation (ADR-0017)
 - **Owner decisions (2026-11-13):**
@@ -60,7 +98,7 @@
   - `confirm-plan-dialog.tsx` with the Replace/Add choice and the warning acknowledgement;
   - a "Confirmed" badge; success switches to the Tasks tab.
 
-## Checks last executed (Step 2.5)
+## Checks (Step 2.5)
 - **Full gate (`check.ps1 -E2E`) ✔, exit 0:**
   - backend: ruff format (132 files), ruff check, mypy (132 files), alembic check;
   - pytest **829 passed** (824 plus 5 new confirmation integration tests);
@@ -265,6 +303,6 @@
 None.
 
 ## Next exact action
-1. **Push Step 2.5** on the owner's go-ahead, and confirm CI on GitHub.
-2. **Step 3.1 (BaseAgent contract and AgentSubmission schema):** present a short plan and get the owner's go-ahead.
+1. **Push Step 3.1** on the owner's go-ahead, and confirm CI on GitHub.
+2. **Step 3.2 (tool registry and server-side permission enforcement):** present a short plan and get the owner's go-ahead.
 3. **Before any hosted deployment:** settle OD-14, OD-19 and OD-20.

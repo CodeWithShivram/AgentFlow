@@ -132,7 +132,7 @@ The UI states each of these where it applies; none is faked.
 | 2.2 | Structured prompt analysis (requirements/constraints) | DONE (ADR-0014) — `8dffe47` |
 | 2.3 | Planner output schema, task decomposition, acceptance criteria | DONE (ADR-0015) — `f1d8476` |
 | 2.4 | DAG validation and plan preview API | DONE (ADR-0016) — `8389c82` |
-| 2.5 | User plan confirmation before execution | DONE (ADR-0017) — see `progress.md` |
+| 2.5 | User plan confirmation before execution | DONE (ADR-0017) — `83b7ccc` |
 
 Acceptance (phase): deterministic tests with mock model responses; invalid plans/cycles rejected; plan visible before execution.
 
@@ -140,7 +140,7 @@ Acceptance (phase): deterministic tests with mock model responses; invalid plans
 
 | Step | Title | Status |
 |---|---|---|
-| 3.1 | BaseAgent contract and AgentSubmission schema | NOT_STARTED |
+| 3.1 | BaseAgent contract and AgentSubmission schema | DONE (ADR-0018) — see `progress.md` |
 | 3.2 | Tool registry and server-side permission enforcement | NOT_STARTED |
 | 3.3 | LiteLLM integration behind gateway adapter + provider usage capture | NOT_STARTED |
 | 3.4 | Research, Analyst, Writer, General agents | NOT_STARTED |

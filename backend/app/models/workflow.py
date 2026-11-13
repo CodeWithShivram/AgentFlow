@@ -224,6 +224,8 @@ class WorkflowTask(Base):
     required_skills: Mapped[list[str]] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
     input_references: Mapped[list[Any]] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
     expected_output_schema: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    # Expected deliverables, part of the task contract (ADR-0018).
+    deliverables: Mapped[list[str]] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
     acceptance_criteria: Mapped[list[Any]] = mapped_column(
         JSONB, server_default=text("'[]'::jsonb")
     )

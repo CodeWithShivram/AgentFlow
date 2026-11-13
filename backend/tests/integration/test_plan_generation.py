@@ -384,6 +384,7 @@ def test_confirming_a_draft_creates_its_tasks_and_dependencies(
         assert created["acceptance_criteria"] == [
             c.model_dump() for c in planned.acceptance_criteria
         ]
+        assert created["deliverables"] == planned.deliverables  # part of the contract (3.1)
         assert created["status"] == "PENDING"
     events = owner.get(_url(owner, workflow_id, "/events")).json()["items"]
     confirmed = events[-1]

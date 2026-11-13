@@ -108,7 +108,14 @@ test("journeys 8 and 9: approve, start, assign an agent and monitor execution", 
   const { page } = user;
   await createWorkflow(page, user.workspaceId, "Write release notes");
   await page.getByRole("button", { name: "Start planning" }).click();
-  await addTask(page, "Draft the notes");
+  // Step 3.1: deliverables and criteria are part of the task contract the agent receives.
+  await page.getByRole("button", { name: "Add task" }).first().click();
+  const taskDialog = page.getByRole("dialog", { name: "Add task" });
+  await taskDialog.getByLabel("Title").fill("Draft the notes");
+  await taskDialog.getByLabel("Deliverables").fill("Release notes draft");
+  await taskDialog.getByLabel("Acceptance criteria").fill("Lists every change");
+  await taskDialog.getByRole("button", { name: "Add task" }).click();
+  await expect(taskDialog).toBeHidden();
   await page.getByRole("button", { name: "Submit plan for approval" }).click();
   await expect(visibleText(page, "Awaiting approval")).toBeVisible();
   await page.getByRole("button", { name: "Approve plan" }).click();
@@ -131,6 +138,11 @@ test("journeys 8 and 9: approve, start, assign an agent and monitor execution", 
   await expect(attempts.getByText("Attempt 1", { exact: true })).toBeVisible();
   await expect(attempts.getByText("Succeeded", { exact: true })).toBeVisible();
   await expect(attempts.getByText("Writer · version 1")).toBeVisible();
+  await expect(page.getByText("Release notes draft", { exact: true })).toBeVisible();
+  // The structured submission: the agent's own, unverified claim per criterion.
+  const claims = attempts.getByRole("region", { name: "Agent's criterion claims" });
+  await expect(claims.getByRole("listitem")).toContainText("MetLists every change");
+  await expect(attempts.getByText("Mock agent: no model or tool was used.")).toBeVisible();
 
   await page.getByRole("tab", { name: "Timeline" }).click();
   const timeline = page.getByRole("list", { name: "Workflow events, newest first" });

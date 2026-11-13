@@ -20,6 +20,7 @@ function task(id: string, depends_on: string[] = [], extra: Partial<Task> = {}):
     input_references: [],
     expected_output_schema: null,
     acceptance_criteria: [],
+    deliverables: [],
     priority: 0,
     required: true,
     removed: false,

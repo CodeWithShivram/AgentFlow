@@ -495,7 +495,13 @@ def test_execution_history_lists_attempts_with_agent_versions(
     from app.db.sync_session import session_scope
     from app.execution import runner
 
-    task = add_task(owner, workspace, workflow).json()
+    task = add_task(
+        owner,
+        workspace,
+        workflow,
+        deliverables=["Report draft"],
+        acceptance_criteria=[{"id": "c1", "description": "Covers the topic."}],
+    ).json()
     url = wf_url(workspace, f"/{workflow}/tasks/{task['id']}/executions")
     assert owner.get(url).json() == {"items": []}
     for status in ("PLANNING", "READY", "RUNNING"):
@@ -526,13 +532,17 @@ def test_execution_history_lists_attempts_with_agent_versions(
         )
     assert isinstance(claim, runner.Claim)
     with session_scope(worker_factory) as s:
-        runner.finish(s, claim, result=runner.run_mock_agent(claim), failure=None)
+        runner.finish(s, claim, runner.run_agent(claim))
 
     (attempt,) = owner.get(url).json()["items"]
 
     assert attempt["attempt_number"] == 1 and attempt["status"] == "SUCCEEDED"
     assert attempt["agent_version"] == 1 and attempt["error_code"] is None
     assert attempt["result_summary"].startswith("Mock result")
+    submission = attempt["submission"]
+    assert submission["summary"] == attempt["result_summary"]
+    assert submission["outputs"] == {"Report draft": "Mock content for: Report draft"}
+    assert [(c["criterion_id"], c["status"]) for c in submission["criteria"]] == [("c1", "MET")]
     assert task_of(owner, workspace, workflow, task["id"])["status"] == "SUBMITTED"
 
 
@@ -550,3 +560,22 @@ def test_execution_history_is_workspace_scoped(
 
     assert via_own.status_code == 404 and via_own.json()["error"]["code"] == "WORKFLOW_NOT_FOUND"
     assert via_victim.status_code == 404
+
+
+def test_task_deliverables_are_created_updated_and_validated(
+    owner: TestClient, workspace: str, workflow: str
+) -> None:
+    task = add_task(owner, workspace, workflow, deliverables=["  Summary table  "]).json()
+    assert task["deliverables"] == ["Summary table"]
+    assert add_task(owner, workspace, workflow).json()["deliverables"] == []
+
+    response = owner.patch(
+        wf_url(workspace, f"/{workflow}/tasks/{task['id']}"),
+        json={"revision": task["revision"], "deliverables": ["Chart", "Notes"]},
+        headers=csrf(owner),
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["deliverables"] == ["Chart", "Notes"]
+
+    for bad in ([""], ["x" * 2001], [f"d{i}" for i in range(21)], ["sk-" + "a" * 40]):
+        assert add_task(owner, workspace, workflow, deliverables=bad).status_code == 422

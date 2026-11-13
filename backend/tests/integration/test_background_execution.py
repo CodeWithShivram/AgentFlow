@@ -12,9 +12,12 @@ from typing import Any
 
 import pytest
 from sqlalchemy import delete, func, select, text, update
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.agents.base import AgentContext
+from app.agents.contract import AgentSubmission, TaskContract
+from app.agents.mock import MockAgent
 from app.db.roles import WORKER_GRANTS
 from app.db.sync_session import session_scope
 from app.execution import cleanup, outbox, relay, runner
@@ -32,6 +35,7 @@ from app.models import (
     OutboxStatus,
     RefreshToken,
     SessionRevocationReason,
+    TaskDependency,
     TaskStatus,
     User,
     Workflow,
@@ -41,6 +45,7 @@ from app.models import (
     WorkspaceInvitation,
     WorkspaceRole,
 )
+from app.schemas.agents import AgentConfiguration
 from app.workflows import engine
 from app.workflows.state_machine import Actor
 
@@ -160,9 +165,9 @@ def _claim(worker: Factory, event: OutboxEvent) -> runner.Claim | runner.Skipped
 
 
 def _finish(worker: Factory, claim: runner.Claim, failure: runner.Failure | None = None) -> str:
+    outcome = failure or runner.run_agent(claim)
     with session_scope(worker) as s:
-        result = None if failure else runner.run_mock_agent(claim)
-        return runner.finish(s, claim, result=result, failure=failure)
+        return runner.finish(s, claim, outcome)
 
 
 def _status(admin: Factory, task_id: uuid.UUID) -> TaskStatus:
@@ -776,3 +781,100 @@ def test_dispatch_reaches_a_real_worker_through_redis(
     assert execution.status == ExecutionStatus.SUCCEEDED
     assert execution.dispatch_event_id == event.id
     assert event.status == OutboxStatus.PUBLISHED
+
+
+# --- task contract and submissions (Step 3.1, ADR-0018) ------------------------------------------
+
+
+class _ForgetfulAgent(MockAgent):
+    """Leaves out its claim for the first acceptance criterion."""
+
+    def execute(self, contract: TaskContract, context: AgentContext) -> AgentSubmission:
+        submission = super().execute(contract, context)
+        return submission.model_copy(update={"criteria": submission.criteria[1:]})
+
+
+def _describe_task(admin: Factory, world: World) -> None:
+    with session_scope(admin) as s:
+        task = _task(s, world.task_ids[0])
+        task.description = "Context for the agent."
+        task.deliverables = ["Report"]
+        task.input_references = ["doc://brief"]
+        task.expected_output_schema = {"type": "object"}
+        task.acceptance_criteria = [
+            {"id": "c1", "description": "Has a summary."},
+            {"id": "c2", "description": "Cites sources."},
+        ]
+        s.add(
+            TaskDependency(
+                task_id=world.task_ids[0],
+                depends_on_task_id=world.task_ids[1],
+                workflow_id=world.workflow_id,
+            )
+        )
+        s.commit()
+
+
+def test_the_contract_is_built_from_platform_data_and_the_submission_is_stored(
+    admin_factory: Factory, worker_factory: Factory
+) -> None:
+    world = _world(admin_factory, tasks=2)
+    _describe_task(admin_factory, world)
+    _assign(admin_factory, world, world.task_ids[0])
+    (event,) = _dispatch_events(admin_factory)
+    claim = _claim(worker_factory, event)
+    assert isinstance(claim, runner.Claim)
+
+    contract = runner.build_contract(claim, AgentConfiguration.model_validate(CONFIG))
+    assert contract.task_id == world.task_ids[0] and contract.workflow_id == world.workflow_id
+    assert (contract.objective, contract.context) == ("t0", "Context for the agent.")
+    assert contract.deliverables == ["Report"] and contract.input_references == ["doc://brief"]
+    assert contract.output_schema == {"type": "object"}
+    assert [c.id for c in contract.acceptance_criteria] == ["c1", "c2"]
+    assert contract.dependencies == [world.task_ids[1]]
+    assert contract.retry_policy.attempt_number == 1 and contract.retry_policy.max_attempts == 3
+
+    assert _finish(worker_factory, claim) == "submitted"
+    execution = _scalar(admin_factory, select(AgentExecution))
+    submission = AgentSubmission.model_validate(execution.submission)
+    assert execution.result_summary == submission.summary
+    assert [c.criterion_id for c in submission.criteria] == ["c1", "c2"]
+    assert submission.outputs == {"Report": "Mock content for: Report"}
+    assert _status(admin_factory, world.task_ids[0]) == TaskStatus.SUBMITTED
+
+
+def test_an_invalid_submission_is_a_failed_attempt_without_a_stored_submission(
+    admin_factory: Factory, worker_factory: Factory
+) -> None:
+    world = _world(admin_factory, tasks=2)
+    _describe_task(admin_factory, world)
+    _assign(admin_factory, world, world.task_ids[0])
+    (event,) = _dispatch_events(admin_factory)
+    claim = _claim(worker_factory, event)
+    assert isinstance(claim, runner.Claim)
+
+    with pytest.raises(runner.InvalidSubmissionError) as error:
+        runner.run_agent(claim, _ForgetfulAgent)
+    assert error.value.issues == ["MISSING_CRITERION_CLAIM"]
+    failure = runner.Failure("INVALID_SUBMISSION", f"Invalid submission: {error.value}")
+    assert _finish(worker_factory, claim, failure) == "rework_required"
+
+    execution = _scalar(admin_factory, select(AgentExecution))
+    assert execution.status == ExecutionStatus.FAILED and execution.submission is None
+    assert execution.error_code == "INVALID_SUBMISSION"
+    assert execution.error_summary == "Invalid submission: MISSING_CRITERION_CLAIM"
+
+
+def test_only_a_successful_attempt_can_hold_a_submission(
+    admin_factory: Factory, worker_factory: Factory
+) -> None:
+    world = _world(admin_factory)
+    _assign(admin_factory, world, world.task_ids[0])
+    (event,) = _dispatch_events(admin_factory)
+    claim = _claim(worker_factory, event)
+    assert isinstance(claim, runner.Claim)
+    _finish(worker_factory, claim, runner.Failure("EXECUTION_FAILED", "RuntimeError"))
+
+    with session_scope(admin_factory) as s, pytest.raises(IntegrityError):
+        s.execute(update(AgentExecution).values(submission={"summary": "forged"}))
+        s.flush()

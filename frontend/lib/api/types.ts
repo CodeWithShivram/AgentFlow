@@ -329,6 +329,7 @@ export interface Task {
   input_references: string[];
   expected_output_schema: Record<string, unknown> | null;
   acceptance_criteria: AcceptanceCriterion[];
+  deliverables: string[];
   priority: number;
   required: boolean;
   removed: boolean;
@@ -349,6 +350,7 @@ export interface TaskInput {
   description: string;
   required_skills: string[];
   acceptance_criteria: AcceptanceCriterion[];
+  deliverables: string[];
   priority: number;
   required: boolean;
   depends_on: Uuid[];
@@ -383,4 +385,25 @@ export interface Execution {
   error_code: string | null;
   error_summary: string | null;
   result_summary: string | null;
+  submission: AgentSubmission | null;
+}
+
+/** The agent's own claim about one acceptance criterion; platform verification checks it. */
+export type CriterionStatus = "MET" | "PARTIAL" | "NOT_MET";
+
+export interface CriterionClaim {
+  criterion_id: string;
+  status: CriterionStatus;
+  evidence: string;
+}
+
+/** Mirrors AgentSubmission (backend/app/agents/contract.py). Untrusted agent output. */
+export interface AgentSubmission {
+  schema_version: 1;
+  summary: string;
+  outputs: Record<string, unknown>;
+  criteria: CriterionClaim[];
+  assumptions: string[];
+  limitations: string[];
+  open_questions: string[];
 }

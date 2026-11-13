@@ -105,6 +105,12 @@ InputReferences = Annotated[
     list[Annotated[str, StringConstraints(min_length=1, max_length=500)]], Field(max_length=50)
 ]
 Criteria = Annotated[list[AcceptanceCriterion], Field(max_length=50)]
+Deliverables = Annotated[
+    list[
+        Annotated[SafeText, StringConstraints(min_length=1, max_length=2000, strip_whitespace=True)]
+    ],
+    Field(max_length=20),
+]
 OutputSchema = Annotated[dict[str, Any] | None, AfterValidator(_json_size_limit)]
 
 
@@ -117,6 +123,7 @@ class TaskCreateRequest(BaseModel):
     input_references: InputReferences = []
     expected_output_schema: OutputSchema = None
     acceptance_criteria: Criteria = []
+    deliverables: Deliverables = []
     priority: int = Field(default=0, ge=-100, le=100)
     required: bool = True
     depends_on: Annotated[list[uuid.UUID], Field(max_length=50)] = []
@@ -132,6 +139,7 @@ class TaskUpdateRequest(BaseModel):
     input_references: InputReferences | None = None
     expected_output_schema: OutputSchema = None
     acceptance_criteria: Criteria | None = None
+    deliverables: Deliverables | None = None
     priority: int | None = Field(default=None, ge=-100, le=100)
     required: bool | None = None
 
@@ -199,6 +207,7 @@ class TaskResponse(BaseModel):
     input_references: list[Any]
     expected_output_schema: dict[str, Any] | None
     acceptance_criteria: list[Any]
+    deliverables: list[str]
     priority: int
     required: bool
     removed: bool
@@ -238,6 +247,8 @@ class ExecutionResponse(BaseModel):
     error_code: str | None
     error_summary: str | None
     result_summary: str | None
+    # The validated AgentSubmission (ADR-0018); its criterion claims are unverified.
+    submission: dict[str, Any] | None
 
 
 class ExecutionList(BaseModel):

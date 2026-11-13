@@ -55,6 +55,11 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
 - Errors use the standard shape in `app/core/errors.py`; never return exception text. Log through `logging` (JSON + redaction), never `print`.
 - PostgreSQL is authoritative state; Redis is transport/cache only. Dispatch uses a transactional outbox.
 - Agents submit results; only platform verification accepts a task. LLM output is untrusted until validated.
+- Agent runtime (ADR-0018, `app/agents/contract.py`, `base.py`): agents subclass `BaseAgent` (sync `execute`) and receive
+  a `TaskContract` built by the runner from platform data only; they never touch the database or task status. Output
+  must parse as `AgentSubmission` with exactly one claim per acceptance criterion (`validate_output` is platform-owned
+  and `@final`); invalid output is a failed attempt (`INVALID_SUBMISSION`). Submissions are stored per attempt in
+  `agent_executions.submission`; criterion claims are unverified. Never put parser or agent text in error summaries.
 - All LLM calls go through `app/llm/gateway.py` (`get_model_gateway().complete(...)`, ADR-0013), in workers only; the
   API never calls a model. Each call writes an `llm_usage` row (its own transaction) with provider-reported usage; costs
   stay NULL until Phase 7 pricing. Validate structured output with a Pydantic `response_format`; never log prompts or

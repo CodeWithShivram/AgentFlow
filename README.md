@@ -250,7 +250,9 @@ Every language-model call goes through one gateway in the Celery workers (`app/l
 
 ## Background workers (Celery)
 
-Workflow tasks are executed by Celery workers, fed through a transactional outbox: the API only writes outbox rows, and the relay publishes them to Redis. In this step the worker runs a harmless mock agent; there is no LLM call. The design is in [ADR-0010](docs/ADR/0010-background-execution-outbox-and-workers.md).
+Workflow tasks are executed by Celery workers, fed through a transactional outbox: the API only writes outbox rows, and the relay publishes them to Redis. The worker still runs a harmless mock agent; there is no LLM call. The design is in [ADR-0010](docs/ADR/0010-background-execution-outbox-and-workers.md).
+
+**Agent contract** ([ADR-0018](docs/ADR/0018-agent-contract-and-submissions.md)). Each attempt gives the agent a task contract: objective, inputs, deliverables, acceptance criteria, dependencies, allowed tools, timeout and retry policy. The agent returns a structured submission: a summary, outputs, one claim per criterion, assumptions, limitations and open questions. Output that fails validation counts as a failed attempt. A valid submission is stored with the attempt and shown in the task's execution history. The agent's claims are not verified yet, so the task waits as Submitted.
 
 One-time setup, after `alembic upgrade head`: set `WORKER_DB_PASSWORD` (and `API_DB_PASSWORD`) in `.env`, then run `uv run python -m app.db.roles provision`. Re-run the provisioning after future migrations.
 
