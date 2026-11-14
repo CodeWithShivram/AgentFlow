@@ -15,6 +15,7 @@ import time
 import uuid
 from collections.abc import Callable
 from functools import partial
+from typing import Protocol
 
 from pydantic import BaseModel, ValidationError
 
@@ -54,6 +55,18 @@ def create_adapter(settings: Settings) -> ModelAdapter:
 
 
 UsageRecorder = Callable[[CallRecord], uuid.UUID]
+
+
+class ModelCaller(Protocol):
+    """What agents call: the gateway itself, or the runner's per-attempt wrapper around it that
+    stops a cancelled attempt before its next call (ADR-0029)."""
+
+    def complete[T: BaseModel](
+        self,
+        context: CallContext,
+        request: ModelRequest,
+        response_format: type[T] | None = None,
+    ) -> ModelResponse[T]: ...
 
 
 class ModelGateway:

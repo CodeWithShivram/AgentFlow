@@ -115,6 +115,10 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   slots (`max_parallel_tasks` minus QUEUED/IN_PROGRESS) in `dispatch_order` (priority, then age); the worker claim
   still enforces the limit. Pre-assigned PENDING tasks keep their status; `reconcile_workflow` assigns them
   (SCHEDULER) when ready. No workspace-wide cap.
+- Cancellation and recovery (ADR-0029): agents reach models and tools only through the runner's `AttemptGuard`
+  (`is_current` check before each call; tests pass `is_current=` like `models=`). `app/execution/recovery.py`
+  (Beat, every 60 s) is the only code that closes lost attempts (WORKER_LOST, automatic bounded retry), resends
+  unclaimed dispatches and fails interrupted planning jobs; keep its thresholds above the worker time limits.
 - Workflow events are append-only.
 
 ## Security

@@ -1,5 +1,6 @@
 """Built-in model-backed agents (Step 3.4, ADR-0021), with the mock model provider."""
 
+import contextlib
 import json
 import uuid
 from typing import Any
@@ -9,6 +10,7 @@ import pytest
 from app.agents.base import AgentContext, BaseAgent
 from app.agents.contract import AgentSubmission, InvalidSubmissionError, TaskContract
 from app.agents.instructions import COMMON_RULES, INSTRUCTIONS
+from app.agents.mock import MockAgent
 from app.agents.specialists import (
     RUNTIMES,
     AgentRuntimeUnavailableError,
@@ -86,7 +88,9 @@ def _run(
     configuration = _configuration(agent_type.instruction_ref)  # type: ignore[attr-defined]
     claim = _claim(configuration, **claim_changes)
     models = ModelGateway(make_settings(), adapter, recorder)
-    submission = runner.run_agent(claim, models=models, record_tool_call=lambda r: uuid.uuid4())
+    submission = runner.run_agent(
+        claim, models=models, record_tool_call=lambda r: uuid.uuid4(), is_current=lambda: True
+    )
     return submission, adapter, recorder, claim
 
 
@@ -130,7 +134,9 @@ def test_a_version_without_a_runtime_fails_before_any_model_call() -> None:
     claim = _claim(_configuration("workspace://prompts/w/v1"))
     models = ModelGateway(make_settings(), MockModelAdapter(), recorder)
     with pytest.raises(AgentRuntimeUnavailableError):
-        runner.run_agent(claim, models=models, record_tool_call=lambda r: uuid.uuid4())
+        runner.run_agent(
+            claim, models=models, record_tool_call=lambda r: uuid.uuid4(), is_current=lambda: True
+        )
     assert recorder.records == []
 
 
@@ -189,7 +195,12 @@ def test_the_token_budget_caps_the_output_tokens() -> None:
     )
     adapter, recorder = MockModelAdapter(), Recorder()
     models = ModelGateway(make_settings(), adapter, recorder)
-    runner.run_agent(_claim(configuration), models=models, record_tool_call=lambda r: uuid.uuid4())
+    runner.run_agent(
+        _claim(configuration),
+        models=models,
+        record_tool_call=lambda r: uuid.uuid4(),
+        is_current=lambda: True,
+    )
     assert adapter.requests[0].max_output_tokens == 1500
 
 
@@ -239,7 +250,9 @@ def test_a_provider_failure_is_not_retried_by_the_agent() -> None:
     claim = _claim(_configuration("builtin://writer/v1"))
 
     with pytest.raises(ModelCallFailedError):
-        runner.run_agent(claim, models=models, record_tool_call=lambda r: uuid.uuid4())
+        runner.run_agent(
+            claim, models=models, record_tool_call=lambda r: uuid.uuid4(), is_current=lambda: True
+        )
     assert [r.status for r in recorder.records] == [LlmCallStatus.FAILED]
 
 
@@ -276,3 +289,49 @@ def test_the_mock_reply_is_schema_valid_for_any_contract() -> None:
     submission = agent.execute(contract, context)
     assert agent.validate_output(contract, submission).valid
     assert submission.limitations == ["Mock model provider: no real model was used."]
+
+
+# --- cooperative cancellation (Step 4.5, ADR-0029) -----------------------------------------------
+
+
+def test_a_cancelled_attempt_stops_before_its_model_call() -> None:
+    adapter, recorder = MockModelAdapter(), Recorder()
+    claim = _claim(_configuration(WriterAgent.instruction_ref))
+    models = ModelGateway(make_settings(), adapter, recorder)
+    with pytest.raises(runner.AttemptCancelledError):
+        runner.run_agent(
+            claim, models=models, record_tool_call=lambda r: uuid.uuid4(), is_current=lambda: False
+        )
+    assert adapter.requests == [] and recorder.records == []
+
+
+class _StubbornAgent(MockAgent):
+    """Swallows every error from its tool calls and carries on."""
+
+    def execute(self, contract: TaskContract, context: AgentContext) -> AgentSubmission:
+        for _ in range(3):
+            with contextlib.suppress(Exception):
+                context.tools.invoke("web_search", {"text": "x"})
+        return super().execute(contract, context)
+
+
+def test_the_guard_stops_an_agent_that_swallows_the_cancellation() -> None:
+    answers = iter([True, False, True])
+    checks: list[bool] = []
+
+    def is_current() -> bool:
+        checks.append(next(answers))
+        return checks[-1]
+
+    claim = _claim(_configuration(WriterAgent.instruction_ref))
+    models = ModelGateway(make_settings(), MockModelAdapter(), Recorder())
+    # Cancellation wins over the tool violation of the first (ungranted) call.
+    with pytest.raises(runner.AttemptCancelledError):
+        runner.run_agent(
+            claim,
+            _StubbornAgent,
+            models=models,
+            record_tool_call=lambda r: uuid.uuid4(),
+            is_current=is_current,
+        )
+    assert checks == [True, False]  # once stopped, it stays stopped without asking again

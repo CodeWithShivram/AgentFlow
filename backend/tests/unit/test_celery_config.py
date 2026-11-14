@@ -8,7 +8,7 @@ import pytest
 from celery.schedules import crontab
 from pydantic import ValidationError
 
-from app.execution import outbox
+from app.execution import outbox, recovery
 from app.worker import tasks
 from app.worker.celery_app import EXECUTION_QUEUE, MAINTENANCE_QUEUE, celery_app
 from tests.conftest import make_settings
@@ -36,11 +36,15 @@ def test_queues_and_routes() -> None:
     assert conf.task_routes == {
         "agentflow.execute_task": {"queue": EXECUTION_QUEUE},
         "agentflow.relay_outbox": {"queue": MAINTENANCE_QUEUE},
+        "agentflow.recover": {"queue": MAINTENANCE_QUEUE},
         "agentflow.cleanup": {"queue": MAINTENANCE_QUEUE},
     }
-    assert {"agentflow.execute_task", "agentflow.relay_outbox", "agentflow.cleanup"} <= set(
-        celery_app.tasks
-    )
+    assert {
+        "agentflow.execute_task",
+        "agentflow.relay_outbox",
+        "agentflow.recover",
+        "agentflow.cleanup",
+    } <= set(celery_app.tasks)
 
 
 def test_beat_runs_cleanup_hourly_and_the_relay_every_few_seconds() -> None:
@@ -51,6 +55,13 @@ def test_beat_runs_cleanup_hourly_and_the_relay_every_few_seconds() -> None:
     assert cleanup["schedule"].minute == {0}
     assert cleanup["schedule"].hour == set(range(24))
     assert schedule["relay-outbox"] == {"task": "agentflow.relay_outbox", "schedule": 5.0}
+    assert schedule["recover"] == {"task": "agentflow.recover", "schedule": 60.0}
+
+
+def test_recovery_waits_until_the_worker_has_certainly_given_up() -> None:
+    # A live worker kills its attempt at the hard limit, so a later RUNNING attempt is lost.
+    assert recovery.LOST_ATTEMPT_AFTER.total_seconds() > tasks.EXECUTION_TIME_LIMIT
+    assert recovery.INTERRUPTED_JOB_AFTER.total_seconds() > tasks.ANALYSIS_TIME_LIMIT
 
 
 def test_execution_time_limits_follow_the_default_agent_timeout() -> None:

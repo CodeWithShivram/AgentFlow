@@ -2,8 +2,8 @@
 
 ## Current position
 - Phase: 4 — Orchestration and scheduling (Phases 2 and 3 complete; Phase 1 released as `v0.1.0`, pushed with its tag)
-- Last completed step: 4.4 — Dependency-aware scheduling and concurrency limits
-- Next step: 4.5 — Cancellation and restart recovery (includes OD-17), which needs a short plan and the owner's go-ahead
+- Last completed step: 4.5 — Cancellation and restart recovery
+- Next step: 4.6 — Parallel and sequential execution tests, which needs a short plan and the owner's go-ahead
 
 ## Completed steps
 | Step | Commit message | Hash |
@@ -37,16 +37,17 @@
 | 4.1 | `feat(orchestration): add LangGraph workflow assessment graph` | `de4da58` (pushed, CI ✔) |
 | 4.2 | `feat(orchestration): persist graph checkpoints in PostgreSQL` | `c7657ef` (pushed, CI ✔) |
 | 4.3 | `feat(execution): surface and retry failed jobs and report worker health` | `c23c846` (pushed, CI ✔) |
-| 4.4 | `feat(scheduling): dispatch by priority within slot limits and allow pre-assignment` | latest commit touching `docs/ADR/0028-dependency-aware-scheduling.md` |
+| 4.4 | `feat(scheduling): dispatch by priority within slot limits and allow pre-assignment` | `77b61c4` (pushed, CI ✔) |
+| 4.5 | `feat(execution): stop cancelled agents and recover work stranded by lost workers` | latest commit touching `docs/ADR/0029-cancellation-and-restart-recovery.md` |
 
 ## Environment snapshot (2026-11-14)
 | Item | Value |
 |---|---|
-| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `c23c846` plus tag `v0.1.0` (owner-authorized) |
+| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `77b61c4` plus tag `v0.1.0` (owner-authorized) |
 | Python / uv / Node / npm | 3.12.14 via uv 0.12.9 / Node 24.13.0 / npm 11.6.2 |
 | Celery / kombu | 5.7.0 / 5.7.0 |
 | Docker | 29.9.3 — `agentflow` stack healthy (Docker Desktop must be started first; it had stopped and was restarted in Steps 3.1 and 3.4) |
-| Dev database | `agentflow` at `0017 (head)`; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
+| Dev database | `agentflow` at `0018 (head)`; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
 | Local `.env` | holds generated `WORKER_DB_PASSWORD` and (new) `API_DB_PASSWORD` (gitignored) |
 | Port 8000 | Used by another local project (`easa`); smoke tests used 8010 |
 | E2E | API :8011 (as `agentflow_api`), frontend :3100, database `agentflow_e2e` (reset each run), Redis DBs 2/3, installed Google Chrome |
@@ -54,6 +55,39 @@
 | Test HTTP client | `httpx2` 2.16.0 (replaces `httpx`, OD-10); `httpx` is back only as a LiteLLM dependency |
 | LiteLLM | 1.109.1, imported by workers only when `MODEL_PROVIDER=litellm`; `.env` keeps the mock |
 | LangGraph | 1.2.22 (with langchain-core 1.8.0 and langsmith 0.14.17), imported by workers only; LangSmith tracing disabled; checkpoints via `langgraph-checkpoint-postgres` 3.2.1 |
+
+## Step 4.5 — cancellation and restart recovery (ADR-0029)
+- **Owner decisions (2026-11-14):**
+  - lost attempts retry automatically, bounded by the three attempts;
+  - a time-based sweep detects lost workers;
+  - cancelled agents stop at their next model or tool call;
+  - the sweep also resends lost dispatches and fails interrupted planning jobs.
+- **Cooperative cancellation (`app/execution/runner.py`):**
+  - `AttemptGuard` runs `is_current` before every model call (`_GuardedModels`) and tool call (`ToolGateway(before_call=...)`); a stopped call writes no usage or invocation row;
+  - `AttemptCancelledError` is raised even if the agent caught it, ahead of tool violations;
+  - `attempt_is_current`: execution RUNNING and task IN_PROGRESS, so pausing keeps attempts running; database errors let the attempt go on;
+  - `AgentContext.models` is now the `ModelCaller` protocol (`app/llm/gateway.py`).
+- **Recovery sweep (`app/execution/recovery.py`, Beat `agentflow.recover` every 60 s, maintenance queue):**
+  - lost attempts (RUNNING more than 660 s + 120 s): `WORKER_LOST`, then REWORK_REQUIRED → ASSIGNED (SCHEDULER, `automatic_retry`) with `attempt_count + 1`, or FAILED after the third attempt; a cancelled task's lost attempt becomes CANCELLED;
+  - lost dispatches: the latest dispatch of an ASSIGNED task in a RUNNING workflow, published over 15 min ago and never claimed, is resent within free slots;
+  - interrupted planning jobs: a PENDING analysis/plan request claimed over 450 s ago is failed through `analysis.record_failure` / `plan.record_failure` (`*_INTERRUPTED`).
+- **Migration `0018`:** partial index `ix_agent_executions_running_started_at`. No new tables or grants.
+- **Refactors:** the planning time limits moved to `analysis.JOB_*_TIME_LIMIT_SECONDS` and the hard agent limit to `runner.AGENT_HARD_TIME_LIMIT_SECONDS` (values unchanged).
+- **Frontend:** no change; attempt error codes and event reasons already show as text.
+- **Tests changed:** run_agent calls whose agents reach models or tools now pass `is_current` (unit: always current; integration: the real check against the test database), because the default check reads the worker database; the Celery route test includes `agentflow.recover`.
+
+## Checks last executed (Step 4.5)
+- **Full gate (`check.ps1 -E2E`) ✔, exit 0:**
+  - backend: ruff format, ruff check, mypy (171 files), alembic check;
+  - pytest **1000 passed** (988 plus 12 new):
+    - 9 integration tests: a lost worker's task retried and completed; a lost last attempt failing the task; a cancelled task's lost attempt closed as cancelled; a running agent stopped at its next call after cancellation; pausing keeps an attempt current; a lost dispatch resent once; a claimed or deferred dispatch never resent; interrupted analysis and plan requests failed;
+    - 2 unit tests: no model call after cancellation; the guard stays stopped when the agent swallows the error;
+    - 1 unit test: recovery thresholds above the worker time limits;
+  - frontend: eslint, typecheck, Vitest **107**, Playwright **14 passed**, build.
+- **Deliberate-bug checks** (both restored byte-for-byte):
+  - making `attempt_is_current` ignore the task status fails both cancellation tests;
+  - dropping the retry's `attempt_count` increment fails the lost-worker test.
+- **Environment:** the dev DB is at `0018`, and roles were re-provisioned; no servers were left running after E2E.
 
 ## Step 4.4 — dependency-aware scheduling (ADR-0028)
 - **Owner decisions (2026-11-14):**
@@ -71,7 +105,7 @@
   - the API test that expected 409 when assigning a PENDING task now expects a pre-assignment (200, PENDING, no dispatch);
   - the graph version pins moved to v2, and a PLANNING PENDING task's menu now includes "preassign".
 
-## Checks last executed (Step 4.4)
+## Checks (Step 4.4)
 - **Full gate (`check.ps1 -E2E`):**
   - backend ✔: ruff format (169 files), ruff check, mypy (169 files), alembic check;
   - pytest **988 passed** (982 plus 6 new: 2 unit graph cases for tasks waiting for a slot, 3 integration scheduling tests for concurrency in priority order, freed slots by priority and pre-assigned tasks dispatched when ready, and 1 API test for clearing a pre-assignment on a skills change);
@@ -598,7 +632,7 @@
 - **Live provider path unverified:** Step 3.3 was verified offline only, by owner decision.
 - **OD-14:** trusted proxy IP handling, before hosted deployment.
 - **OD-19:** the hosted frontend must share a host with the API (CSRF cookie readability); a CSP with nonces is not set yet.
-- **OD-17:** a worker crash after claim leaves the task IN_PROGRESS; recovery is Step 4.5.
+- **Recovery latency** (ADR-0029): a crashed attempt keeps its slot for up to about 13 minutes; on the Windows solo pool, an attempt slower than that can be recovered while still running (its result is then discarded).
 - **Readiness depends on workers** (ADR-0027): the API reports not ready without a running worker and Beat.
 - **OD-16:** replanning for tasks blocked by a cancelled dependency.
 - **Celery:** time limits are not enforced by the Windows `solo` pool, only by Linux prefork. Exactly one Beat must run. Dispatch latency is up to 5 s.
@@ -609,6 +643,6 @@
 None.
 
 ## Next exact action
-1. **Push Step 4.4** on the owner's go-ahead, and confirm CI on GitHub.
-2. **Step 4.5 (cancellation and restart recovery, including OD-17):** present a short plan and get the owner's go-ahead.
+1. **Push Step 4.5** on the owner's go-ahead, and confirm CI on GitHub.
+2. **Step 4.6 (parallel and sequential execution tests):** present a short plan and get the owner's go-ahead.
 3. **Before any hosted deployment:** settle OD-14, OD-19 and OD-20.

@@ -248,6 +248,24 @@ def generate(
     return PlanFailure(code=last_code, attempts=MAX_ATTEMPTS)
 
 
+def record_failure(
+    session: Session, workflow: Workflow, request_id: uuid.UUID, failure: PlanFailure
+) -> None:
+    """Marks the current plan request FAILED, so the user can retry it. The caller holds the
+    workflow lock and has checked the request is current."""
+    workflow.plan_status = PlanStatus.FAILED
+    engine.record_event(
+        session,
+        workflow,
+        WorkflowEventType.PLAN_GENERATION_FAILED,
+        payload={
+            "request_id": str(request_id),
+            "error_code": failure.code,
+            "attempts": failure.attempts,
+        },
+    )
+
+
 def finish(session: Session, job: PlanJob, outcome: PlanProposal | PlanFailure) -> str:
     workflow = _lock_workflow(session, job.workspace_id, job.workflow_id)
     if workflow is None or not _is_current(workflow, job.request_id):
@@ -286,17 +304,7 @@ def finish(session: Session, job: PlanJob, outcome: PlanProposal | PlanFailure) 
         )
         result = "ready"
     else:
-        workflow.plan_status = PlanStatus.FAILED
-        engine.record_event(
-            session,
-            workflow,
-            WorkflowEventType.PLAN_GENERATION_FAILED,
-            payload={
-                "request_id": str(job.request_id),
-                "error_code": outcome.code,
-                "attempts": outcome.attempts,
-            },
-        )
+        record_failure(session, workflow, job.request_id, outcome)
         result = "failed"
     session.commit()
     logger.info(

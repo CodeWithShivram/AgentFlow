@@ -270,6 +270,11 @@ Workflow tasks are executed by Celery workers, fed through a transactional outbo
 
 **Scheduling** ([ADR-0028](docs/ADR/0028-dependency-aware-scheduling.md)). Independent tasks run at the same time, up to the workflow's `max_parallel_tasks`. When more tasks are assigned than there are free slots, the rest wait, and each freed slot goes to the waiting task with the highest priority (then the oldest). A task that still waits for its dependencies can be pre-assigned ("Pre-assign agent…"): it starts by itself once its dependencies complete. Changing its required skills clears the pre-assignment.
 
+**Cancellation and recovery** ([ADR-0029](docs/ADR/0029-cancellation-and-restart-recovery.md)). Cancelling a task or workflow stops a running agent at its next model or tool call; pausing lets running attempts finish. Every minute, a recovery sweep picks up work a lost worker or message left behind:
+- an attempt still running about 13 minutes after it started (past the hard time limit) is recorded as `WORKER_LOST`, and the task is retried automatically with the same agent version; the lost attempt counts toward the three, so a lost third attempt fails the task;
+- a dispatch that was published but not picked up within 15 minutes is sent again;
+- an analysis or plan request interrupted mid-way is marked failed, so it can be retried.
+
 One-time setup, after `alembic upgrade head`: set `WORKER_DB_PASSWORD` (and `API_DB_PASSWORD`) in `.env`, then run `uv run python -m app.db.roles provision`. Re-run the provisioning after future migrations.
 
 Run each in its own terminal from `backend/`, with the infrastructure up:
@@ -281,21 +286,21 @@ uv run uvicorn app.main:create_app --factory --port 8000 --loop asyncio:Selector
 # Worker: Windows needs the solo pool
 uv run celery -A app.worker.celery_app worker --pool=solo -Q execution,maintenance --loglevel=INFO
 
-# Beat: exactly one instance. It runs the outbox relay every 5 s and cleanup hourly.
+# Beat: exactly one instance. It runs the outbox relay every 5 s, recovery every minute and cleanup hourly.
 uv run celery -A app.worker.celery_app beat --schedule=celerybeat-schedule --loglevel=INFO
 ```
 
 | Queue | Tasks |
 |---|---|
 | `execution` | `agentflow.execute_task`: one attempt of a dispatched task |
-| `maintenance` | `agentflow.relay_outbox` (every 5 s), `agentflow.cleanup` (hourly, at minute 0) |
+| `maintenance` | `agentflow.relay_outbox` (every 5 s), `agentflow.recover` (every 60 s), `agentflow.cleanup` (hourly, at minute 0) |
 
 **Linux production:**
 - Run prefork workers, for example `celery -A app.worker.celery_app worker -Q execution --concurrency 4` and a separate `-Q maintenance --concurrency 1` worker.
 - Run exactly one Beat process.
 - Run everything as a non-root user, with `WORKER_DB_PASSWORD` and the broker password supplied by the environment or a secret manager.
 
-Task time limits (600 s soft, 660 s hard) are enforced only by prefork workers, not by the Windows `solo` pool.
+Task time limits (600 s soft, 660 s hard) are enforced only by prefork workers, not by the Windows `solo` pool. On Windows, an attempt slower than about 13 minutes can therefore be recovered as lost while it still runs; it then stops at its next call and its result is discarded.
 
 How delivery behaves:
 - Delivery is **at-least-once**, and workers deduplicate on the stable event ID.

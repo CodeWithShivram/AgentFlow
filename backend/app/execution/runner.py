@@ -9,6 +9,8 @@ An execution is three bounded steps; no transaction stays open while the agent w
 2. `run_agent` - outside any transaction: build the task contract, run the version's agent
               runtime (model calls through the gateway) and validate its submission (invalid
               output, a failed model call or a version without a runtime fail the attempt).
+              Before each model or tool call, an `AttemptGuard` checks the attempt is still
+              current, so a cancelled (or recovered) attempt stops at its next call (ADR-0029).
 3. `finish` - one transaction: IN_PROGRESS -> SUBMITTED with the submission stored on the
               attempt (agents never complete tasks; platform verification does), or, on
               failure/timeout, REWORK_REQUIRED (FAILED after the last allowed attempt). The
@@ -17,13 +19,16 @@ An execution is three bounded steps; no transaction stays open while the agent w
 
 import logging
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
+from functools import partial
 from typing import Any
 
+from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.agents.base import AgentContext, BaseAgent
@@ -34,9 +39,10 @@ from app.agents.contract import (
     TaskContract,
 )
 from app.agents.specialists import runtime_for
-from app.db.sync_session import get_worker_session_factory
+from app.db.sync_session import get_worker_session_factory, session_scope
 from app.execution import outbox
-from app.llm.gateway import ModelGateway, get_model_gateway
+from app.llm.gateway import ModelCaller, get_model_gateway
+from app.llm.types import CallContext, ModelRequest, ModelResponse
 from app.models import (
     AgentExecution,
     AgentVersion,
@@ -62,6 +68,8 @@ MAX_ATTEMPTS_PER_TASK = 3
 # The worker's soft time limit for one attempt (handoff section 6 default). A contract never
 # promises an agent more time than the worker enforces.
 AGENT_TIME_LIMIT_SECONDS = 600
+# The worker kills an attempt after this long: the soft limit plus time to record the outcome.
+AGENT_HARD_TIME_LIMIT_SECONDS = AGENT_TIME_LIMIT_SECONDS + 60
 
 
 class Skipped(StrEnum):
@@ -100,6 +108,76 @@ class Failure:
     code: str
     summary: str
     timed_out: bool = False
+
+
+class AttemptCancelledError(Exception):
+    """The attempt is no longer current: its task was cancelled, or the attempt was recovered
+    as lost (ADR-0029). The agent stops; `finish` records the attempt as it finds it."""
+
+    code = "ATTEMPT_CANCELLED"
+
+
+class AttemptGuard:
+    """Checks before each model or tool call that the attempt is still current. Once it has
+    stopped the attempt it stays stopped, and the runner raises even if the agent caught it."""
+
+    def __init__(self, is_current: Callable[[], bool]) -> None:
+        self._is_current = is_current
+        self.cancelled = False
+
+    def check(self) -> None:
+        if not self.cancelled and not self._is_current():
+            self.cancelled = True
+        if self.cancelled:
+            raise AttemptCancelledError()
+
+
+class _GuardedModels:
+    """The model gateway as one attempt sees it: every call is checked by the guard first."""
+
+    def __init__(self, models: ModelCaller, guard: AttemptGuard) -> None:
+        self._models = models
+        self._guard = guard
+
+    def complete[T: BaseModel](
+        self,
+        context: CallContext,
+        request: ModelRequest,
+        response_format: type[T] | None = None,
+    ) -> ModelResponse[T]:
+        self._guard.check()
+        return self._models.complete(context, request, response_format)
+
+
+def attempt_is_current(session: Session, workspace_id: uuid.UUID, execution_id: uuid.UUID) -> bool:
+    """True while the attempt is RUNNING and its task IN_PROGRESS. Pausing keeps both, so a
+    paused workflow lets running attempts finish."""
+    row = session.execute(
+        select(AgentExecution.status, WorkflowTask.status)
+        .join(
+            WorkflowTask,
+            (WorkflowTask.id == AgentExecution.task_id)
+            & (WorkflowTask.workflow_id == AgentExecution.workflow_id),
+        )
+        .where(AgentExecution.id == execution_id, AgentExecution.workspace_id == workspace_id)
+    ).one_or_none()
+    return (
+        row is not None and row[0] == ExecutionStatus.RUNNING and row[1] == TaskStatus.IN_PROGRESS
+    )
+
+
+def _check_attempt(claim: Claim) -> bool:
+    """The guard's default check: one short read. A database error lets the attempt go on;
+    `finish` decides with the committed state."""
+    try:
+        with session_scope(get_worker_session_factory()) as session:
+            return attempt_is_current(session, claim.workspace_id, claim.execution_id)
+    except SQLAlchemyError as exc:
+        logger.warning(
+            "attempt check failed",
+            extra={"execution_id": str(claim.execution_id), "error_type": type(exc).__name__},
+        )
+        return True
 
 
 def _lock_workflow(
@@ -253,19 +331,23 @@ def run_agent(
     claim: Claim,
     agent_type: type[BaseAgent] | None = None,
     *,
-    models: ModelGateway | None = None,
+    models: ModelCaller | None = None,
     registry: Mapping[str, ToolDefinition] = REGISTRY,
     record_tool_call: InvocationRecorder = _record_tool_call,
+    is_current: Callable[[], bool] | None = None,
 ) -> AgentSubmission:
     """Runs one attempt outside any transaction, with the runtime chosen from the version's
     instruction reference (ADR-0021); tests may pass `agent_type` and `models` explicitly.
+    `is_current` defaults to a database check of the attempt (ADR-0029).
 
     Raises `AgentRuntimeUnavailableError` for a version without a runtime, `InvalidSubmissionError`
     when the output fails validation, a `ModelGatewayError` when the model call fails, and the
-    attempt's first tool policy violation (a `ToolError`) even if the agent caught it (ADR-0019)."""
+    attempt's first tool policy violation (a `ToolError`) even if the agent caught it (ADR-0019),
+    and `AttemptCancelledError` once the attempt stopped being current, even if caught."""
     configuration = AgentConfiguration.model_validate(claim.configuration)
     contract = build_contract(claim, configuration, registry)
     agent = (agent_type or runtime_for(configuration))(configuration)
+    guard = AttemptGuard(is_current or partial(_check_attempt, claim))
     tools = ToolGateway(
         ToolCallContext(
             workspace_id=claim.workspace_id,
@@ -276,6 +358,7 @@ def run_agent(
         contract.allowed_tools,
         record_tool_call,
         registry=registry,
+        before_call=guard.check,
     )
     context = AgentContext(
         execution_id=claim.execution_id,
@@ -284,14 +367,18 @@ def run_agent(
         agent_version_id=claim.agent_version_id,
         agent_version=claim.agent_version,
         tools=tools,
-        models=models or get_model_gateway(),
+        models=_GuardedModels(models or get_model_gateway(), guard),
     )
     try:
         result = agent.execute(contract, context)
     except Exception:
+        if guard.cancelled:
+            raise AttemptCancelledError() from None
         if tools.violation is not None:
             raise tools.violation from None
         raise
+    if guard.cancelled:
+        raise AttemptCancelledError()
     if tools.violation is not None:
         raise tools.violation
     validation = agent.validate_output(contract, result)

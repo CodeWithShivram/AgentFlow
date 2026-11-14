@@ -19,6 +19,7 @@ from app.core.logging import configure_logging
 EXECUTION_QUEUE = "execution"
 MAINTENANCE_QUEUE = "maintenance"
 RELAY_INTERVAL_SECONDS = 5.0
+RECOVERY_INTERVAL_SECONDS = 60.0
 
 settings = get_settings()
 
@@ -44,10 +45,13 @@ celery_app.conf.update(
     task_routes={
         "agentflow.execute_task": {"queue": EXECUTION_QUEUE},
         "agentflow.relay_outbox": {"queue": MAINTENANCE_QUEUE},
+        "agentflow.recover": {"queue": MAINTENANCE_QUEUE},
         "agentflow.cleanup": {"queue": MAINTENANCE_QUEUE},
     },
     beat_schedule={
         "relay-outbox": {"task": "agentflow.relay_outbox", "schedule": RELAY_INTERVAL_SECONDS},
+        # Stranded attempts, lost dispatches and interrupted planning jobs (ADR-0029).
+        "recover": {"task": "agentflow.recover", "schedule": RECOVERY_INTERVAL_SECONDS},
         "cleanup-hourly": {"task": "agentflow.cleanup", "schedule": crontab(minute=0)},
     },
     timezone="UTC",

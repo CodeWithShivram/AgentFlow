@@ -556,8 +556,13 @@ def test_execution_history_lists_attempts_with_agent_versions(
     models = ModelGateway(
         api_settings, MockModelAdapter(), partial(record_model_call, worker_factory)
     )
+
+    def current() -> bool:  # the attempt guard's check (ADR-0029), against the test database
+        with session_scope(worker_factory) as s:
+            return runner.attempt_is_current(s, claim.workspace_id, claim.execution_id)
+
     with session_scope(worker_factory) as s:
-        runner.finish(s, claim, runner.run_agent(claim, models=models))
+        runner.finish(s, claim, runner.run_agent(claim, models=models, is_current=current))
     record_tool_invocation(
         worker_factory,
         InvocationRecord(

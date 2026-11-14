@@ -147,6 +147,12 @@ class AgentExecution(Base):
         CheckConstraint(
             "submission IS NULL OR status = 'SUCCEEDED'", name="submission_only_when_succeeded"
         ),
+        # The recovery sweep's scan for lost attempts (ADR-0029).
+        Index(
+            "ix_agent_executions_running_started_at",
+            "started_at",
+            postgresql_where=text("status = 'RUNNING'"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()

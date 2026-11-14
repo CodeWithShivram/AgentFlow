@@ -1,0 +1,359 @@
+"""Recovery of work stranded by a lost worker or message (ADR-0029; resolves OD-17).
+
+Delivery is at least once, and every consumer records its event in the inbox when it claims it.
+A worker that dies after its claim committed therefore leaves work that no redelivery picks up:
+the inbox skips the redelivered message as a duplicate. Beat runs `recover_once` every minute.
+Each item is recovered in its own short transaction, under the workflow lock and through the
+engine, so every status change writes its event:
+
+- Lost attempts: an execution still RUNNING `LOST_ATTEMPT_AFTER` after it started (the worker's
+  hard time limit plus a grace period) fails with WORKER_LOST. The task is retried automatically
+  with its pinned agent version, within the slot limit; the lost attempt counts toward the
+  three, so after the last one the task FAILS.
+- Lost dispatches: an ASSIGNED task in a RUNNING workflow whose latest dispatch was published
+  `LOST_DISPATCH_AFTER` ago and never claimed (the broker lost the message) is dispatched again,
+  within the slot limit. A late original delivery finds the task moved on and does nothing.
+- Interrupted planning jobs: an analysis or plan request still PENDING `INTERRUPTED_JOB_AFTER`
+  after its job claimed it is marked FAILED, so the user can retry it.
+
+A slow worker whose attempt was recovered finds it no longer current: its agent stops at the
+next model or tool call, and `finish` discards its result.
+"""
+
+import logging
+import uuid
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+
+from sqlalchemy import and_, exists, select
+from sqlalchemy.orm import Session, aliased, sessionmaker
+
+from app.db.sync_session import session_scope
+from app.execution import outbox, runner
+from app.models import (
+    AgentExecution,
+    AnalysisStatus,
+    ExecutionStatus,
+    InboxMessage,
+    OutboxEvent,
+    OutboxStatus,
+    PlanStatus,
+    TaskStatus,
+    Workflow,
+    WorkflowStatus,
+    WorkflowTask,
+)
+from app.planning import analysis, plan
+from app.workflows import engine
+from app.workflows.state_machine import Actor
+
+logger = logging.getLogger("agentflow.recovery")
+
+WORKER_LOST = "WORKER_LOST"
+ANALYSIS_INTERRUPTED = "ANALYSIS_INTERRUPTED"
+PLAN_GENERATION_INTERRUPTED = "PLAN_GENERATION_INTERRUPTED"
+# Time for a worker that is still alive to record its outcome after the hard limit.
+GRACE = timedelta(seconds=120)
+LOST_ATTEMPT_AFTER = timedelta(seconds=runner.AGENT_HARD_TIME_LIMIT_SECONDS) + GRACE
+LOST_DISPATCH_AFTER = timedelta(minutes=15)
+INTERRUPTED_JOB_AFTER = timedelta(seconds=analysis.JOB_TIME_LIMIT_SECONDS) + GRACE
+BATCH_SIZE = 100
+
+
+@dataclass
+class RecoveryReport:
+    lost_attempts: int = 0
+    retried: int = 0
+    redispatched: int = 0
+    interrupted_jobs: int = 0
+
+
+def recover_once(
+    factory: sessionmaker[Session], *, now: datetime | None = None, batch_size: int = BATCH_SIZE
+) -> RecoveryReport:
+    now = now or datetime.now(UTC)
+    report = RecoveryReport()
+    with session_scope(factory) as session:
+        lost = _lost_attempts(session, now - LOST_ATTEMPT_AFTER, batch_size)
+    for workspace_id, workflow_id, execution_id in lost:
+        with session_scope(factory) as session:
+            outcome = recover_attempt(session, workspace_id, workflow_id, execution_id, now=now)
+        if outcome is not None:
+            report.lost_attempts += 1
+            report.retried += outcome == "retried"
+
+    with session_scope(factory) as session:
+        stalled = _stalled_dispatches(session, now - LOST_DISPATCH_AFTER, batch_size)
+    for (workspace_id, workflow_id), task_ids in stalled.items():
+        with session_scope(factory) as session:
+            report.redispatched += redispatch(session, workspace_id, workflow_id, task_ids)
+
+    with session_scope(factory) as session:
+        interrupted = _interrupted_jobs(session, now - INTERRUPTED_JOB_AFTER, batch_size)
+    for kind, workspace_id, workflow_id, request_id in interrupted:
+        with session_scope(factory) as session:
+            report.interrupted_jobs += fail_interrupted_job(
+                session, kind, workspace_id, workflow_id, request_id
+            )
+    return report
+
+
+def _lock_workflow(
+    session: Session, workspace_id: uuid.UUID, workflow_id: uuid.UUID
+) -> Workflow | None:
+    statement = (
+        select(Workflow)
+        .where(Workflow.id == workflow_id, Workflow.workspace_id == workspace_id)
+        .with_for_update()
+    )
+    return session.execute(statement).scalar_one_or_none()
+
+
+# --- lost attempts -----------------------------------------------------------------------------
+
+
+def _lost_attempts(
+    session: Session, started_before: datetime, limit: int
+) -> list[tuple[uuid.UUID, uuid.UUID, uuid.UUID]]:
+    rows = session.execute(
+        select(AgentExecution.workspace_id, AgentExecution.workflow_id, AgentExecution.id)
+        .where(
+            AgentExecution.status == ExecutionStatus.RUNNING,
+            AgentExecution.started_at < started_before,
+        )
+        .order_by(AgentExecution.started_at)
+        .limit(limit)
+    )
+    return [(row[0], row[1], row[2]) for row in rows]
+
+
+def recover_attempt(
+    session: Session,
+    workspace_id: uuid.UUID,
+    workflow_id: uuid.UUID,
+    execution_id: uuid.UUID,
+    *,
+    now: datetime,
+) -> str | None:
+    """Closes one lost attempt and retries or fails its task. Returns None if the attempt
+    finished meanwhile."""
+    workflow = _lock_workflow(session, workspace_id, workflow_id)
+    execution = session.get(AgentExecution, execution_id, with_for_update=True)
+    if workflow is None or execution is None or execution.status != ExecutionStatus.RUNNING:
+        session.rollback()
+        return None
+    task = session.execute(
+        select(WorkflowTask).where(
+            WorkflowTask.id == execution.task_id,
+            WorkflowTask.workflow_id == workflow.id,
+            WorkflowTask.workspace_id == workflow.workspace_id,
+        )
+    ).scalar_one()
+    execution.completed_at = now
+    if task.status != TaskStatus.IN_PROGRESS:
+        # The task was cancelled (or moved on) while the attempt was lost, as `finish` handles it.
+        execution.status = ExecutionStatus.CANCELLED
+        session.commit()
+        return "cancelled"
+
+    execution.status = ExecutionStatus.FAILED
+    execution.error_code = WORKER_LOST
+    execution.error_summary = "The worker running this attempt stopped before it finished."
+    context = {"execution_id": str(execution.id), "attempt_number": execution.attempt_number}
+    if execution.attempt_number >= runner.MAX_ATTEMPTS_PER_TASK:
+        engine.transition_task(
+            session,
+            workflow,
+            task,
+            TaskStatus.FAILED,
+            actor=Actor.SYSTEM,
+            reason=WORKER_LOST,
+            extra=context,
+        )
+        outcome = "failed"
+    else:
+        engine.transition_task(
+            session,
+            workflow,
+            task,
+            TaskStatus.REWORK_REQUIRED,
+            actor=Actor.SYSTEM,
+            reason=WORKER_LOST,
+            extra=context,
+            reconcile=False,
+        )
+        # The next attempt, as a member's retry would start it (`tasks.assign_agent`).
+        task.attempt_count += 1
+        engine.transition_task(
+            session,
+            workflow,
+            task,
+            TaskStatus.ASSIGNED,
+            actor=Actor.SCHEDULER,
+            reason="automatic retry after the worker was lost",
+            extra={
+                "agent_id": str(task.assigned_agent_id),
+                "agent_version_id": str(task.assigned_agent_version_id),
+                "attempt_count": task.attempt_count,
+                "automatic_retry": True,
+            },
+        )
+        outcome = "retried"
+    session.commit()
+    logger.warning(
+        "lost attempt recovered",
+        extra={"execution_id": str(execution_id), "task_id": str(task.id), "outcome": outcome},
+    )
+    return outcome
+
+
+# --- lost dispatches ---------------------------------------------------------------------------
+
+
+def _stalled_dispatches(
+    session: Session, published_before: datetime, limit: int
+) -> dict[tuple[uuid.UUID, uuid.UUID], list[uuid.UUID]]:
+    """ASSIGNED tasks in RUNNING workflows whose latest dispatch was published long ago and
+    never claimed, grouped by workflow."""
+    newer = aliased(OutboxEvent)
+    rows = session.execute(
+        select(WorkflowTask.workspace_id, WorkflowTask.workflow_id, WorkflowTask.id)
+        .join(
+            OutboxEvent,
+            and_(
+                OutboxEvent.task_id == WorkflowTask.id,
+                OutboxEvent.workflow_id == WorkflowTask.workflow_id,
+                OutboxEvent.event_type == outbox.TASK_DISPATCH,
+            ),
+        )
+        .join(
+            Workflow,
+            and_(
+                Workflow.id == WorkflowTask.workflow_id,
+                Workflow.workspace_id == WorkflowTask.workspace_id,
+            ),
+        )
+        .where(
+            Workflow.status == WorkflowStatus.RUNNING,
+            WorkflowTask.status == TaskStatus.ASSIGNED,
+            WorkflowTask.removed_at.is_(None),
+            OutboxEvent.status == OutboxStatus.PUBLISHED,
+            OutboxEvent.published_at < published_before,
+            ~exists().where(
+                InboxMessage.event_id == OutboxEvent.id,
+                InboxMessage.consumer == runner.CONSUMER,
+            ),
+            ~exists().where(
+                newer.task_id == OutboxEvent.task_id,
+                newer.event_type == outbox.TASK_DISPATCH,
+                newer.created_at > OutboxEvent.created_at,
+            ),
+        )
+        .order_by(OutboxEvent.published_at)
+        .limit(limit)
+    )
+    stalled: dict[tuple[uuid.UUID, uuid.UUID], list[uuid.UUID]] = {}
+    for workspace_id, workflow_id, task_id in rows:
+        stalled.setdefault((workspace_id, workflow_id), []).append(task_id)
+    return stalled
+
+
+def redispatch(
+    session: Session, workspace_id: uuid.UUID, workflow_id: uuid.UUID, task_ids: list[uuid.UUID]
+) -> int:
+    """Dispatches the stalled tasks again, highest priority first, within the free slots."""
+    workflow = _lock_workflow(session, workspace_id, workflow_id)
+    if workflow is None or workflow.status != WorkflowStatus.RUNNING:
+        session.rollback()
+        return 0
+    wanted = set(task_ids)
+    tasks = [t for t in engine.list_tasks(session, workflow) if t.removed_at is None]
+    stalled = sorted(
+        (t for t in tasks if t.id in wanted and t.status == TaskStatus.ASSIGNED),
+        key=engine.dispatch_order,
+    )
+    free = workflow.max_parallel_tasks - engine.running_count(session, workflow)
+    chosen = stalled[: max(free, 0)]
+    for task in chosen:
+        engine.request_dispatch(session, workflow, task)
+    session.commit()
+    if chosen:
+        logger.warning(
+            "stalled dispatches resent",
+            extra={"workflow_id": str(workflow_id), "count": len(chosen)},
+        )
+    return len(chosen)
+
+
+# --- interrupted planning jobs -----------------------------------------------------------------
+
+
+def _interrupted_jobs(
+    session: Session, claimed_before: datetime, limit: int
+) -> list[tuple[str, uuid.UUID, uuid.UUID, uuid.UUID]]:
+    found: list[tuple[str, uuid.UUID, uuid.UUID, uuid.UUID]] = []
+    for kind, status_column, pending, request_column, consumer in (
+        (
+            "analysis",
+            Workflow.analysis_status,
+            AnalysisStatus.PENDING,
+            Workflow.analysis_request_id,
+            analysis.CONSUMER,
+        ),
+        ("plan", Workflow.plan_status, PlanStatus.PENDING, Workflow.plan_request_id, plan.CONSUMER),
+    ):
+        rows = session.execute(
+            select(Workflow.workspace_id, Workflow.id, request_column)
+            .join(
+                InboxMessage,
+                and_(InboxMessage.event_id == request_column, InboxMessage.consumer == consumer),
+            )
+            .where(status_column == pending, InboxMessage.processed_at < claimed_before)
+            .limit(limit)
+        )
+        found.extend((kind, row[0], row[1], row[2]) for row in rows if row[2] is not None)
+    return found
+
+
+def fail_interrupted_job(
+    session: Session,
+    kind: str,
+    workspace_id: uuid.UUID,
+    workflow_id: uuid.UUID,
+    request_id: uuid.UUID,
+) -> int:
+    workflow = _lock_workflow(session, workspace_id, workflow_id)
+    if workflow is None:
+        session.rollback()
+        return 0
+    if kind == "analysis":
+        if not (
+            workflow.analysis_status == AnalysisStatus.PENDING
+            and workflow.analysis_request_id == request_id
+        ):
+            session.rollback()
+            return 0
+        analysis.record_failure(
+            session,
+            workflow,
+            request_id,
+            analysis.AnalysisFailure(code=ANALYSIS_INTERRUPTED, attempts=0),
+        )
+    else:
+        if not (
+            workflow.plan_status == PlanStatus.PENDING and workflow.plan_request_id == request_id
+        ):
+            session.rollback()
+            return 0
+        plan.record_failure(
+            session,
+            workflow,
+            request_id,
+            plan.PlanFailure(code=PLAN_GENERATION_INTERRUPTED, attempts=0),
+        )
+    session.commit()
+    logger.warning(
+        "interrupted planning job failed",
+        extra={"workflow_id": str(workflow_id), "kind": kind},
+    )
+    return 1

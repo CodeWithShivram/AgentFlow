@@ -98,8 +98,12 @@ class ToolGateway:
         registry: Mapping[str, ToolDefinition] = REGISTRY,
         max_calls: int = MAX_TOOL_CALLS_PER_ATTEMPT,
         clock: Callable[[], float] = time.monotonic,
+        before_call: Callable[[], None] | None = None,
     ) -> None:
+        """`before_call` runs before every call and may raise to stop it (the runner's
+        cancellation check, ADR-0029); a stopped call is not a tool invocation."""
         self._context = context
+        self._before_call = before_call
         self._grants = {grant.tool: grant for grant in grants}
         self._record = record
         self._registry = registry
@@ -111,6 +115,8 @@ class ToolGateway:
 
     def invoke(self, name: str, arguments: Mapping[str, Any]) -> BaseModel:
         """Runs one tool call for the agent. Raises a `ToolError` when refused or failed."""
+        if self._before_call is not None:
+            self._before_call()
         started = self._clock()
         input_hash = hash_arguments(arguments)
         try:

@@ -305,6 +305,7 @@ def test_a_swallowed_violation_still_fails_the_attempt() -> None:
             models=_no_model(),
             registry=TEST_REGISTRY,
             record_tool_call=record,
+            is_current=lambda: True,
         )
 
     assert [(r.tool_name, r.status) for r in records] == [
@@ -322,5 +323,6 @@ def test_an_agent_using_its_permitted_tool_submits_normally() -> None:
         models=_no_model(),
         registry=TEST_REGISTRY,
         record_tool_call=lambda r: uuid.uuid4(),
+        is_current=lambda: True,
     )
     assert submission.outputs == {"text": "echo Compare vendors"}

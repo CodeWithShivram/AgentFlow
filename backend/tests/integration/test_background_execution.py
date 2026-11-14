@@ -23,7 +23,7 @@ from app.agents.mock import MockAgent
 from app.agents.specialists import AgentRuntimeUnavailableError
 from app.db.roles import WORKER_GRANTS
 from app.db.sync_session import session_scope
-from app.execution import cleanup, outbox, relay, runner
+from app.execution import cleanup, outbox, recovery, relay, runner
 from app.llm.gateway import ModelGateway
 from app.llm.mock import MockModelAdapter
 from app.models import (
@@ -31,6 +31,7 @@ from app.models import (
     AgentExecution,
     AgentStatus,
     AgentVersion,
+    AnalysisStatus,
     AuthSession,
     AutonomyPolicy,
     ExecutionStatus,
@@ -40,6 +41,7 @@ from app.models import (
     LlmUsage,
     OutboxEvent,
     OutboxStatus,
+    PlanStatus,
     RefreshToken,
     SessionRevocationReason,
     TaskDependency,
@@ -56,6 +58,7 @@ from app.models import (
     WorkspaceInvitation,
     WorkspaceRole,
 )
+from app.planning import analysis, plan
 from app.schemas.agents import AgentConfiguration
 from app.services.usage import record_model_call, record_tool_invocation
 from app.tools.gateway import ToolError, ToolPermissionDeniedError
@@ -196,6 +199,12 @@ def _finish(worker: Factory, claim: runner.Claim, failure: runner.Failure | None
     outcome = failure or runner.run_agent(claim, MockAgent, models=_NO_MODEL)
     with session_scope(worker) as s:
         return runner.finish(s, claim, outcome)
+
+
+def _current(worker: Factory, claim: runner.Claim) -> bool:
+    """The attempt guard's check (ADR-0029), against the test database."""
+    with session_scope(worker) as s:
+        return runner.attempt_is_current(s, claim.workspace_id, claim.execution_id)
 
 
 def _status(admin: Factory, task_id: uuid.UUID) -> TaskStatus:
@@ -989,6 +998,7 @@ def test_a_tool_permission_violation_fails_the_attempt_and_every_call_is_recorde
             models=_NO_MODEL,
             registry=_REGISTRY,
             record_tool_call=partial(record_tool_invocation, worker_factory),
+            is_current=partial(_current, worker_factory, claim),
         )
     assert error.value.code == "TOOL_PERMISSION_DENIED"
     outcome = runner.Failure(error.value.code, error.value.message)
@@ -1043,9 +1053,10 @@ def test_a_built_in_runtime_records_its_model_call_and_submission(
         api_settings, MockModelAdapter(), partial(record_model_call, worker_factory)
     )
 
-    assert (
-        _finish_with(worker_factory, claim, runner.run_agent(claim, models=models)) == "submitted"
+    submission = runner.run_agent(
+        claim, models=models, is_current=partial(_current, worker_factory, claim)
     )
+    assert _finish_with(worker_factory, claim, submission) == "submitted"
 
     with session_scope(admin_factory) as s:
         execution = s.execute(select(AgentExecution)).scalar_one()
@@ -1205,3 +1216,280 @@ def test_a_pre_assigned_task_is_dispatched_when_its_dependencies_complete(
         ).scalar_one()
     assert assigned.payload["actor"] == "SCHEDULER" and assigned.payload["pre_assigned"] is True
     assert isinstance(_claim(worker_factory, dispatch), runner.Claim)
+
+
+# --- cancellation and restart recovery (Step 4.5, ADR-0029) -------------------------------------
+
+OVERDUE = recovery.LOST_ATTEMPT_AFTER + timedelta(minutes=1)
+
+
+def _backdate_attempt(admin: Factory, execution_id: uuid.UUID, by: timedelta = OVERDUE) -> None:
+    with session_scope(admin) as s:
+        s.execute(
+            update(AgentExecution)
+            .where(AgentExecution.id == execution_id)
+            .values(started_at=datetime.now(UTC) - by)
+        )
+        s.commit()
+
+
+def _cancel_task(admin: Factory, world: World, task_id: uuid.UUID) -> None:
+    with session_scope(admin) as s:
+        workflow, task = _locked(s, world), _task(s, task_id)
+        engine.transition_task(s, workflow, task, TaskStatus.CANCELLED, actor=Actor.USER)
+        s.commit()
+
+
+def test_a_lost_worker_does_not_lose_the_committed_task(
+    admin_factory: Factory, worker_factory: Factory
+) -> None:
+    world = _world(admin_factory)
+    _assign(admin_factory, world, world.task_ids[0])
+    (event,) = _dispatch_events(admin_factory)
+    lost = _claim(worker_factory, event)
+    assert isinstance(lost, runner.Claim)
+    # The worker dies after its claim committed; the redelivered message is a duplicate.
+    assert _claim(worker_factory, event) == runner.Skipped.DUPLICATE
+    assert recovery.recover_once(worker_factory) == recovery.RecoveryReport()  # not overdue yet
+    _backdate_attempt(admin_factory, lost.execution_id)
+
+    report = recovery.recover_once(worker_factory)
+
+    assert report == recovery.RecoveryReport(lost_attempts=1, retried=1)
+    with session_scope(admin_factory) as s:
+        execution = s.get(AgentExecution, lost.execution_id)
+        task = _task(s, world.task_ids[0])
+        retried = s.execute(
+            select(WorkflowEvent)
+            .where(
+                WorkflowEvent.task_id == task.id,
+                WorkflowEvent.event_type == WorkflowEventType.TASK_ASSIGNED,
+            )
+            .order_by(WorkflowEvent.sequence.desc())
+            .limit(1)
+        ).scalar_one()
+    assert execution is not None
+    assert (execution.status, execution.error_code) == (ExecutionStatus.FAILED, "WORKER_LOST")
+    assert task.status == TaskStatus.ASSIGNED and task.attempt_count == 1
+    assert retried.payload["actor"] == "SCHEDULER" and retried.payload["automatic_retry"] is True
+    # A worker that was only slow finds its attempt closed: it stops, and its result is dropped.
+    assert not _current(worker_factory, lost)
+    assert _finish(worker_factory, lost) == "already_finished"
+
+    retry_event = _dispatch_events(admin_factory)[-1]
+    assert retry_event.id != event.id
+    retry = _claim(worker_factory, retry_event)
+    assert isinstance(retry, runner.Claim) and retry.attempt_number == 2
+    assert _finish(worker_factory, retry) == "submitted"
+    assert recovery.recover_once(worker_factory) == recovery.RecoveryReport()
+
+
+def test_a_lost_last_attempt_fails_the_task(
+    admin_factory: Factory, worker_factory: Factory
+) -> None:
+    world = _world(admin_factory)
+    with session_scope(admin_factory) as s:
+        _task(s, world.task_ids[0]).attempt_count = runner.MAX_ATTEMPTS_PER_TASK - 1
+        s.commit()
+    _assign(admin_factory, world, world.task_ids[0])
+    (event,) = _dispatch_events(admin_factory)
+    lost = _claim(worker_factory, event)
+    assert isinstance(lost, runner.Claim) and lost.attempt_number == runner.MAX_ATTEMPTS_PER_TASK
+    _backdate_attempt(admin_factory, lost.execution_id)
+
+    assert recovery.recover_once(worker_factory) == recovery.RecoveryReport(lost_attempts=1)
+
+    assert _status(admin_factory, world.task_ids[0]) == TaskStatus.FAILED
+    assert _scalar(admin_factory, select(Workflow.status)) == WorkflowStatus.FAILED
+    assert len(_dispatch_events(admin_factory)) == 1  # never retried beyond the limit
+
+
+def test_a_lost_attempt_of_a_cancelled_task_is_closed_as_cancelled(
+    admin_factory: Factory, worker_factory: Factory
+) -> None:
+    world = _world(admin_factory, tasks=2)
+    _assign(admin_factory, world, world.task_ids[0])
+    (event,) = _dispatch_events(admin_factory)
+    lost = _claim(worker_factory, event)
+    assert isinstance(lost, runner.Claim)
+    _cancel_task(admin_factory, world, world.task_ids[0])
+    _backdate_attempt(admin_factory, lost.execution_id)
+
+    assert recovery.recover_once(worker_factory) == recovery.RecoveryReport(lost_attempts=1)
+
+    execution = _scalar(admin_factory, select(AgentExecution))
+    assert execution.status == ExecutionStatus.CANCELLED and execution.error_code is None
+    assert _status(admin_factory, world.task_ids[0]) == TaskStatus.CANCELLED
+
+
+def test_cancelling_a_task_stops_its_running_agent_at_the_next_call(
+    admin_factory: Factory, worker_factory: Factory
+) -> None:
+    world = _world(admin_factory)
+    _assign(admin_factory, world, world.task_ids[0])
+    (event,) = _dispatch_events(admin_factory)
+    claim = _claim(worker_factory, event)
+    assert isinstance(claim, runner.Claim)
+    calls: list[str] = []
+
+    class CancelledMidwayAgent(MockAgent):
+        """Is cancelled by the user while working, then swallows the error of its next call."""
+
+        def execute(self, contract: TaskContract, context: AgentContext) -> AgentSubmission:
+            calls.append("started")
+            _cancel_task(admin_factory, world, world.task_ids[0])
+            try:
+                context.tools.invoke("web_search", {"text": "after the cancellation"})
+            except Exception:
+                calls.append("stopped")
+            return super().execute(contract, context)
+
+    with pytest.raises(runner.AttemptCancelledError):
+        runner.run_agent(
+            claim,
+            CancelledMidwayAgent,
+            models=_NO_MODEL,
+            registry=_REGISTRY,
+            record_tool_call=partial(record_tool_invocation, worker_factory),
+            is_current=partial(_current, worker_factory, claim),
+        )
+    assert calls == ["started", "stopped"]
+    failure = runner.Failure(runner.AttemptCancelledError.code, "stopped")
+    assert _finish_with(worker_factory, claim, failure) == "cancelled"
+
+    execution = _scalar(admin_factory, select(AgentExecution))
+    assert execution.status == ExecutionStatus.CANCELLED
+    assert _scalar(admin_factory, select(func.count()).select_from(ToolInvocation)) == 0
+
+
+def test_pausing_lets_a_running_attempt_continue_and_cancelling_the_workflow_stops_it(
+    admin_factory: Factory, worker_factory: Factory
+) -> None:
+    world = _world(admin_factory)
+    _assign(admin_factory, world, world.task_ids[0])
+    (event,) = _dispatch_events(admin_factory)
+    claim = _claim(worker_factory, event)
+    assert isinstance(claim, runner.Claim)
+    for target, still_current in (
+        (WorkflowStatus.PAUSED, True),
+        (WorkflowStatus.CANCELLED, False),
+    ):
+        with session_scope(admin_factory) as s:
+            engine.transition_workflow(s, _locked(s, world), target, actor=Actor.USER)
+            s.commit()
+        assert _current(worker_factory, claim) is still_current
+
+
+def _mark_published(admin: Factory, event_id: uuid.UUID, ago: timedelta) -> None:
+    with session_scope(admin) as s:
+        s.execute(
+            update(OutboxEvent)
+            .where(OutboxEvent.id == event_id)
+            .values(status=OutboxStatus.PUBLISHED, published_at=datetime.now(UTC) - ago)
+        )
+        s.commit()
+
+
+def test_a_dispatch_the_broker_lost_is_sent_again(
+    admin_factory: Factory, worker_factory: Factory
+) -> None:
+    world = _world(admin_factory)
+    _assign(admin_factory, world, world.task_ids[0])
+    (lost,) = _dispatch_events(admin_factory)
+    _mark_published(admin_factory, lost.id, timedelta(minutes=1))
+    assert recovery.recover_once(worker_factory) == recovery.RecoveryReport()  # may be queued
+    _mark_published(admin_factory, lost.id, recovery.LOST_DISPATCH_AFTER + timedelta(minutes=1))
+
+    assert recovery.recover_once(worker_factory) == recovery.RecoveryReport(redispatched=1)
+
+    resent = _dispatch_events(admin_factory)[-1]
+    assert resent.id != lost.id
+    assert recovery.recover_once(worker_factory) == recovery.RecoveryReport()  # sent once
+    assert isinstance(_claim(worker_factory, resent), runner.Claim)
+    assert _claim(worker_factory, lost) == runner.Skipped.STALE  # a late original changes nothing
+
+
+def test_a_claimed_dispatch_is_never_sent_again(
+    admin_factory: Factory, worker_factory: Factory
+) -> None:
+    world = _world(admin_factory, tasks=2, max_parallel=1)
+    _assign(admin_factory, world, world.task_ids[0])
+    (first,) = _dispatch_events(admin_factory)
+    running = _claim(worker_factory, first)
+    assert isinstance(running, runner.Claim)
+    with session_scope(admin_factory) as s:
+        workflow, task = _locked(s, world), _task(s, world.task_ids[1])
+        task.assigned_agent_id, task.assigned_agent_version_id = world.agent_id, world.version_id
+        engine.transition_task(s, workflow, task, TaskStatus.ASSIGNED, actor=Actor.USER)
+        engine.request_dispatch(s, workflow, task)  # as if written before the slot filled
+        s.commit()
+    (deferred,) = _dispatch_events(admin_factory, world.task_ids[1])
+    assert _claim(worker_factory, deferred) == runner.Skipped.DEFERRED
+    for event in (first, deferred):
+        _mark_published(admin_factory, event.id, recovery.LOST_DISPATCH_AFTER * 2)
+
+    assert recovery.recover_once(worker_factory) == recovery.RecoveryReport()
+
+
+@pytest.mark.parametrize(
+    ("kind", "consumer", "event_type", "code"),
+    [
+        ("analysis", analysis.CONSUMER, WorkflowEventType.ANALYSIS_FAILED, "ANALYSIS_INTERRUPTED"),
+        (
+            "plan",
+            plan.CONSUMER,
+            WorkflowEventType.PLAN_GENERATION_FAILED,
+            "PLAN_GENERATION_INTERRUPTED",
+        ),
+    ],
+)
+def test_an_interrupted_planning_job_is_marked_failed_so_it_can_be_retried(
+    admin_factory: Factory,
+    worker_factory: Factory,
+    kind: str,
+    consumer: str,
+    event_type: WorkflowEventType,
+    code: str,
+) -> None:
+    world = _world(admin_factory)
+    request_id = uuid.uuid4()
+    with session_scope(admin_factory) as s:
+        workflow = _locked(s, world)
+        if kind == "analysis":
+            workflow.analysis_status = AnalysisStatus.PENDING
+            workflow.analysis_request_id = request_id
+        else:
+            workflow.plan_status, workflow.plan_request_id = PlanStatus.PENDING, request_id
+        # The job claimed the request (its inbox row), then its worker died.
+        s.add(
+            InboxMessage(
+                event_id=request_id,
+                consumer=consumer,
+                processed_at=datetime.now(UTC) - timedelta(minutes=2),
+            )
+        )
+        s.commit()
+    assert recovery.recover_once(worker_factory) == recovery.RecoveryReport()  # may be running
+    with session_scope(admin_factory) as s:
+        s.execute(
+            update(InboxMessage)
+            .where(InboxMessage.event_id == request_id)
+            .values(
+                processed_at=datetime.now(UTC)
+                - recovery.INTERRUPTED_JOB_AFTER
+                - timedelta(minutes=1)
+            )
+        )
+        s.commit()
+
+    assert recovery.recover_once(worker_factory) == recovery.RecoveryReport(interrupted_jobs=1)
+
+    with session_scope(admin_factory) as s:
+        workflow = s.execute(select(Workflow)).scalar_one()
+        status = workflow.analysis_status if kind == "analysis" else workflow.plan_status
+        failed = s.execute(
+            select(WorkflowEvent).where(WorkflowEvent.event_type == event_type)
+        ).scalar_one()
+    assert status == "FAILED"
+    assert failed.payload == {"request_id": str(request_id), "error_code": code, "attempts": 0}
+    assert recovery.recover_once(worker_factory) == recovery.RecoveryReport()

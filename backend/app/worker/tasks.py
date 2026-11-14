@@ -14,7 +14,7 @@ from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from app.agents.contract import AgentSubmission, InvalidSubmissionError
 from app.agents.specialists import AgentRuntimeUnavailableError
 from app.db.sync_session import get_worker_session_factory, session_scope
-from app.execution import cleanup, heartbeat, outbox, relay, runner
+from app.execution import cleanup, heartbeat, outbox, recovery, relay, runner
 from app.llm.gateway import ModelGatewayError, get_model_gateway
 from app.orchestration import job as orchestration_job
 from app.planning import analysis, plan
@@ -41,10 +41,10 @@ REQUIRED_PAYLOAD = {
 _FINISH_ATTEMPTS = 3
 # Default agent timeout (handoff section 6): 600 s. Hard limit gives the soft one room to finish.
 EXECUTION_SOFT_TIME_LIMIT = runner.AGENT_TIME_LIMIT_SECONDS
-EXECUTION_TIME_LIMIT = EXECUTION_SOFT_TIME_LIMIT + 60
+EXECUTION_TIME_LIMIT = runner.AGENT_HARD_TIME_LIMIT_SECONDS
 # Prompt analysis and plan generation: three model attempts with short backoff.
-ANALYSIS_SOFT_TIME_LIMIT = 300
-ANALYSIS_TIME_LIMIT = 330
+ANALYSIS_SOFT_TIME_LIMIT = analysis.JOB_SOFT_TIME_LIMIT_SECONDS
+ANALYSIS_TIME_LIMIT = analysis.JOB_TIME_LIMIT_SECONDS
 
 
 def publish_event(event: outbox.ClaimedEvent) -> None:
@@ -153,6 +153,10 @@ def execute_task(
         result = runner.Failure(exc.code, exc.message)
     except ModelGatewayError as exc:  # recorded in llm_usage; never provider text
         result = runner.Failure(exc.code, "The model call failed.")
+    except runner.AttemptCancelledError as exc:  # cancelled or recovered: finish records it
+        result = runner.Failure(
+            exc.code, "The attempt was stopped because it is no longer current."
+        )
     except ToolError as exc:  # a tool policy violation, or a tool error the agent did not handle
         result = runner.Failure(exc.code, exc.message)
     except Exception as exc:  # the agent failed; record it instead of losing the attempt
@@ -243,6 +247,15 @@ def plan_workflow(event_id: str, workspace_id: str, workflow_id: str) -> str:
         outcome = plan.PlanFailure(code="PLAN_GENERATION_TIMED_OUT", attempts=0)
     with session_scope(factory) as session:
         return plan.finish(session, job, outcome)
+
+
+@celery_app.task(name="agentflow.recover", ignore_result=True)
+def recover() -> dict[str, int]:
+    """Recovers work stranded by a lost worker or message (ADR-0029)."""
+    report = recovery.recover_once(get_worker_session_factory())
+    if any(vars(report).values()):
+        logger.info("recovery sweep", extra=vars(report))
+    return vars(report)
 
 
 @celery_app.task(name="agentflow.cleanup", ignore_result=True)
