@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import final
 
 from app.agents.contract import TaskContract, ValidationResult, validate_submission
+from app.llm.gateway import ModelGateway
 from app.schemas.agents import AgentConfiguration
 from app.tools.gateway import ToolGateway
 
@@ -26,6 +27,8 @@ class AgentContext:
     agent_version: int
     # Enforces the contract's allowed tools on every call (ADR-0019).
     tools: ToolGateway
+    # The model gateway (ADR-0013); every model call is recorded against this execution.
+    models: ModelGateway
 
 
 @dataclass(frozen=True)

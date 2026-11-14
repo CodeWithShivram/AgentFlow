@@ -490,12 +490,16 @@ def test_agent_catalog_matches_platform_policy(
 
 
 def test_execution_history_lists_attempts_with_agent_versions(
-    owner: TestClient, workspace: str, workflow: str, worker_factory: Any
+    owner: TestClient, workspace: str, workflow: str, worker_factory: Any, api_settings: Any
 ) -> None:
+    from functools import partial
+
     from app.db.sync_session import session_scope
     from app.execution import runner
-    from app.models import ToolInvocationStatus
-    from app.services.usage import record_tool_invocation
+    from app.llm.gateway import ModelGateway
+    from app.llm.mock import MockModelAdapter
+    from app.models import LlmUsage, ToolInvocationStatus
+    from app.services.usage import record_model_call, record_tool_invocation
     from app.tools.gateway import InvocationRecord
     from app.tools.registry import ToolCallContext
 
@@ -535,8 +539,13 @@ def test_execution_history_lists_attempts_with_agent_versions(
             agent_version_id=uuid.UUID(event.payload["agent_version_id"]),
         )
     assert isinstance(claim, runner.Claim)
+    # The built-in Writer runtime (Step 3.4) calls the model through the gateway; the mock
+    # provider's default reply is used and the call is recorded against this attempt.
+    models = ModelGateway(
+        api_settings, MockModelAdapter(), partial(record_model_call, worker_factory)
+    )
     with session_scope(worker_factory) as s:
-        runner.finish(s, claim, runner.run_agent(claim))
+        runner.finish(s, claim, runner.run_agent(claim, models=models))
     record_tool_invocation(
         worker_factory,
         InvocationRecord(
@@ -555,7 +564,11 @@ def test_execution_history_lists_attempts_with_agent_versions(
 
     assert attempt["attempt_number"] == 1 and attempt["status"] == "SUCCEEDED"
     assert attempt["agent_version"] == 1 and attempt["error_code"] is None
-    assert attempt["result_summary"].startswith("Mock result")
+    assert attempt["result_summary"] == "Mock writing result for task 'task'."
+    with session_scope(worker_factory) as s:
+        usage = s.execute(select(LlmUsage)).scalar_one()
+    assert str(usage.execution_id) == attempt["id"] and usage.purpose == "agent_writing"
+    assert usage.status == "SUCCEEDED" and usage.input_cost is None
     submission = attempt["submission"]
     assert submission["summary"] == attempt["result_summary"]
     assert submission["outputs"] == {"Report draft": "Mock content for: Report draft"}

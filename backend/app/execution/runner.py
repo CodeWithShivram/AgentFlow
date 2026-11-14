@@ -1,4 +1,4 @@
-"""Task execution for Celery workers (ADR-0010, ADR-0018).
+"""Task execution for Celery workers (ADR-0010, ADR-0018, ADR-0021).
 
 An execution is three bounded steps; no transaction stays open while the agent works:
 
@@ -6,8 +6,9 @@ An execution is three bounded steps; no transaction stays open while the agent w
               stops here), check the task is still ASSIGNED to the dispatched agent version and
               the workflow is RUNNING with a free slot, then ASSIGNED -> QUEUED -> IN_PROGRESS
               and insert an `agent_executions` row for this attempt.
-2. `run_agent` - outside any transaction: build the task contract, run the agent and validate
-              its submission (invalid output is a failed attempt).
+2. `run_agent` - outside any transaction: build the task contract, run the version's agent
+              runtime (model calls through the gateway) and validate its submission (invalid
+              output, a failed model call or a version without a runtime fail the attempt).
 3. `finish` - one transaction: IN_PROGRESS -> SUBMITTED with the submission stored on the
               attempt (agents never complete tasks; platform verification does), or, on
               failure/timeout, REWORK_REQUIRED (FAILED after the last allowed attempt). The
@@ -26,10 +27,16 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.agents.base import AgentContext, BaseAgent
-from app.agents.contract import AgentSubmission, RetryPolicy, TaskContract
-from app.agents.mock import MockAgent
+from app.agents.contract import (
+    AgentSubmission,
+    InvalidSubmissionError,
+    RetryPolicy,
+    TaskContract,
+)
+from app.agents.specialists import runtime_for
 from app.db.sync_session import get_worker_session_factory
 from app.execution import outbox
+from app.llm.gateway import ModelGateway, get_model_gateway
 from app.models import (
     AgentExecution,
     AgentVersion,
@@ -93,14 +100,6 @@ class Failure:
     code: str
     summary: str
     timed_out: bool = False
-
-
-class InvalidSubmissionError(Exception):
-    """The agent's output failed the deterministic checks. Issue codes are safe to store."""
-
-    def __init__(self, issues: list[str]) -> None:
-        super().__init__(", ".join(issues))
-        self.issues = issues
 
 
 def _lock_workflow(
@@ -252,19 +251,21 @@ def _record_tool_call(record: InvocationRecord) -> uuid.UUID:
 
 def run_agent(
     claim: Claim,
-    agent_type: type[BaseAgent] = MockAgent,
+    agent_type: type[BaseAgent] | None = None,
     *,
+    models: ModelGateway | None = None,
     registry: Mapping[str, ToolDefinition] = REGISTRY,
     record_tool_call: InvocationRecorder = _record_tool_call,
 ) -> AgentSubmission:
-    """Runs one attempt outside any transaction. Every version runs the harmless `MockAgent`
-    until the specialist agents exist (Step 3.4).
+    """Runs one attempt outside any transaction, with the runtime chosen from the version's
+    instruction reference (ADR-0021); tests may pass `agent_type` and `models` explicitly.
 
-    Raises `InvalidSubmissionError` when the output fails validation, and the attempt's first
-    tool policy violation (a `ToolError`) even if the agent caught it (ADR-0019)."""
+    Raises `AgentRuntimeUnavailableError` for a version without a runtime, `InvalidSubmissionError`
+    when the output fails validation, a `ModelGatewayError` when the model call fails, and the
+    attempt's first tool policy violation (a `ToolError`) even if the agent caught it (ADR-0019)."""
     configuration = AgentConfiguration.model_validate(claim.configuration)
     contract = build_contract(claim, configuration, registry)
-    agent = agent_type(configuration)
+    agent = (agent_type or runtime_for(configuration))(configuration)
     tools = ToolGateway(
         ToolCallContext(
             workspace_id=claim.workspace_id,
@@ -283,6 +284,7 @@ def run_agent(
         agent_version_id=claim.agent_version_id,
         agent_version=claim.agent_version,
         tools=tools,
+        models=models or get_model_gateway(),
     )
     try:
         result = agent.execute(contract, context)

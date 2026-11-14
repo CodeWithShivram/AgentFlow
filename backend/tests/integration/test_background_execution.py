@@ -18,11 +18,14 @@ from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.agents.base import AgentContext
-from app.agents.contract import AgentSubmission, TaskContract
+from app.agents.contract import AgentSubmission, InvalidSubmissionError, TaskContract
 from app.agents.mock import MockAgent
+from app.agents.specialists import AgentRuntimeUnavailableError
 from app.db.roles import WORKER_GRANTS
 from app.db.sync_session import session_scope
 from app.execution import cleanup, outbox, relay, runner
+from app.llm.gateway import ModelGateway
+from app.llm.mock import MockModelAdapter
 from app.models import (
     Agent,
     AgentExecution,
@@ -33,6 +36,8 @@ from app.models import (
     ExecutionStatus,
     IdempotencyKey,
     InboxMessage,
+    LlmCallStatus,
+    LlmUsage,
     OutboxEvent,
     OutboxStatus,
     RefreshToken,
@@ -50,15 +55,21 @@ from app.models import (
     WorkspaceRole,
 )
 from app.schemas.agents import AgentConfiguration
-from app.services.usage import record_tool_invocation
+from app.services.usage import record_model_call, record_tool_invocation
 from app.tools.gateway import ToolError, ToolPermissionDeniedError
 from app.tools.registry import ToolCallContext, ToolDefinition, ToolImplementation
 from app.workflows import engine
 from app.workflows.state_machine import Actor
+from tests.conftest import make_settings
 
 pytestmark = pytest.mark.integration
 
 Factory = sessionmaker[Session]
+# These tests run the harmless MockAgent explicitly; it never calls a model.
+_NO_MODEL = ModelGateway(
+    make_settings(), MockModelAdapter(defaults={}), lambda record: uuid.uuid4()
+)
+
 CONFIG = {
     "schema_version": 1,
     "system_instruction_ref": "workspace://prompts/w/v1",
@@ -172,7 +183,7 @@ def _claim(worker: Factory, event: OutboxEvent) -> runner.Claim | runner.Skipped
 
 
 def _finish(worker: Factory, claim: runner.Claim, failure: runner.Failure | None = None) -> str:
-    outcome = failure or runner.run_agent(claim)
+    outcome = failure or runner.run_agent(claim, MockAgent, models=_NO_MODEL)
     with session_scope(worker) as s:
         return runner.finish(s, claim, outcome)
 
@@ -760,8 +771,17 @@ def test_dispatch_reaches_a_real_worker_through_redis(
     broker_url = api_settings.model_copy(update={"celery_broker_redis_db": 14}).celery_broker_url
     monkeypatch.setattr(celery_app.conf, "broker_url", broker_url)
     monkeypatch.setattr(tasks, "get_worker_session_factory", lambda: worker_factory)
+    monkeypatch.setattr(runner, "get_worker_session_factory", lambda: worker_factory)
+    # The worker runs the built-in Writer runtime (Step 3.4) with the mock model provider; its
+    # model calls are recorded in the test database.
+    models = ModelGateway(
+        api_settings, MockModelAdapter(), partial(record_model_call, worker_factory)
+    )
+    monkeypatch.setattr(runner, "get_model_gateway", lambda: models)
     world = _world(admin_factory)
-    _assign(admin_factory, world, world.task_ids[0])
+    _assign_version(
+        admin_factory, world, {**CONFIG, "system_instruction_ref": "builtin://writer/v1"}
+    )
 
     try:
         with start_worker(
@@ -788,6 +808,8 @@ def test_dispatch_reaches_a_real_worker_through_redis(
     assert execution.status == ExecutionStatus.SUCCEEDED
     assert execution.dispatch_event_id == event.id
     assert event.status == OutboxStatus.PUBLISHED
+    usage = _scalar(admin_factory, select(LlmUsage))
+    assert usage.execution_id == execution.id and usage.purpose == "agent_writing"
 
 
 # --- task contract and submissions (Step 3.1, ADR-0018) ------------------------------------------
@@ -860,8 +882,8 @@ def test_an_invalid_submission_is_a_failed_attempt_without_a_stored_submission(
     claim = _claim(worker_factory, event)
     assert isinstance(claim, runner.Claim)
 
-    with pytest.raises(runner.InvalidSubmissionError) as error:
-        runner.run_agent(claim, _ForgetfulAgent)
+    with pytest.raises(InvalidSubmissionError) as error:
+        runner.run_agent(claim, _ForgetfulAgent, models=_NO_MODEL)
     assert error.value.issues == ["MISSING_CRITERION_CLAIM"]
     failure = runner.Failure("INVALID_SUBMISSION", f"Invalid submission: {error.value}")
     assert _finish(worker_factory, claim, failure) == "rework_required"
@@ -945,6 +967,7 @@ def test_a_tool_permission_violation_fails_the_attempt_and_every_call_is_recorde
         runner.run_agent(
             claim,
             _ProbingAgent,
+            models=_NO_MODEL,
             registry=_REGISTRY,
             record_tool_call=partial(record_tool_invocation, worker_factory),
         )
@@ -968,3 +991,78 @@ def test_a_tool_permission_violation_fails_the_attempt_and_every_call_is_recorde
     assert execution.status == ExecutionStatus.FAILED and execution.submission is None
     assert execution.error_code == "TOOL_PERMISSION_DENIED"
     assert execution.error_summary == "The agent called a tool it is not permitted to use."
+
+
+# --- built-in agent runtimes (Step 3.4, ADR-0021) ------------------------------------------------
+
+
+def _assign_version(admin: Factory, world: World, configuration: dict[str, Any]) -> None:
+    """Assigns task 0 to a new version of the world's agent (versions are immutable)."""
+    with session_scope(admin) as s:
+        version = AgentVersion(agent_id=world.agent_id, version=2, configuration=configuration)
+        s.add(version)
+        s.flush()
+        workflow, task = _locked(s, world), _task(s, world.task_ids[0])
+        task.assigned_agent_id, task.assigned_agent_version_id = world.agent_id, version.id
+        engine.transition_task(s, workflow, task, TaskStatus.ASSIGNED, actor=Actor.USER)
+        s.commit()
+
+
+def test_a_built_in_runtime_records_its_model_call_and_submission(
+    admin_factory: Factory, worker_factory: Factory, api_settings: Any
+) -> None:
+    world = _world(admin_factory, tasks=2)
+    _describe_task(admin_factory, world)
+    _assign_version(
+        admin_factory, world, {**CONFIG, "system_instruction_ref": "builtin://writer/v1"}
+    )
+    (event,) = _dispatch_events(admin_factory)
+    claim = _claim(worker_factory, event)
+    assert isinstance(claim, runner.Claim)
+    models = ModelGateway(
+        api_settings, MockModelAdapter(), partial(record_model_call, worker_factory)
+    )
+
+    assert (
+        _finish_with(worker_factory, claim, runner.run_agent(claim, models=models)) == "submitted"
+    )
+
+    with session_scope(admin_factory) as s:
+        execution = s.execute(select(AgentExecution)).scalar_one()
+        usage = s.execute(select(LlmUsage)).scalar_one()
+    submission = AgentSubmission.model_validate(execution.submission)
+    assert submission.summary == "Mock writing result for task 't0'."
+    assert [c.criterion_id for c in submission.criteria] == ["c1", "c2"]
+    assert (usage.execution_id, usage.task_id, usage.workspace_id) == (
+        claim.execution_id,
+        world.task_ids[0],
+        world.workspace_id,
+    )
+    assert usage.purpose == "agent_writing" and usage.provider == "mock"
+    assert usage.status == LlmCallStatus.SUCCEEDED and usage.total_cost is None
+
+
+def test_a_version_without_a_runtime_fails_its_attempt(
+    admin_factory: Factory, worker_factory: Factory
+) -> None:
+    world = _world(admin_factory)
+    _assign_version(admin_factory, world, CONFIG)  # a workspace:// reference: no runtime
+    (event,) = _dispatch_events(admin_factory)
+    claim = _claim(worker_factory, event)
+    assert isinstance(claim, runner.Claim)
+
+    with pytest.raises(AgentRuntimeUnavailableError) as error:
+        runner.run_agent(claim, models=_NO_MODEL)
+    failure = runner.Failure(error.value.code, error.value.message)
+    assert _finish_with(worker_factory, claim, failure) == "rework_required"
+
+    execution = _scalar(admin_factory, select(AgentExecution))
+    assert execution.status == ExecutionStatus.FAILED and execution.submission is None
+    assert execution.error_code == "AGENT_RUNTIME_UNAVAILABLE"
+    assert execution.error_summary == "No runtime is available for this agent version yet."
+    assert _scalar(admin_factory, select(func.count()).select_from(LlmUsage)) == 0
+
+
+def _finish_with(worker: Factory, claim: runner.Claim, outcome: Any) -> str:
+    with session_scope(worker) as s:
+        return runner.finish(s, claim, outcome)

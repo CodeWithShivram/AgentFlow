@@ -15,9 +15,12 @@ from app.agents.contract import (
 )
 from app.agents.mock import MockAgent
 from app.execution import runner
+from app.llm.gateway import ModelGateway
+from app.llm.mock import MockModelAdapter
 from app.schemas.agents import AgentConfiguration
 from app.tools.gateway import InvocationRecord, ToolGateway
 from app.tools.registry import ToolCallContext
+from tests.conftest import make_settings
 
 CONFIG: dict[str, Any] = {
     "schema_version": 1,
@@ -57,6 +60,11 @@ def _claim(**changes: Any) -> runner.Claim:
 
 def _no_records(record: InvocationRecord) -> uuid.UUID:
     raise AssertionError("the mock agent calls no tools")
+
+
+def _no_model() -> ModelGateway:
+    """A gateway for agents that never call a model: any call fails (no mock replies)."""
+    return ModelGateway(make_settings(), MockModelAdapter(defaults={}), lambda record: uuid.uuid4())
 
 
 def _contract(**changes: Any) -> TaskContract:
@@ -150,6 +158,7 @@ def test_the_mock_agent_returns_a_valid_deterministic_submission() -> None:
             contract.allowed_tools,
             _no_records,
         ),
+        models=_no_model(),
     )
 
     first = agent.execute(contract, context)
@@ -157,7 +166,10 @@ def test_the_mock_agent_returns_a_valid_deterministic_submission() -> None:
     assert agent.validate_output(contract, first).valid
     assert first.summary == "Mock result for task 'Compare vendors' (agent version 3, attempt 2)."
     assert first.outputs == {"Comparison table": "Mock content for: Comparison table"}
-    assert runner.run_agent(claim, record_tool_call=_no_records) == first
+    assert (
+        runner.run_agent(claim, MockAgent, models=_no_model(), record_tool_call=_no_records)
+        == first
+    )
 
     capabilities = agent.get_capabilities()
     assert capabilities.capabilities == {"research", "evidence_summary"}

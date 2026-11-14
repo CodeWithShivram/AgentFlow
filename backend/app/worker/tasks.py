@@ -7,10 +7,11 @@ import uuid
 from celery.exceptions import SoftTimeLimitExceeded
 from sqlalchemy.exc import OperationalError
 
-from app.agents.contract import AgentSubmission
+from app.agents.contract import AgentSubmission, InvalidSubmissionError
+from app.agents.specialists import AgentRuntimeUnavailableError
 from app.db.sync_session import get_worker_session_factory, session_scope
 from app.execution import cleanup, outbox, relay, runner
-from app.llm.gateway import get_model_gateway
+from app.llm.gateway import ModelGatewayError, get_model_gateway
 from app.planning import analysis, plan
 from app.tools.gateway import ToolError
 from app.worker.celery_app import EXECUTION_QUEUE, celery_app, settings
@@ -94,8 +95,12 @@ def execute_task(
         result = runner.run_agent(claimed)
     except SoftTimeLimitExceeded:
         result = runner.Failure("EXECUTION_TIMED_OUT", "The agent exceeded its time limit.", True)
-    except runner.InvalidSubmissionError as exc:  # only issue codes; never the agent's output
+    except InvalidSubmissionError as exc:  # only issue codes; never the agent's output
         result = runner.Failure("INVALID_SUBMISSION", f"Invalid submission: {exc}")
+    except AgentRuntimeUnavailableError as exc:
+        result = runner.Failure(exc.code, exc.message)
+    except ModelGatewayError as exc:  # recorded in llm_usage; never provider text
+        result = runner.Failure(exc.code, "The model call failed.")
     except ToolError as exc:  # a tool policy violation, or a tool error the agent did not handle
         result = runner.Failure(exc.code, exc.message)
     except Exception as exc:  # the agent failed; record it instead of losing the attempt

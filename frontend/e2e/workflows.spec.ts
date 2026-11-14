@@ -131,7 +131,7 @@ test("journeys 8 and 9: approve, start, assign an agent and monitor execution", 
   await dialog.getByRole("button", { name: "Assign" }).click();
   await expect(dialog).toBeHidden();
 
-  // Journey 9: the outbox relay, Celery worker and mock agent run the task; polling shows it.
+  // Journey 9: the outbox relay, Celery worker and Writer runtime (mock model) run the task.
   await expect(visibleText(page, "Submitted")).toBeVisible({ timeout: 60_000 });
   await page.getByRole("button", { name: "Details" }).click();
   const attempts = page.getByRole("list", { name: "Execution attempts for Draft the notes" });
@@ -142,7 +142,7 @@ test("journeys 8 and 9: approve, start, assign an agent and monitor execution", 
   // The structured submission: the agent's own, unverified claim per criterion.
   const claims = attempts.getByRole("region", { name: "Agent's criterion claims" });
   await expect(claims.getByRole("listitem")).toContainText("MetLists every change");
-  await expect(attempts.getByText("Mock agent: no model or tool was used.")).toBeVisible();
+  await expect(attempts.getByText("Mock model provider: no real model was used.")).toBeVisible();
 
   await page.getByRole("tab", { name: "Timeline" }).click();
   const timeline = page.getByRole("list", { name: "Workflow events, newest first" });

@@ -2,8 +2,8 @@
 
 ## Current position
 - Phase: 3 — Specialized agents (Phase 2 complete; Phase 1 released as `v0.1.0`, pushed with its tag)
-- Last completed step: 3.3 — LiteLLM integration behind the gateway adapter, with provider usage capture
-- Next step: 3.4 — Research, Analyst, Writer and General agents, which needs a short plan and the owner's go-ahead
+- Last completed step: 3.4 — Research, Analyst, Writer and General agents
+- Next step: 3.5 — Developer and QA agents (no unsafe shell or code execution), which needs a short plan and the owner's go-ahead
 
 ## Completed steps
 | Step | Commit message | Hash |
@@ -29,15 +29,16 @@
 | 2.5 | `feat(planning): confirm plan drafts into workflow tasks` | `83b7ccc` (pushed, CI ✔) |
 | 3.1 | `feat(agents): add task contract, BaseAgent and structured submissions` | `61ac0ef` (pushed, CI ✔) |
 | 3.2 | `feat(tools): add tool registry and server-side tool gateway` | `54bf1d4` (pushed, CI ✔) |
-| 3.3 | `feat(llm): add LiteLLM provider adapter with usage capture` | latest commit touching `docs/ADR/0020-litellm-provider-adapter.md` |
+| 3.3 | `feat(llm): add LiteLLM provider adapter with usage capture` | `3abd85a` (pushed, CI ✔) |
+| 3.4 | `feat(agents): add Research, Analyst, Writer and General agents` | latest commit touching `docs/ADR/0021-built-in-agent-runtimes.md` |
 
-## Environment snapshot (2026-11-13)
+## Environment snapshot (2026-11-14)
 | Item | Value |
 |---|---|
-| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `54bf1d4` plus tag `v0.1.0` (owner-authorized) |
+| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `3abd85a` plus tag `v0.1.0` (owner-authorized) |
 | Python / uv / Node / npm | 3.12.14 via uv 0.12.9 / Node 24.13.0 / npm 11.6.2 |
 | Celery / kombu | 5.7.0 / 5.7.0 |
-| Docker | 29.9.3 — `agentflow` stack healthy (Docker Desktop must be started first; it had stopped and was restarted during Step 3.1) |
+| Docker | 29.9.3 — `agentflow` stack healthy (Docker Desktop must be started first; it had stopped and was restarted in Steps 3.1 and 3.4) |
 | Dev database | `agentflow` at `0012 (head)`; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
 | Local `.env` | holds generated `WORKER_DB_PASSWORD` and (new) `API_DB_PASSWORD` (gitignored) |
 | Port 8000 | Used by another local project (`easa`); smoke tests used 8010 |
@@ -45,6 +46,39 @@
 | Frontend audit | `npm audit --omit=dev`: 0 vulnerabilities; dev-only: 8 moderate, all the existing `minimatch` chain via ESLint |
 | Test HTTP client | `httpx2` 2.16.0 (replaces `httpx`, OD-10); `httpx` is back only as a LiteLLM dependency |
 | LiteLLM | 1.109.1, imported by workers only when `MODEL_PROVIDER=litellm`; `.env` keeps the mock |
+
+## Step 3.4 — built-in agent runtimes (ADR-0021)
+- **Owner decisions (2026-11-14):**
+  - versions without a runtime fail the attempt (`AGENT_RUNTIME_UNAVAILABLE`);
+  - one corrective retry on invalid output;
+  - Research works from model knowledge only.
+- **`app/agents/instructions.py`:** immutable texts for `builtin://researcher|analyst|writer|general/v1`, plus common rules (contract is delimited data, never invent sources or results, one claim per criterion, verification is independent).
+- **`app/agents/specialists.py`:**
+  - `ModelAgent` makes one structured gateway call per try (version profile, temperature, output tokens capped by the token budget);
+  - one corrective retry naming only issue codes;
+  - `ResearchAgent` always appends a platform note about missing retrieval tools;
+  - `RUNTIMES` / `runtime_for`;
+  - deterministic mock defaults per purpose (`agent_research`, `agent_analysis`, `agent_writing`, `agent_general`).
+- **Prompt:** instruction, rules, criterion ids and schema in the system message; the contract JSON inside `<task_contract>` (with `</` escaped and no platform IDs).
+- **Runner and worker:**
+  - `run_agent` chooses the runtime from the version's instruction reference;
+  - `AgentContext.models` is the gateway;
+  - the worker maps `AgentRuntimeUnavailableError` and `ModelGatewayError` to failed attempts with fixed messages.
+  - `InvalidSubmissionError` moved to `app/agents/contract.py`.
+- **E2E:** the stack forces `MODEL_PROVIDER=mock` whatever `.env` says. Journey 8/9 now runs the Writer runtime and checks the mock model's limitation text.
+
+## Checks last executed (Step 3.4)
+- **Full gate (`check.ps1 -E2E`) ✔, exit 0:**
+  - backend: ruff format (147 files), ruff check, mypy (147 files), alembic check;
+  - pytest **900 passed** (884 plus 16 new: 14 unit runtime tests, 2 integration tests: built-in runtime with `llm_usage` and submission, and a version without a runtime);
+  - the real Celery-worker test now runs the built-in Writer runtime and checks its `llm_usage` row;
+  - frontend: eslint, typecheck, Vitest **94**, Playwright **14 passed** (journey 8/9 runs the Writer runtime on the mock model), build.
+- **Warnings.** pytest's 12 warnings are the known LiteLLM-internal pydantic notices (Step 3.3).
+- **Deliberate-bug check** (reverted): removing the `</` escaping of the delimited contract makes the delimiter test fail.
+- **Environment:**
+  - Docker Desktop had stopped again; it was restarted and the stack came back healthy;
+  - the dev DB stays at `0012` (no migration);
+  - no live model call was made.
 
 ## Step 3.3 — LiteLLM provider adapter (ADR-0020)
 - **Owner decisions (2026-11-13):**
@@ -72,7 +106,7 @@
   - for Ollama, LiteLLM silently estimates missing token counts (new OD-21);
   - pydantic warns about LiteLLM's internal types, so that one message is filtered.
 
-## Checks last executed (Step 3.3)
+## Checks (Step 3.3)
 - **Full gate (`check.ps1 -E2E`) ✔, exit 0:**
   - backend: ruff format (144 files), ruff check, mypy (144 files), alembic check;
   - pytest **884 passed** (870 plus 14 new: 13 unit adapter/settings/hardening tests, 1 integration test writing an `llm_usage` row as the worker role, all offline);
@@ -378,6 +412,6 @@
 None.
 
 ## Next exact action
-1. **Push Step 3.3** on the owner's go-ahead, and confirm CI on GitHub.
-2. **Step 3.4 (Research, Analyst, Writer and General agents):** present a short plan and get the owner's go-ahead.
+1. **Push Step 3.4** on the owner's go-ahead, and confirm CI on GitHub.
+2. **Step 3.5 (Developer and QA agents, no unsafe shell or code execution):** present a short plan and get the owner's go-ahead.
 3. **Before any hosted deployment:** settle OD-14, OD-19 and OD-20.

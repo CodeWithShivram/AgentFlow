@@ -60,6 +60,11 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   must parse as `AgentSubmission` with exactly one claim per acceptance criterion (`validate_output` is platform-owned
   and `@final`); invalid output is a failed attempt (`INVALID_SUBMISSION`). Submissions are stored per attempt in
   `agent_executions.submission`; criterion claims are unverified. Never put parser or agent text in error summaries.
+- Built-in runtimes (ADR-0021, `app/agents/specialists.py`): the runtime is chosen from the version's
+  `system_instruction_ref` (`RUNTIMES`); others fail with `AGENT_RUNTIME_UNAVAILABLE`. Instruction texts are immutable
+  versions in `app/agents/instructions.py` (change = new ref). The contract reaches models only inside
+  `<task_contract>` delimiters, without platform IDs; one corrective retry names issue codes only. Agents call models via
+  `context.models`; tests pass `models=` (and `MockAgent` explicitly where no model should run), never the global gateway.
 - Tools (ADR-0019): agents call tools only via `context.tools.invoke(...)` (`app/tools/gateway.py`). A tool needs a
   `ToolDefinition` with an implementation in `app/tools/registry.py` (strict argument/result models) plus catalog policy;
   contracts list only usable grants. Calls outside the contract or over 50 per attempt are violations that fail the

@@ -125,6 +125,14 @@ class ValidationResult(BaseModel):
         return self.submission is not None and not self.issues
 
 
+class InvalidSubmissionError(Exception):
+    """The agent's output failed the deterministic checks. Issue codes are safe to store."""
+
+    def __init__(self, issues: list[str]) -> None:
+        super().__init__(", ".join(issues))
+        self.issues = issues
+
+
 def validate_submission(contract: TaskContract, result: object) -> ValidationResult:
     """Parses `result` and checks there is exactly one claim per acceptance criterion."""
     try:

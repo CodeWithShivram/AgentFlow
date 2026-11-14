@@ -1,6 +1,6 @@
 // Starts the real backend for E2E tests: a disposable database, the API, a Celery worker and
-// Celery Beat. Nothing is mocked; the mock agent runtime (ADR-0010) executes tasks, so no paid
-// AI API is called.
+// Celery Beat. Nothing else is mocked: the built-in agent runtimes execute tasks with the mock
+// model provider (forced below, whatever .env says), so no paid AI API is ever called.
 
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { createWriteStream, mkdirSync, rmSync } from "node:fs";
@@ -27,6 +27,9 @@ export function backendEnv(): NodeJS.ProcessEnv {
     AUTH_LOGIN_ATTEMPTS_PER_MINUTE: "1000",
     AUTH_REQUESTS_PER_MINUTE: "10000",
     SERVICE_NAME: "agentflow-e2e",
+    // Deterministic, free model replies even when .env configures a real provider (ADR-0020).
+    MODEL_PROVIDER: "mock",
+    MODEL_NAME: "mock-1",
     PYTHONUNBUFFERED: "1",
   };
 }

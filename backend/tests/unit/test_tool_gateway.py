@@ -13,6 +13,8 @@ from app.agents.catalog import TOOLS
 from app.agents.contract import AgentSubmission, TaskContract, ToolGrant
 from app.agents.mock import MockAgent
 from app.execution import runner
+from app.llm.gateway import ModelGateway
+from app.llm.mock import MockModelAdapter
 from app.models import ToolInvocationStatus
 from app.schemas.agents import AgentConfiguration
 from app.tools.gateway import (
@@ -33,6 +35,7 @@ from app.tools.registry import (
     ToolImplementation,
     usable_grants,
 )
+from tests.conftest import make_settings
 
 
 class Query(BaseModel):
@@ -255,6 +258,11 @@ class _SearchingAgent(MockAgent):
         return submission.model_copy(update={"outputs": answer.model_dump()})
 
 
+def _no_model() -> ModelGateway:
+    """A gateway for agents that never call a model: any call fails (no mock replies)."""
+    return ModelGateway(make_settings(), MockModelAdapter(defaults={}), lambda record: uuid.uuid4())
+
+
 def _claim() -> runner.Claim:
     return runner.Claim(
         execution_id=uuid.uuid4(),
@@ -291,7 +299,13 @@ def test_a_swallowed_violation_still_fails_the_attempt() -> None:
 
     claim = _claim()
     with pytest.raises(ToolPermissionDeniedError):
-        runner.run_agent(claim, _ProbingAgent, registry=TEST_REGISTRY, record_tool_call=record)
+        runner.run_agent(
+            claim,
+            _ProbingAgent,
+            models=_no_model(),
+            registry=TEST_REGISTRY,
+            record_tool_call=record,
+        )
 
     assert [(r.tool_name, r.status) for r in records] == [
         ("web_search", ToolInvocationStatus.SUCCEEDED),
@@ -303,6 +317,10 @@ def test_a_swallowed_violation_still_fails_the_attempt() -> None:
 def test_an_agent_using_its_permitted_tool_submits_normally() -> None:
     claim = _claim()
     submission = runner.run_agent(
-        claim, _SearchingAgent, registry=TEST_REGISTRY, record_tool_call=lambda r: uuid.uuid4()
+        claim,
+        _SearchingAgent,
+        models=_no_model(),
+        registry=TEST_REGISTRY,
+        record_tool_call=lambda r: uuid.uuid4(),
     )
     assert submission.outputs == {"text": "echo Compare vendors"}

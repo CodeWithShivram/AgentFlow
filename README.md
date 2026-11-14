@@ -258,6 +258,8 @@ Workflow tasks are executed by Celery workers, fed through a transactional outbo
 
 **Tool gateway** ([ADR-0019](docs/ADR/0019-tool-registry-and-gateway.md)). Agents reach tools only through a server-side gateway. It checks each call against the tools the agent version was granted, the access each tool needs and a limit of 50 calls per attempt. It validates arguments and results, and records every call with a hash of its arguments. Calling a tool outside the contract fails the attempt. No tool is implemented yet: file and artifact tools wait for artifact storage, web search for a provider, and code execution stays disabled.
 
+**Built-in agents** ([ADR-0021](docs/ADR/0021-built-in-agent-runtimes.md)). The Research, Analyst, Writer and General agents call the configured model with versioned instructions and the task contract, and return a structured submission. If the reply is invalid, they get one corrective retry. Research works from model knowledge only, and every research submission says so. Developer and QA agents (Step 3.5) and custom agents with their own instructions don't run yet: their attempts fail with a clear message. With the default mock provider, every agent returns deterministic placeholder results.
+
 One-time setup, after `alembic upgrade head`: set `WORKER_DB_PASSWORD` (and `API_DB_PASSWORD`) in `.env`, then run `uv run python -m app.db.roles provision`. Re-run the provisioning after future migrations.
 
 Run each in its own terminal from `backend/`, with the infrastructure up:
