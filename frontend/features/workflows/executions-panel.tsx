@@ -97,10 +97,104 @@ function SubmissionDetails({ submission, criteria }: { submission: AgentSubmissi
           </ul>
         </section>
       ) : null}
+      <ProposedFiles title="Proposed files (not applied)" files={proposedFiles(submission.outputs.proposed_files)} />
+      <ProposedFiles title="Proposed tests (not run)" files={proposedFiles(submission.outputs.proposed_tests)} />
+      <TestCases cases={testCases(submission.outputs.test_cases)} descriptions={descriptions} />
       <Notes title="Open questions" items={submission.open_questions} />
       <Notes title="Assumptions" items={submission.assumptions} />
       <Notes title="Limitations" items={submission.limitations} />
     </div>
+  );
+}
+
+// Developer and QA outputs (Step 3.5). Outputs are untrusted agent data: they are read
+// defensively and rendered as plain text only.
+interface ProposedFile {
+  path: string;
+  language: string;
+  purpose: string;
+  content: string;
+}
+
+interface TestCase {
+  id: string;
+  title: string;
+  covers: string[];
+  kind: string;
+  steps: string[];
+  expected: string;
+}
+
+const isText = (value: unknown): value is string => typeof value === "string";
+const isTextList = (value: unknown): value is string[] => Array.isArray(value) && value.every(isText);
+
+function records(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null)
+    : [];
+}
+
+function proposedFiles(value: unknown): ProposedFile[] {
+  return records(value).flatMap((f) =>
+    isText(f.path) && isText(f.language) && isText(f.purpose) && isText(f.content)
+      ? [{ path: f.path, language: f.language, purpose: f.purpose, content: f.content }]
+      : [],
+  );
+}
+
+function testCases(value: unknown): TestCase[] {
+  return records(value).flatMap((c) =>
+    isText(c.id) && isText(c.title) && isTextList(c.covers) && isText(c.kind) && isTextList(c.steps) && isText(c.expected)
+      ? [{ id: c.id, title: c.title, covers: c.covers, kind: c.kind, steps: c.steps, expected: c.expected }]
+      : [],
+  );
+}
+
+function ProposedFiles({ title, files }: { title: string; files: ProposedFile[] }) {
+  if (files.length === 0) return null;
+  return (
+    <section aria-label={title}>
+      <p className="text-xs font-medium text-muted-foreground">{title}</p>
+      <ul className="mt-1 space-y-1">
+        {files.map((file) => (
+          <li key={file.path}>
+            <details className="rounded border px-2 py-1">
+              <summary className="cursor-pointer break-all font-mono text-xs">
+                {file.path} <span className="font-sans text-muted-foreground">· {file.language}</span>
+              </summary>
+              <p className="mt-1 break-words text-xs">{file.purpose}</p>
+              <pre className="mt-1 max-h-72 overflow-auto rounded bg-muted p-2 text-xs whitespace-pre">{file.content}</pre>
+            </details>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function TestCases({ cases, descriptions }: { cases: TestCase[]; descriptions: Map<string, string> }) {
+  if (cases.length === 0) return null;
+  return (
+    <section aria-label="Test cases (designed, not run)">
+      <p className="text-xs font-medium text-muted-foreground">Test cases (designed, not run)</p>
+      <ul className="mt-1 space-y-2">
+        {cases.map((c) => (
+          <li key={c.id} className="break-words">
+            <span className="font-medium">{c.title}</span>{" "}
+            <span className="text-xs text-muted-foreground">
+              · {c.kind}
+              {c.covers.length > 0 ? ` · covers ${c.covers.map((id) => descriptions.get(id) ?? id).join("; ")}` : ""}
+            </span>
+            <ol className="mt-1 list-decimal pl-5 text-xs">
+              {c.steps.map((step, i) => (
+                <li key={i}>{step}</li>
+              ))}
+            </ol>
+            <p className="text-xs">Expected: {c.expected}</p>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 

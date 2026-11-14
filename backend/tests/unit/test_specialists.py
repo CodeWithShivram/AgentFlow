@@ -13,7 +13,9 @@ from app.agents.specialists import (
     RUNTIMES,
     AgentRuntimeUnavailableError,
     AnalystAgent,
+    DeveloperAgent,
     GeneralAgent,
+    QAAgent,
     ResearchAgent,
     WriterAgent,
     runtime_for,
@@ -113,9 +115,11 @@ def test_runtimes_come_only_from_built_in_instruction_references() -> None:
         "builtin://analyst/v1": AnalystAgent,
         "builtin://writer/v1": WriterAgent,
         "builtin://general/v1": GeneralAgent,
+        "builtin://developer/v1": DeveloperAgent,  # Step 3.5
+        "builtin://qa/v1": QAAgent,  # Step 3.5
     }
     assert set(RUNTIMES) == set(INSTRUCTIONS)
-    for ref in ("builtin://developer/v1", "builtin://qa/v1", "workspace://prompts/w/v1"):
+    for ref in ("workspace://prompts/w/v1", "builtin://unknown/v1", "builtin://writer/v2"):
         with pytest.raises(AgentRuntimeUnavailableError) as error:
             runtime_for(AgentConfiguration.model_validate(_configuration(ref)))
         assert error.value.code == "AGENT_RUNTIME_UNAVAILABLE"
@@ -123,7 +127,7 @@ def test_runtimes_come_only_from_built_in_instruction_references() -> None:
 
 def test_a_version_without_a_runtime_fails_before_any_model_call() -> None:
     recorder = Recorder()
-    claim = _claim(_configuration("builtin://developer/v1"))
+    claim = _claim(_configuration("workspace://prompts/w/v1"))
     models = ModelGateway(make_settings(), MockModelAdapter(), recorder)
     with pytest.raises(AgentRuntimeUnavailableError):
         runner.run_agent(claim, models=models, record_tool_call=lambda r: uuid.uuid4())

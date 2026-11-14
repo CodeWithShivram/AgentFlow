@@ -96,3 +96,55 @@ describe("ExecutionsPanel submissions", () => {
     expect(screen.queryByRole("region", { name: "Agent's criterion claims" })).not.toBeInTheDocument();
   });
 });
+
+describe("ExecutionsPanel developer and QA outputs", () => {
+  it("lists proposed files and tests as plain text, marked as not applied or run", async () => {
+    const base = execution().submission!;
+    renderPanel([
+      execution({
+        submission: {
+          ...base,
+          outputs: {
+            proposed_files: [
+              { path: "src/sync.py", language: "python", purpose: "Add sync.", content: "<script>alert(1)</script>" },
+              { path: "broken.py" }, // incomplete entries are ignored
+            ],
+            proposed_tests: [{ path: "tests/test_sync.py", language: "python", purpose: "Covers sync.", content: "def test(): ..." }],
+          },
+        },
+      }),
+    ]);
+
+    const files = await screen.findByRole("region", { name: "Proposed files (not applied)" });
+    expect(within(files).getAllByRole("listitem")).toHaveLength(1);
+    expect(within(files).getByText("src/sync.py")).toBeInTheDocument();
+    expect(within(files).getByText("<script>alert(1)</script>")).toBeInTheDocument();
+    expect(files.querySelector("script")).toBeNull();
+    const tests = screen.getByRole("region", { name: "Proposed tests (not run)" });
+    expect(within(tests).getByText("tests/test_sync.py")).toBeInTheDocument();
+  });
+
+  it("shows designed test cases with the criteria they cover", async () => {
+    const base = execution().submission!;
+    renderPanel([
+      execution({
+        submission: {
+          ...base,
+          outputs: {
+            test_cases: [
+              { id: "t1", title: "All vendors listed", covers: ["c1"], kind: "manual", steps: ["Open the table."], expected: "Three rows." },
+              { id: "t2", title: "Malformed", covers: "c1" },
+            ],
+          },
+        },
+      }),
+    ]);
+
+    const cases = await screen.findByRole("region", { name: "Test cases (designed, not run)" });
+    const items = within(cases).getAllByRole("listitem");
+    expect(items[0]).toHaveTextContent("All vendors listed · manual · covers Covers all vendors.");
+    expect(within(cases).getByText("Open the table.")).toBeInTheDocument();
+    expect(within(cases).getByText("Expected: Three rows.")).toBeInTheDocument();
+    expect(within(cases).queryByText("Malformed")).not.toBeInTheDocument();
+  });
+});

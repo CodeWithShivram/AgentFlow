@@ -65,6 +65,9 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   versions in `app/agents/instructions.py` (change = new ref). The contract reaches models only inside
   `<task_contract>` delimiters, without platform IDs; one corrective retry names issue codes only. Agents call models via
   `context.models`; tests pass `models=` (and `MockAgent` explicitly where no model should run), never the global gateway.
+- Developer and QA (ADR-0022) never execute code, run tests or write files: their outputs must fit `outputs_model`
+  (`app/agents/outputs.py`: path-checked `proposed_files`/`proposed_tests`, `test_cases` covering contract criteria),
+  and a runtime's `platform_note` is appended unless the contract grants the matching tool. Never drop those notes.
 - Tools (ADR-0019): agents call tools only via `context.tools.invoke(...)` (`app/tools/gateway.py`). A tool needs a
   `ToolDefinition` with an implementation in `app/tools/registry.py` (strict argument/result models) plus catalog policy;
   contracts list only usable grants. Calls outside the contract or over 50 per attempt are violations that fail the

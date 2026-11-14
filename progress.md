@@ -2,8 +2,8 @@
 
 ## Current position
 - Phase: 3 — Specialized agents (Phase 2 complete; Phase 1 released as `v0.1.0`, pushed with its tag)
-- Last completed step: 3.4 — Research, Analyst, Writer and General agents
-- Next step: 3.5 — Developer and QA agents (no unsafe shell or code execution), which needs a short plan and the owner's go-ahead
+- Last completed step: 3.5 — Developer and QA agents (no unsafe shell or code execution)
+- Next step: 3.6 — Rule-based agent selection with persisted rationale, which needs a short plan and the owner's go-ahead
 
 ## Completed steps
 | Step | Commit message | Hash |
@@ -30,12 +30,13 @@
 | 3.1 | `feat(agents): add task contract, BaseAgent and structured submissions` | `61ac0ef` (pushed, CI ✔) |
 | 3.2 | `feat(tools): add tool registry and server-side tool gateway` | `54bf1d4` (pushed, CI ✔) |
 | 3.3 | `feat(llm): add LiteLLM provider adapter with usage capture` | `3abd85a` (pushed, CI ✔) |
-| 3.4 | `feat(agents): add Research, Analyst, Writer and General agents` | latest commit touching `docs/ADR/0021-built-in-agent-runtimes.md` |
+| 3.4 | `feat(agents): add Research, Analyst, Writer and General agents` | `d51668f` (pushed, CI ✔) |
+| 3.5 | `feat(agents): add Developer and QA agents without execution` | latest commit touching `docs/ADR/0022-developer-and-qa-agents.md` |
 
 ## Environment snapshot (2026-11-14)
 | Item | Value |
 |---|---|
-| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `3abd85a` plus tag `v0.1.0` (owner-authorized) |
+| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `d51668f` plus tag `v0.1.0` (owner-authorized) |
 | Python / uv / Node / npm | 3.12.14 via uv 0.12.9 / Node 24.13.0 / npm 11.6.2 |
 | Celery / kombu | 5.7.0 / 5.7.0 |
 | Docker | 29.9.3 — `agentflow` stack healthy (Docker Desktop must be started first; it had stopped and was restarted in Steps 3.1 and 3.4) |
@@ -46,6 +47,32 @@
 | Frontend audit | `npm audit --omit=dev`: 0 vulnerabilities; dev-only: 8 moderate, all the existing `minimatch` chain via ESLint |
 | Test HTTP client | `httpx2` 2.16.0 (replaces `httpx`, OD-10); `httpx` is back only as a LiteLLM dependency |
 | LiteLLM | 1.109.1, imported by workers only when `MODEL_PROVIDER=litellm`; `.env` keeps the mock |
+
+## Step 3.5 — Developer and QA agents (ADR-0022)
+- **Owner decisions (2026-11-14):**
+  - the Developer delivers structured, path-checked file proposals;
+  - QA designs and reviews tests only.
+- **Runtimes:**
+  - `DeveloperAgent` (`builtin://developer/v1`, `agent_development`) and `QAAgent` (`builtin://qa/v1`, `agent_qa`);
+  - no shell, process, file or network access, only the model gateway;
+  - the instructions forbid claiming execution, passing tests or written files.
+- **Generic mechanisms on `ModelAgent`:**
+  - `outputs_model`, sent as a second schema and checked, with `OUTPUTS_INVALID` / `TEST_CASE_UNKNOWN_CRITERION` triggering the corrective retry;
+  - `platform_note` plus `note_unless_tools`; Research now uses the same mechanism.
+- **`app/agents/outputs.py`:**
+  - `ProposedFile` with path checks: relative POSIX, no traversal or absolute paths, drives, backslashes, `:` or spaces, at most 12 segments, no VCS/credential folders, no `.env*` except `.env.example`;
+  - `DeveloperOutputs` and `QAOutputs` (test cases covering contract criteria).
+- **Frontend:** the executions panel shows proposed files and tests (collapsible, `<pre>`) and designed test cases, as plain text, marked not applied or run.
+- **Tests changed:** two Step 3.4 tests that listed Developer and QA as having no runtime now expect their runtimes. Unknown and custom references still fail.
+
+## Checks last executed (Step 3.5)
+- **Full gate (`check.ps1 -E2E`) ✔, exit 0:**
+  - backend: ruff format (149 files), ruff check, mypy (149 files), alembic check;
+  - pytest **929 passed** (900 plus 29 new: path, output and runtime tests for Developer and QA);
+  - frontend: eslint, typecheck, Vitest **96** (2 new: proposed files and test cases rendered as plain text), Playwright **14 passed**, build.
+- **Warnings.** pytest's 12 warnings are the known LiteLLM-internal pydantic notices.
+- **Deliberate-bug check** (reverted): allowing `..` path segments makes 3 tests fail (2 path tests, 1 corrective-retry test).
+- **Environment:** the dev DB stays at `0012` (no migration); no live model call was made; no servers were left running.
 
 ## Step 3.4 — built-in agent runtimes (ADR-0021)
 - **Owner decisions (2026-11-14):**
@@ -67,7 +94,7 @@
   - `InvalidSubmissionError` moved to `app/agents/contract.py`.
 - **E2E:** the stack forces `MODEL_PROVIDER=mock` whatever `.env` says. Journey 8/9 now runs the Writer runtime and checks the mock model's limitation text.
 
-## Checks last executed (Step 3.4)
+## Checks (Step 3.4)
 - **Full gate (`check.ps1 -E2E`) ✔, exit 0:**
   - backend: ruff format (147 files), ruff check, mypy (147 files), alembic check;
   - pytest **900 passed** (884 plus 16 new: 14 unit runtime tests, 2 integration tests: built-in runtime with `llm_usage` and submission, and a version without a runtime);
@@ -412,6 +439,6 @@
 None.
 
 ## Next exact action
-1. **Push Step 3.4** on the owner's go-ahead, and confirm CI on GitHub.
-2. **Step 3.5 (Developer and QA agents, no unsafe shell or code execution):** present a short plan and get the owner's go-ahead.
+1. **Push Step 3.5** on the owner's go-ahead, and confirm CI on GitHub.
+2. **Step 3.6 (rule-based agent selection with persisted rationale):** present a short plan and get the owner's go-ahead.
 3. **Before any hosted deployment:** settle OD-14, OD-19 and OD-20.
