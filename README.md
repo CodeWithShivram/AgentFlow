@@ -182,7 +182,7 @@ Routes live under `/api/v1/workspaces/{workspace_id}/workflows`. The lifecycle, 
 | `PATCH …/tasks/{task_id}` | MEMBER | `{revision, …fields}` | 200 task | 409 `TASK_REVISION_CONFLICT` / `PLAN_NOT_EDITABLE` |
 | `DELETE …/tasks/{task_id}?revision=` | MEMBER | — | 204 (kept as removed/CANCELLED history) | 409 |
 | `POST …/tasks/{task_id}/dependencies` · `DELETE …/dependencies/{depends_on_task_id}` | MEMBER | `{depends_on_task_id}` | 201 task · 204 | 422 `INVALID_DEPENDENCY` / `DEPENDENCY_CYCLE`, 409 `DEPENDENCY_EXISTS` |
-| `POST …/tasks/{task_id}/assign` | MEMBER | `{agent_id, revision}` | 200 task pinned to the agent's active version | 409 `AGENT_NOT_RUNNABLE` / `INVALID_TRANSITION`, 422 `AGENT_LACKS_SKILLS` |
+| `POST …/tasks/{task_id}/assign` | MEMBER | `{agent_id, revision}` | 200 task pinned to the agent's active version (a PENDING task is pre-assigned and stays PENDING) | 409 `AGENT_NOT_RUNNABLE` / `INVALID_TRANSITION`, 422 `AGENT_LACKS_SKILLS` |
 | `POST …/tasks/{task_id}/cancel` | MEMBER | `{revision, reason?}` | 200 task | 409 |
 
 A typical manual run looks like this:
@@ -267,6 +267,8 @@ Workflow tasks are executed by Celery workers, fed through a transactional outbo
 **Next step** ([ADR-0025](docs/ADR/0025-orchestration-graph.md)). After every status change, a worker runs a LangGraph orchestration graph over the workflow. It records what has to happen next and who has to act: assign agents, wait for running agents, wait for verification (Phase 5), approve or start. The workflow page shows this as a "Next step" banner. The graph only assesses; it never assigns or runs anything, and it never changes the workflow's revision. LangSmith tracing is switched off. Each assessment is saved as a LangGraph checkpoint in PostgreSQL, one thread per workflow ([ADR-0026](docs/ADR/0026-orchestration-checkpoints.md)). Only workers can read the checkpoints, and the hourly cleanup keeps the 20 newest per workflow.
 
 **Background jobs** ([ADR-0027](docs/ADR/0027-outbox-hardening-and-worker-health.md)). When the platform gives up on a background job, the workflow page shows it with the attempts and the error type, and admins can retry it. The retry is safe, because duplicate deliveries are ignored, and it's recorded in the timeline. Jobs that can never be delivered fail immediately instead of retrying. `/health/ready` now also reports `workers`: it reads `ok` only while the outbox relay has run in the last minute and no job has waited more than five minutes. With the default mock provider, every agent returns deterministic placeholder results.
+
+**Scheduling** ([ADR-0028](docs/ADR/0028-dependency-aware-scheduling.md)). Independent tasks run at the same time, up to the workflow's `max_parallel_tasks`. When more tasks are assigned than there are free slots, the rest wait, and each freed slot goes to the waiting task with the highest priority (then the oldest). A task that still waits for its dependencies can be pre-assigned ("Pre-assign agent…"): it starts by itself once its dependencies complete. Changing its required skills clears the pre-assignment.
 
 One-time setup, after `alembic upgrade head`: set `WORKER_DB_PASSWORD` (and `API_DB_PASSWORD`) in `.env`, then run `uv run python -m app.db.roles provision`. Re-run the provisioning after future migrations.
 

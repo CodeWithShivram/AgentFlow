@@ -87,7 +87,7 @@ export function WorkflowDetailView() {
   const onTaskAction = (action: TaskAction, task: Task) => {
     if (action === "edit") setTaskForm({ open: true, task });
     else if (action === "dependencies") setDependencyTask(task);
-    else if (action === "assign") setAssignTask(task);
+    else if (action === "assign" || action === "preassign") setAssignTask(task);
     else setConfirmTask({ action, task });
   };
 

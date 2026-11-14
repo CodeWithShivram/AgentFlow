@@ -18,9 +18,9 @@ import { humanize } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 import { ExecutionsPanel } from "./executions-panel";
-import { PLAN_EDITABLE, TASK_ASSIGNABLE, TASK_TERMINAL, WORKFLOW_EXECUTING } from "./status";
+import { PLAN_EDITABLE, TASK_ASSIGNABLE, TASK_TERMINAL, WORKFLOW_EXECUTING, WORKFLOW_TERMINAL } from "./status";
 
-export type TaskAction = "edit" | "dependencies" | "assign" | "cancel" | "remove";
+export type TaskAction = "edit" | "dependencies" | "assign" | "preassign" | "cancel" | "remove";
 
 interface TaskListProps {
   workflow: Workflow;
@@ -36,6 +36,8 @@ export function availableTaskActions(workflow: Workflow, task: Task): TaskAction
   const planEditable = PLAN_EDITABLE.has(workflow.status);
   if (planEditable) actions.push("edit", "dependencies");
   if (WORKFLOW_EXECUTING.has(workflow.status) && TASK_ASSIGNABLE.has(task.status)) actions.push("assign");
+  // Step 4.4: a task still waiting for its dependencies can be pre-assigned; it runs once ready.
+  if (!WORKFLOW_TERMINAL.has(workflow.status) && task.status === "PENDING") actions.push("preassign");
   if (WORKFLOW_EXECUTING.has(workflow.status) && !TASK_TERMINAL.has(task.status)) actions.push("cancel");
   if (planEditable) actions.push("remove");
   return actions;
@@ -47,6 +49,7 @@ const ACTION_LABELS: Record<TaskAction, string> = {
   edit: "Edit task",
   dependencies: "Dependencies…",
   assign: "Assign agent…",
+  preassign: "Pre-assign agent…",
   cancel: "Cancel task",
   remove: "Remove from plan",
 };

@@ -214,7 +214,9 @@ def test_plan_approval_start_and_assignment_pin_the_agent_version(
     )[0][0]
     assert assigned.json()["assigned_agent_version_id"] == version_id
 
-    blocked = proposer.post(
+    # Step 4.4 (ADR-0028): a task still waiting for its dependencies can be pre-assigned, but
+    # it stays PENDING and is not dispatched until its dependencies complete.
+    pre_assigned = proposer.post(
         wf_url(workspace, f"/{workflow_id}/tasks/{second['id']}/assign"),
         json={
             "agent_id": writer,
@@ -222,7 +224,15 @@ def test_plan_approval_start_and_assignment_pin_the_agent_version(
         },
         headers=csrf(proposer),
     )
-    assert blocked.status_code == 409  # dependencies not completed, so not READY
+    assert pre_assigned.status_code == 200
+    assert pre_assigned.json()["status"] == "PENDING"
+    assert pre_assigned.json()["assigned_agent_version_id"] == version_id
+    dispatched_for_second = sql(
+        api_settings,
+        "SELECT count(*) FROM outbox_events WHERE event_type = 'task.dispatch' AND task_id = :id",
+        id=second["id"],
+    )[0][0]
+    assert dispatched_for_second == 0
 
 
 def test_assignment_rejects_agents_without_the_skills(
@@ -714,3 +724,32 @@ def test_selection_endpoints_are_workspace_scoped(
         for suffix in ("agent-suggestions", "agent-selections"):
             response = mallory.get(wf_url(target, f"/{workflow}/tasks/{task['id']}/{suffix}"))
             assert response.status_code == 404, (target, suffix)
+
+
+def test_pre_assignment_during_planning_is_cleared_when_the_skills_change(
+    owner: TestClient, workspace: str, workflow: str
+) -> None:
+    """Step 4.4 (ADR-0028): a PENDING task keeps its status when pre-assigned; editing its
+    required skills drops the pinned agent, which was only checked against the old skills."""
+    move(owner, workspace, workflow, "PLANNING")
+    task = add_task(owner, workspace, workflow, required_skills=["report_writing"]).json()
+    assigned = owner.post(
+        wf_url(workspace, f"/{workflow}/tasks/{task['id']}/assign"),
+        json={"agent_id": builtin_id(owner, workspace, "Writer"), "revision": task["revision"]},
+        headers=csrf(owner),
+    )
+    assert assigned.status_code == 200, assigned.text
+    assert assigned.json()["status"] == "PENDING" and assigned.json()["assigned_agent_id"]
+    pre = next(e for e in events(owner, workspace, workflow) if e["event_type"] == "TASK_ASSIGNED")
+    assert pre["payload"]["pre_assigned"] is True
+
+    edited = owner.patch(
+        wf_url(workspace, f"/{workflow}/tasks/{task['id']}"),
+        json={"revision": assigned.json()["revision"], "required_skills": ["research"]},
+        headers=csrf(owner),
+    )
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["assigned_agent_id"] is None
+    assert edited.json()["assigned_agent_version_id"] is None
+    updated = [e for e in events(owner, workspace, workflow) if e["event_type"] == "TASK_UPDATED"]
+    assert updated[-1]["payload"]["pre_assignment_cleared"] is True

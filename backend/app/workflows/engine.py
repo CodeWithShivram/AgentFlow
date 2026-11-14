@@ -216,21 +216,28 @@ def request_plan(session: Session, workflow: Workflow, *, actor: Actor) -> uuid.
 
 
 _ORCHESTRATION_MARKER = "agentflow.orchestration_requested"
+_DISPATCH_MARKER = "agentflow.dispatch_requested"
+
+
+def _transaction_marker(session: Session, key: str) -> set[uuid.UUID]:
+    """Ids already handled in the session's current transaction. Rows flushed earlier in it are
+    no longer in `session.new`, so deduplication is tied to the transaction object."""
+    transaction = session.get_transaction()
+    marker: tuple[object, set[uuid.UUID]] | None = session.info.get(key)
+    if marker is None or marker[0] is not transaction:
+        marker = (transaction, set())
+        session.info[key] = marker
+    return marker[1]
 
 
 def request_orchestration(session: Session, workflow: Workflow) -> None:
     """Asks a worker to reassess the workflow with the orchestration graph (ADR-0025): one
     `workflow.orchestrate` outbox row per transaction that changes a status, written in that
     transaction. The job reads the committed state, so later requests supersede nothing."""
-    # Deduplicated per transaction: rows flushed earlier in it are no longer in `session.new`.
-    transaction = session.get_transaction()
-    marker: tuple[object, set[uuid.UUID]] | None = session.info.get(_ORCHESTRATION_MARKER)
-    if marker is None or marker[0] is not transaction:
-        marker = (transaction, set())
-        session.info[_ORCHESTRATION_MARKER] = marker
-    if workflow.id in marker[1]:
+    marker = _transaction_marker(session, _ORCHESTRATION_MARKER)
+    if workflow.id in marker:
         return
-    marker[1].add(workflow.id)
+    marker.add(workflow.id)
     outbox.enqueue(
         session,
         outbox.WORKFLOW_ORCHESTRATE,
@@ -240,11 +247,28 @@ def request_orchestration(session: Session, workflow: Workflow) -> None:
     )
 
 
+def dispatch_order(task: WorkflowTask) -> tuple[int, datetime, str]:
+    """Waiting tasks are dispatched highest priority first, then oldest first (ADR-0028)."""
+    return (-task.priority, task.created_at, str(task.id))
+
+
 def _dispatch_waiting(session: Session, workflow: Workflow) -> None:
+    """Dispatches as many ASSIGNED tasks as the workflow has free execution slots, in
+    `dispatch_order`. The others wait; a slot freeing up calls this again. The worker's claim
+    still enforces the limit, because dispatched tasks only take a slot once claimed."""
     if workflow.status != W.RUNNING:
         return
-    for task in _active(list_tasks(session, workflow)):
-        if task.status == T.ASSIGNED:
+    tasks = _active(list_tasks(session, workflow))
+    free = workflow.max_parallel_tasks - sum(
+        1 for t in tasks if t.status in EXECUTION_SLOT_STATUSES
+    )
+    if free <= 0:
+        return
+    waiting = sorted((t for t in tasks if t.status == T.ASSIGNED), key=dispatch_order)
+    marker = _transaction_marker(session, _DISPATCH_MARKER)
+    for task in waiting[:free]:
+        if task.id not in marker:  # one dispatch per task per transaction
+            marker.add(task.id)
             request_dispatch(session, workflow, task)
 
 
@@ -394,12 +418,12 @@ def transition_task(
         payload=payload,
     )
     request_orchestration(session, workflow)
-    if target == T.ASSIGNED and workflow.status == W.RUNNING:
-        request_dispatch(session, workflow, task)
     # Flush so later queries in this transaction (and DB constraints) see the change; app
     # sessions do not autoflush.
     session.flush()
-    if source in EXECUTION_SLOT_STATUSES and target not in EXECUTION_SLOT_STATUSES:
+    if target == T.ASSIGNED or (
+        source in EXECUTION_SLOT_STATUSES and target not in EXECUTION_SLOT_STATUSES
+    ):
         _dispatch_waiting(session, workflow)
     if reconcile:
         reconcile_workflow(session, workflow)
@@ -461,6 +485,22 @@ def reconcile_workflow(session: Session, workflow: Workflow) -> None:
                 reason="dependencies completed",
                 reconcile=False,
             )
+            if task.assigned_agent_version_id is not None:
+                # Pre-assigned while waiting (ADR-0028): schedule it now, within the slot limit.
+                transition_task(
+                    session,
+                    workflow,
+                    task,
+                    T.ASSIGNED,
+                    actor=Actor.SCHEDULER,
+                    reason="agent pre-assigned",
+                    extra={
+                        "agent_id": str(task.assigned_agent_id),
+                        "agent_version_id": str(task.assigned_agent_version_id),
+                        "pre_assigned": True,
+                    },
+                    reconcile=False,
+                )
 
     if any(t.required and t.status in _BLOCKING_REQUIRED for t in tasks):
         transition_workflow(

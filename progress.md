@@ -2,8 +2,8 @@
 
 ## Current position
 - Phase: 4 — Orchestration and scheduling (Phases 2 and 3 complete; Phase 1 released as `v0.1.0`, pushed with its tag)
-- Last completed step: 4.3 — Celery dispatch and worker lifecycle (outbox hardening, idempotent claims)
-- Next step: 4.4 — Dependency-aware scheduling and concurrency limits, which needs a short plan and the owner's go-ahead
+- Last completed step: 4.4 — Dependency-aware scheduling and concurrency limits
+- Next step: 4.5 — Cancellation and restart recovery (includes OD-17), which needs a short plan and the owner's go-ahead
 
 ## Completed steps
 | Step | Commit message | Hash |
@@ -36,12 +36,13 @@
 | 3.7 | `feat(agents): file platform agent proposals with permission review` | `437faab` (pushed, CI ✔) |
 | 4.1 | `feat(orchestration): add LangGraph workflow assessment graph` | `de4da58` (pushed, CI ✔) |
 | 4.2 | `feat(orchestration): persist graph checkpoints in PostgreSQL` | `c7657ef` (pushed, CI ✔) |
-| 4.3 | `feat(execution): surface and retry failed jobs and report worker health` | latest commit touching `docs/ADR/0027-outbox-hardening-and-worker-health.md` |
+| 4.3 | `feat(execution): surface and retry failed jobs and report worker health` | `c23c846` (pushed, CI ✔) |
+| 4.4 | `feat(scheduling): dispatch by priority within slot limits and allow pre-assignment` | latest commit touching `docs/ADR/0028-dependency-aware-scheduling.md` |
 
 ## Environment snapshot (2026-11-14)
 | Item | Value |
 |---|---|
-| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `c7657ef` plus tag `v0.1.0` (owner-authorized) |
+| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `c23c846` plus tag `v0.1.0` (owner-authorized) |
 | Python / uv / Node / npm | 3.12.14 via uv 0.12.9 / Node 24.13.0 / npm 11.6.2 |
 | Celery / kombu | 5.7.0 / 5.7.0 |
 | Docker | 29.9.3 — `agentflow` stack healthy (Docker Desktop must be started first; it had stopped and was restarted in Steps 3.1 and 3.4) |
@@ -53,6 +54,31 @@
 | Test HTTP client | `httpx2` 2.16.0 (replaces `httpx`, OD-10); `httpx` is back only as a LiteLLM dependency |
 | LiteLLM | 1.109.1, imported by workers only when `MODEL_PROVIDER=litellm`; `.env` keeps the mock |
 | LangGraph | 1.2.22 (with langchain-core 1.8.0 and langsmith 0.14.17), imported by workers only; LangSmith tracing disabled; checkpoints via `langgraph-checkpoint-postgres` 3.2.1 |
+
+## Step 4.4 — dependency-aware scheduling (ADR-0028)
+- **Owner decisions (2026-11-14):**
+  - pre-assignment of PENDING tasks is allowed; they run when ready;
+  - per-workflow limit only (`max_parallel_tasks`), no workspace-wide cap.
+- **Engine (`app/workflows/engine.py`):**
+  - `_dispatch_waiting` dispatches only as many ASSIGNED tasks as there are free slots, in `dispatch_order` (priority desc, then `created_at`, then id), once per task per transaction (`_transaction_marker`, shared with `request_orchestration`);
+  - it runs after a task becomes ASSIGNED, after a task leaves a slot, and on resume; assigning no longer writes a dispatch directly;
+  - `reconcile_workflow` moves a pre-assigned task READY → ASSIGNED as SCHEDULER (`pre_assigned: true`).
+- **Service (`app/services/tasks.py`):** assigning a PENDING task pins the version and records `TASK_ASSIGNED`/`TASK_REASSIGNED` with `pre_assigned: true`, without a status change (refused in terminal workflows); changing `required_skills` clears the pin (`pre_assignment_cleared`).
+- **Orchestration:** `orchestration/v2` reports ASSIGNED tasks as waiting for a free slot.
+- **Frontend:** "Pre-assign agent…" in the menu of PENDING tasks in non-terminal workflows, opening the assignment dialog.
+- **Tests changed (intended behaviour changes):**
+  - the parallel-limit test no longer expects a dispatch for a task assigned while the slot is busy (it now writes one manually to show the claim still defers);
+  - the API test that expected 409 when assigning a PENDING task now expects a pre-assignment (200, PENDING, no dispatch);
+  - the graph version pins moved to v2, and a PLANNING PENDING task's menu now includes "preassign".
+
+## Checks last executed (Step 4.4)
+- **Full gate (`check.ps1 -E2E`):**
+  - backend ✔: ruff format (169 files), ruff check, mypy (169 files), alembic check;
+  - pytest **988 passed** (982 plus 6 new: 2 unit graph cases for tasks waiting for a slot, 3 integration scheduling tests for concurrency in priority order, freed slots by priority and pre-assigned tasks dispatched when ready, and 1 API test for clearing a pre-assignment on a skills change);
+  - frontend: lint ✔ and typecheck ✔. The gate's Vitest stage then failed on one 5-second timeout in an untouched file (`permission-review.test.tsx`) while the machine was busy (CPU about 80%: browser and editor). In the runs before it, other untouched UI tests had timed out the same way, and they passed when run alone (16/16);
+  - so the remaining frontend stages were rerun in the gate's order with the gate's commands: Vitest **107 passed**, Playwright **14 passed**, build ✔. No test timeouts were changed.
+- **Deliberate-bug check** (restored byte-for-byte): reversing `dispatch_order` (lowest priority first) makes both priority tests fail.
+- **Environment:** the dev DB is still at `0017` (no migration in this step); no servers were left running after E2E.
 
 ## Step 4.3 — outbox hardening, failed jobs and worker health (ADR-0027)
 - **Owner decisions (2026-11-14):**
@@ -72,7 +98,7 @@
   - the readiness tests now write a relay heartbeat (the unit test expects `workers: unavailable` without Redis);
   - the unknown-route test now expects the more specific `PermanentPublishError`, and a missing-payload test was added.
 
-## Checks last executed (Step 4.3)
+## Checks (Step 4.3)
 - **Full gate (`check.ps1 -E2E`) ✔, exit 0:**
   - backend: ruff format (169 files), ruff check, mypy (169 files), alembic check;
   - pytest **982 passed** (965 plus 17 new: 9 unit heartbeat/error-type tests, 1 unit missing-payload test, 7 integration tests for failed-job visibility, retry and audit, workspace scoping, permanent publish failures and heartbeat recording, plus 2 readiness cases);
@@ -583,6 +609,6 @@
 None.
 
 ## Next exact action
-1. **Push Step 4.3** on the owner's go-ahead, and confirm CI on GitHub.
-2. **Step 4.4 (dependency-aware scheduling and concurrency limits):** present a short plan and get the owner's go-ahead.
+1. **Push Step 4.4** on the owner's go-ahead, and confirm CI on GitHub.
+2. **Step 4.5 (cancellation and restart recovery, including OD-17):** present a short plan and get the owner's go-ahead.
 3. **Before any hosted deployment:** settle OD-14, OD-19 and OD-20.

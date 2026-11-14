@@ -69,7 +69,10 @@ describe("availableTaskActions", () => {
   const wf = (status: Workflow["status"]) => ({ status }) as Workflow;
 
   it("allows plan edits only while planning", () => {
-    expect(availableTaskActions(wf("PLANNING"), task("a"))).toEqual(["edit", "dependencies", "remove"]);
+    expect(availableTaskActions(wf("PLANNING"), task("a"))).toEqual(["edit", "dependencies", "preassign", "remove"]);
+    // Step 4.4: PENDING tasks can be pre-assigned while the workflow runs, too.
+    expect(availableTaskActions(wf("RUNNING"), task("a"))).toEqual(["preassign", "cancel"]);
+    expect(availableTaskActions(wf("COMPLETED"), task("a"))).toEqual([]);
     expect(availableTaskActions(wf("RUNNING"), task("a", [], { status: "READY" }))).toEqual(["assign", "cancel"]);
     expect(availableTaskActions(wf("RUNNING"), task("a", [], { status: "COMPLETED" }))).toEqual([]);
     expect(availableTaskActions(wf("PLANNING"), task("a", [], { removed: true }))).toEqual([]);

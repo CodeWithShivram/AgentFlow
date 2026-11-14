@@ -39,9 +39,19 @@ from app.schemas.workflows import TaskCreateRequest, TaskUpdateRequest
 from app.services import agents as agent_service
 from app.services import selection as selection_service
 from app.services.authorization import WorkspaceAccess
-from app.services.transitions import record_event, transition_task, transition_workflow
+from app.services.transitions import (
+    TransitionPreconditionError,
+    record_event,
+    transition_task,
+    transition_workflow,
+)
 from app.services.workflows import PlanDraftNotFoundError, get_workflow, lock_for_change
-from app.workflows.state_machine import PLAN_EDIT_REOPENS, PLAN_EDITABLE, Actor
+from app.workflows.state_machine import (
+    PLAN_EDIT_REOPENS,
+    PLAN_EDITABLE,
+    WORKFLOW_TERMINAL,
+    Actor,
+)
 
 T, W = TaskStatus, WorkflowStatus
 MAX_TASKS_PER_WORKFLOW = 200
@@ -300,14 +310,20 @@ async def update_task(
         await _open_plan_for_edit(session, workflow)
         for name, value in changes.items():
             setattr(task, name, value)
+        payload: dict[str, Any] = {"fields": sorted(changes), "user_id": str(access.user_id)}
+        if (
+            "required_skills" in changes
+            and task.status == T.PENDING
+            and task.assigned_agent_version_id is not None
+        ):
+            # The pre-assigned agent was checked against the old skills (ADR-0028).
+            task.assigned_agent_id = None
+            task.assigned_agent_version_id = None
+            payload["pre_assignment_cleared"] = True
         task.revision += 1
         workflow.revision += 1
         record_event(
-            session,
-            workflow,
-            WorkflowEventType.TASK_UPDATED,
-            task_id=task.id,
-            payload={"fields": sorted(changes), "user_id": str(access.user_id)},
+            session, workflow, WorkflowEventType.TASK_UPDATED, task_id=task.id, payload=payload
         )
     await session.commit()
     return task
@@ -387,7 +403,9 @@ async def assign_agent(
     """Assigns an ACTIVE agent and pins its current published version on the task.
 
     Allowed from READY (assign), REWORK_REQUIRED (retry: attempt_count + 1) and ESCALATED
-    (manual reassignment). Earlier assignments stay in the event history.
+    (manual reassignment). A PENDING task is pre-assigned (ADR-0028): its status does not
+    change, and the scheduler assigns and dispatches it once its dependencies complete.
+    Earlier assignments stay in the event history.
     """
     workflow = await lock_for_change(session, access, workflow_id, revision=None)
     task = await _get_task(session, workflow, task_id, revision)
@@ -419,6 +437,34 @@ async def assign_agent(
     if retry:
         task.attempt_count += 1
     reassigned = previous[0] is not None
+    details = {
+        "agent_id": str(agent_id),
+        "agent_version_id": str(version.id),
+        "agent_version": version.version,
+        "previous_agent_id": str(previous[0]) if previous[0] else None,
+        "previous_agent_version_id": str(previous[1]) if previous[1] else None,
+        "attempt_count": task.attempt_count,
+        "selection_id": str(selection.id),
+        "selection_rank": selection.rank,
+    }
+    if task.status == T.PENDING:
+        if workflow.status in WORKFLOW_TERMINAL:
+            raise TransitionPreconditionError("The workflow has finished.")
+        task.revision += 1
+        record_event(
+            session,
+            workflow,
+            WorkflowEventType.TASK_REASSIGNED if reassigned else WorkflowEventType.TASK_ASSIGNED,
+            task_id=task.id,
+            payload={
+                "actor": Actor.USER.value,
+                "user_id": str(access.user_id),
+                "pre_assigned": True,
+                **details,
+            },
+        )
+        await session.commit()
+        return task
     await transition_task(
         session,
         workflow,
@@ -426,16 +472,7 @@ async def assign_agent(
         T.ASSIGNED,
         actor=Actor.USER,
         event_type=WorkflowEventType.TASK_REASSIGNED if reassigned else None,
-        extra={
-            "agent_id": str(agent_id),
-            "agent_version_id": str(version.id),
-            "agent_version": version.version,
-            "previous_agent_id": str(previous[0]) if previous[0] else None,
-            "previous_agent_version_id": str(previous[1]) if previous[1] else None,
-            "attempt_count": task.attempt_count,
-            "selection_id": str(selection.id),
-            "selection_rank": selection.rank,
-        },
+        extra=details,
     )
     await session.commit()
     return task

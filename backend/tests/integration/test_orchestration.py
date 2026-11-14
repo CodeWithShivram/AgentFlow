@@ -107,7 +107,7 @@ def test_each_status_change_requests_one_assessment_that_is_stored_without_a_rev
     assert body["revision"] == before
     step = body["next_step"]
     assert step["kind"] == "complete_plan" and step["actor"] == "people"
-    assert step["graph_version"] == "orchestration/v1" and step["assessed_at"]
+    assert step["graph_version"] == "orchestration/v2" and step["assessed_at"]
     assert step["task_ids"] == []
 
 

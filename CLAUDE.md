@@ -111,6 +111,10 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   missing payload ids in `REQUIRED_PAYLOAD`), so the relay fails them at once. Failed jobs are retried only via
   `background_jobs.retry` (ADMIN, workflow lock, `BACKGROUND_JOB_RETRIED` event); clients see `error_type`, never
   `last_error`. Readiness includes the relay heartbeat in Redis; tests hitting `/health/ready` must write one.
+- Scheduling (ADR-0028): only `engine._dispatch_waiting` writes task dispatches, for at most the workflow's free
+  slots (`max_parallel_tasks` minus QUEUED/IN_PROGRESS) in `dispatch_order` (priority, then age); the worker claim
+  still enforces the limit. Pre-assigned PENDING tasks keep their status; `reconcile_workflow` assigns them
+  (SCHEDULER) when ready. No workspace-wide cap.
 - Workflow events are append-only.
 
 ## Security

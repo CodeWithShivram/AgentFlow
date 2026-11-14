@@ -20,7 +20,8 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
-GRAPH_VERSION = "orchestration/v1"
+# v2 (ADR-0028): assigned tasks waiting for a free slot are counted apart from running ones.
+GRAPH_VERSION = "orchestration/v2"
 
 # LangGraph depends on LangSmith, which can send traces to an external service when tracing
 # environment variables are set. Disabled here for the whole process, whatever the environment.
@@ -125,6 +126,8 @@ def count_tasks(state: OrchestrationState) -> dict[str, Any]:
         "counts": {
             "assign": sum(1 for t in tasks if _needs_assignment(t)),
             "in_flight": sum(statuses[s] for s in _IN_FLIGHT),
+            # Assigned but not yet claimed: just dispatched, or waiting for a free slot.
+            "waiting_for_slot": statuses["ASSIGNED"],
             "awaiting_verification": sum(statuses[s] for s in _AWAITING_VERIFICATION),
             "blocked": statuses["BLOCKED"] + statuses["WAITING_APPROVAL"],
             "pending": statuses["PENDING"],
@@ -184,13 +187,22 @@ def assign_agents(state: OrchestrationState) -> dict[str, Any]:
 
 def running(state: OrchestrationState) -> dict[str, Any]:
     counts = state["counts"]
-    waiting = counts["awaiting_verification"]
-    extra = f"; {waiting} awaiting verification" if waiting else ""
+    working = counts["in_flight"] - counts["waiting_for_slot"]
+    if working:
+        head = f"Agents are working on {_plural(working, 'task')}"
+        notes = [f"{counts['waiting_for_slot']} waiting for a free slot"] * bool(
+            counts["waiting_for_slot"]
+        )
+    else:
+        head = f"{_plural(counts['waiting_for_slot'], 'task')} assigned and about to start"
+        notes = []
+    if counts["awaiting_verification"]:
+        notes.append(f"{counts['awaiting_verification']} awaiting verification")
     return {
         "next_step": NextStep(
             kind="running",
             actor="agents",
-            summary=f"Agents are working on {_plural(counts['in_flight'], 'task')}{extra}.",
+            summary=head + "".join(f"; {note}" for note in notes) + ".",
             task_ids=_ids(state, _IN_FLIGHT),
         )
     }

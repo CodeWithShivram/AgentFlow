@@ -27,7 +27,7 @@ def test_the_graph_is_a_compiled_langgraph_with_one_node_per_outcome() -> None:
         "awaiting_verification",
         "blocked",
     }
-    assert GRAPH_VERSION == "orchestration/v1"
+    assert GRAPH_VERSION == "orchestration/v2"
 
 
 @pytest.mark.parametrize(
@@ -113,3 +113,27 @@ def test_langsmith_tracing_stays_off_whatever_the_environment(
     monkeypatch.setenv("LANGSMITH_TRACING", "true")
     monkeypatch.setenv("LANGCHAIN_TRACING_V2", "true")
     assert langsmith_utils.tracing_is_enabled() is False
+
+
+@pytest.mark.parametrize(
+    ("tasks", "summary"),
+    [
+        (
+            [
+                _task(1, "IN_PROGRESS", assigned=True),
+                _task(2, "QUEUED", assigned=True),
+                _task(3, "ASSIGNED", assigned=True),
+            ],
+            "Agents are working on 2 tasks; 1 waiting for a free slot.",
+        ),
+        (
+            [_task(1, "ASSIGNED", assigned=True), _task(2, "SUBMITTED", assigned=True)],
+            "1 task assigned and about to start; 1 awaiting verification.",
+        ),
+    ],
+)
+def test_assigned_tasks_waiting_for_a_slot_are_counted_apart(
+    tasks: list[TaskView], summary: str
+) -> None:
+    step = _assess("RUNNING", tasks)
+    assert step["kind"] == "running" and step["summary"] == summary

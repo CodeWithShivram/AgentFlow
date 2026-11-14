@@ -48,6 +48,8 @@ from app.models import (
     ToolInvocationStatus,
     User,
     Workflow,
+    WorkflowEvent,
+    WorkflowEventType,
     WorkflowStatus,
     WorkflowTask,
     Workspace,
@@ -472,17 +474,24 @@ def test_parallel_limit_defers_and_a_finished_task_dispatches_the_next(
     world = _world(admin_factory, tasks=2, max_parallel=1)
     first, second = world.task_ids
     _assign(admin_factory, world, first)
-    _assign(admin_factory, world, second)
-    first_event, second_event = _dispatch_events(admin_factory)
-
+    (first_event,) = _dispatch_events(admin_factory)
     running = _claim(worker_factory, first_event)
     assert isinstance(running, runner.Claim)
-    assert _claim(worker_factory, second_event) == runner.Skipped.DEFERRED
+    # Step 4.4 (ADR-0028): the slot is taken, so assigning `second` writes no dispatch yet.
+    _assign(admin_factory, world, second)
+    assert _dispatch_events(admin_factory, second) == []
     assert _status(admin_factory, second) == TaskStatus.ASSIGNED
+
+    # The claim still enforces the limit, e.g. for a dispatch written before the slot filled.
+    with session_scope(admin_factory) as s:
+        engine.request_dispatch(s, _locked(s, world), _task(s, second))
+        s.commit()
+    (early,) = _dispatch_events(admin_factory, second)
+    assert _claim(worker_factory, early) == runner.Skipped.DEFERRED
 
     _finish(worker_factory, running)  # frees the slot: a new dispatch is written for `second`
     redispatch = _dispatch_events(admin_factory, second)[-1]
-    assert redispatch.id != second_event.id
+    assert redispatch.id != early.id
     assert isinstance(_claim(worker_factory, redispatch), runner.Claim)
 
 
@@ -1077,3 +1086,122 @@ def test_a_version_without_a_runtime_fails_its_attempt(
 def _finish_with(worker: Factory, claim: runner.Claim, outcome: Any) -> str:
     with session_scope(worker) as s:
         return runner.finish(s, claim, outcome)
+
+
+# --- dependency-aware scheduling (Step 4.4, ADR-0028) --------------------------------------------
+
+
+def _set_priorities(admin: Factory, world: World, priorities: list[int]) -> None:
+    with session_scope(admin) as s:
+        for task_id, priority in zip(world.task_ids, priorities, strict=True):
+            _task(s, task_id).priority = priority
+        s.commit()
+
+
+def _verify(admin: Factory, world: World, task_id: uuid.UUID) -> None:
+    """Stands in for platform verification (Phase 5): SUBMITTED -> VERIFYING -> COMPLETED."""
+    with session_scope(admin) as s:
+        workflow, task = _locked(s, world), _task(s, task_id)
+        engine.transition_task(s, workflow, task, TaskStatus.VERIFYING, actor=Actor.VERIFIER)
+        engine.transition_task(s, workflow, task, TaskStatus.COMPLETED, actor=Actor.VERIFIER)
+        _drop_orchestration_requests(s)
+        s.commit()
+
+
+def test_independent_tasks_run_concurrently_up_to_the_limit_in_priority_order(
+    admin_factory: Factory, worker_factory: Factory
+) -> None:
+    world = _world(admin_factory, tasks=3, max_parallel=2)
+    _set_priorities(admin_factory, world, [0, 5, 9])
+    with session_scope(admin_factory) as s:
+        # Assigned together while paused, then resumed: one scheduling decision for all three.
+        workflow = _locked(s, world)
+        engine.transition_workflow(s, workflow, WorkflowStatus.PAUSED, actor=Actor.USER)
+        for task_id in world.task_ids:
+            task = _task(s, task_id)
+            task.assigned_agent_id, task.assigned_agent_version_id = (
+                world.agent_id,
+                world.version_id,
+            )
+            engine.transition_task(s, workflow, task, TaskStatus.ASSIGNED, actor=Actor.USER)
+        engine.transition_workflow(s, workflow, WorkflowStatus.RUNNING, actor=Actor.USER)
+        _drop_orchestration_requests(s)
+        s.commit()
+
+    dispatched = [e.task_id for e in _dispatch_events(admin_factory)]
+    assert sorted(dispatched, key=str) == sorted(world.task_ids[1:], key=str)  # the top two
+    claims = [_claim(worker_factory, e) for e in _dispatch_events(admin_factory)]
+    assert all(isinstance(c, runner.Claim) for c in claims)  # both run at the same time
+    assert [_status(admin_factory, t) for t in world.task_ids] == [
+        TaskStatus.ASSIGNED,
+        TaskStatus.IN_PROGRESS,
+        TaskStatus.IN_PROGRESS,
+    ]
+
+    first = claims[0]
+    assert isinstance(first, runner.Claim)
+    _finish(worker_factory, first)  # a slot frees: the remaining task is dispatched
+    assert [e.task_id for e in _dispatch_events(admin_factory, world.task_ids[0])] == [
+        world.task_ids[0]
+    ]
+
+
+def test_a_freed_slot_goes_to_the_highest_priority_waiting_task(
+    admin_factory: Factory, worker_factory: Factory
+) -> None:
+    world = _world(admin_factory, tasks=3, max_parallel=1)
+    low, high, running_id = world.task_ids
+    _set_priorities(admin_factory, world, [1, 7, 0])
+    _assign(admin_factory, world, running_id)
+    (event,) = _dispatch_events(admin_factory)
+    running = _claim(worker_factory, event)
+    assert isinstance(running, runner.Claim)
+    _assign(admin_factory, world, low)  # waits: no free slot
+    _assign(admin_factory, world, high)  # waits too, but outranks `low`
+
+    _finish(worker_factory, running)
+
+    assert len(_dispatch_events(admin_factory, high)) == 1
+    assert _dispatch_events(admin_factory, low) == []
+
+
+def test_a_pre_assigned_task_is_dispatched_when_its_dependencies_complete(
+    admin_factory: Factory, worker_factory: Factory
+) -> None:
+    world = _world(admin_factory, tasks=2)
+    prerequisite, dependent = world.task_ids
+    with session_scope(admin_factory) as s:
+        workflow = _locked(s, world)
+        s.add(
+            TaskDependency(
+                task_id=dependent, depends_on_task_id=prerequisite, workflow_id=world.workflow_id
+            )
+        )
+        task = _task(s, dependent)
+        # Created READY by the test world; with an unfinished dependency it waits as PENDING.
+        task.status = TaskStatus.PENDING
+        task.assigned_agent_id, task.assigned_agent_version_id = world.agent_id, world.version_id
+        s.commit()
+        assert workflow.status == WorkflowStatus.RUNNING
+
+    _assign(admin_factory, world, prerequisite)
+    (event,) = _dispatch_events(admin_factory)
+    claim = _claim(worker_factory, event)
+    assert isinstance(claim, runner.Claim)
+    _finish(worker_factory, claim)
+    assert _status(admin_factory, dependent) == TaskStatus.PENDING  # never runs early
+    assert _dispatch_events(admin_factory, dependent) == []
+
+    _verify(admin_factory, world, prerequisite)
+
+    assert _status(admin_factory, dependent) == TaskStatus.ASSIGNED
+    (dispatch,) = _dispatch_events(admin_factory, dependent)
+    with session_scope(admin_factory) as s:
+        assigned = s.execute(
+            select(WorkflowEvent).where(
+                WorkflowEvent.task_id == dependent,
+                WorkflowEvent.event_type == WorkflowEventType.TASK_ASSIGNED,
+            )
+        ).scalar_one()
+    assert assigned.payload["actor"] == "SCHEDULER" and assigned.payload["pre_assigned"] is True
+    assert isinstance(_claim(worker_factory, dispatch), runner.Claim)
