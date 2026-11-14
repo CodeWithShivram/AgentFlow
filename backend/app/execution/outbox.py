@@ -28,6 +28,8 @@ from app.models import InboxMessage, OutboxEvent, OutboxStatus
 TASK_DISPATCH = "task.dispatch"
 WORKFLOW_ANALYZE = "workflow.analyze"
 WORKFLOW_PLAN = "workflow.plan"
+# Asks the orchestration graph to reassess a workflow (ADR-0025).
+WORKFLOW_ORCHESTRATE = "workflow.orchestrate"
 _MAX_BACKOFF_SECONDS = 300
 _MAX_ERROR_LENGTH = 1000
 

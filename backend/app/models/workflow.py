@@ -161,6 +161,9 @@ class Workflow(Base):
     plan_request_id: Mapped[uuid.UUID | None]
     # The draft version most recently confirmed into tasks (Step 2.5).
     confirmed_plan_version: Mapped[int | None]
+    # The orchestration graph's latest assessment (ADR-0025): kind, actor, summary, task_ids,
+    # assessed_at and graph_version. Written by workers; never bumps `revision`.
+    next_step: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     status: Mapped[WorkflowStatus] = mapped_column(
         str_enum(WorkflowStatus, "status"), default=WorkflowStatus.PENDING
     )

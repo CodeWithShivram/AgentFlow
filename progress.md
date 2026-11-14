@@ -1,9 +1,9 @@
 # AgentFlow Progress
 
 ## Current position
-- Phase: 3 — Specialized agents, complete (Phase 2 complete; Phase 1 released as `v0.1.0`, pushed with its tag)
-- Last completed step: 3.7 — Agent proposal workflow with admin approval before activation
-- Next step: 4.1 — LangGraph workflow state and nodes (Phase 4, orchestration and scheduling). It adds a new dependency (LangGraph, handoff §3), so it needs a short plan and the owner's decisions.
+- Phase: 4 — Orchestration and scheduling (Phases 2 and 3 complete; Phase 1 released as `v0.1.0`, pushed with its tag)
+- Last completed step: 4.1 — LangGraph workflow state and nodes
+- Next step: 4.2 — PostgreSQL checkpoint persistence, which needs a short plan and the owner's go-ahead (likely the `langgraph-checkpoint-postgres` dependency)
 
 ## Completed steps
 | Step | Commit message | Hash |
@@ -33,22 +33,52 @@
 | 3.4 | `feat(agents): add Research, Analyst, Writer and General agents` | `d51668f` (pushed, CI ✔) |
 | 3.5 | `feat(agents): add Developer and QA agents without execution` | `46cb587` (pushed, CI ✔) |
 | 3.6 | `feat(agents): add rule-based agent selection with stored rationale` | `3fbde4f` (pushed, CI ✔) |
-| 3.7 | `feat(agents): file platform agent proposals with permission review` | latest commit touching `docs/ADR/0024-platform-agent-proposals.md` |
+| 3.7 | `feat(agents): file platform agent proposals with permission review` | `437faab` (pushed, CI ✔) |
+| 4.1 | `feat(orchestration): add LangGraph workflow assessment graph` | latest commit touching `docs/ADR/0025-orchestration-graph.md` |
 
 ## Environment snapshot (2026-11-14)
 | Item | Value |
 |---|---|
-| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `3fbde4f` plus tag `v0.1.0` (owner-authorized) |
+| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `437faab` plus tag `v0.1.0` (owner-authorized) |
 | Python / uv / Node / npm | 3.12.14 via uv 0.12.9 / Node 24.13.0 / npm 11.6.2 |
 | Celery / kombu | 5.7.0 / 5.7.0 |
 | Docker | 29.9.3 — `agentflow` stack healthy (Docker Desktop must be started first; it had stopped and was restarted in Steps 3.1 and 3.4) |
-| Dev database | `agentflow` at `0014 (head)`; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
+| Dev database | `agentflow` at `0015 (head)`; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
 | Local `.env` | holds generated `WORKER_DB_PASSWORD` and (new) `API_DB_PASSWORD` (gitignored) |
 | Port 8000 | Used by another local project (`easa`); smoke tests used 8010 |
 | E2E | API :8011 (as `agentflow_api`), frontend :3100, database `agentflow_e2e` (reset each run), Redis DBs 2/3, installed Google Chrome |
 | Frontend audit | `npm audit --omit=dev`: 0 vulnerabilities; dev-only: 8 moderate, all the existing `minimatch` chain via ESLint |
 | Test HTTP client | `httpx2` 2.16.0 (replaces `httpx`, OD-10); `httpx` is back only as a LiteLLM dependency |
 | LiteLLM | 1.109.1, imported by workers only when `MODEL_PROVIDER=litellm`; `.env` keeps the mock |
+| LangGraph | 1.2.22 (with langchain-core 1.8.0 and langsmith 0.14.17), imported by workers only; LangSmith tracing disabled |
+
+## Step 4.1 — LangGraph orchestration graph (ADR-0025)
+- **Owner decisions (2026-11-14):**
+  - assess and report only, with no new automatic work;
+  - a workflow page banner.
+- **New dependency:** `langgraph` 1.2.22 (handoff §3), locked in `uv.lock`. It brings `langchain-core`, `langgraph-checkpoint`/`-prebuilt`/`-sdk` and `langsmith`; LangSmith tracing is disabled via `langsmith.configure(enabled=False)`.
+- **`app/orchestration/graph.py` (`orchestration/v1`):**
+  - state: workflow status and task snapshot (identifiers and statuses only), counts, `next_step`;
+  - nodes: `count_tasks`, a conditional `route`, and terminal nodes (`finished`, `workflow_step`, `assign_agents`, `running`, `awaiting_verification`, `blocked`) returning `{kind, actor, summary, task_ids}`.
+- **Trigger and job:**
+  - `engine.request_orchestration` writes one `workflow.orchestrate` outbox row per status-changing transaction (deduplicated by a per-transaction marker);
+  - `app/orchestration/job.py` (Celery `agentflow.orchestrate_workflow`): inbox deduplication, workflow lock, snapshot, graph, then stores `workflows.next_step` without bumping `revision`.
+- **Migration `0015_orchestration_next_step`:** `workflows.next_step` JSONB. `WorkflowResponse.next_step` is null until the first assessment.
+- **Frontend:**
+  - a "Next step" banner (title by actor, summary, assessed time);
+  - after new events, up to five extra polls refresh the workflow while its assessment is older than the latest event.
+- **Tests changed:** the relay and dispatch tests remove orchestration requests in their setup, as they did for analysis requests. The real-worker test selects the dispatch event by type.
+- **Bug found by a new test and fixed:** tasks awaiting rework keep their previous assignment, and were first counted but left out of the listed task IDs. Counting and listing now share one rule.
+
+## Checks last executed (Step 4.1)
+- **Full gate (`check.ps1 -E2E`) ✔, exit 0:**
+  - backend: ruff format (161 files), ruff check, mypy (161 files), alembic check;
+  - pytest **961 passed** (941 plus 20 new: 17 unit graph tests including the LangSmith-off check, and 3 integration tests: one request per transaction, stored without a revision bump, redelivery, any delivery order, a foreign-workspace delivery);
+  - frontend: eslint, typecheck, Vitest **104** (4 new: banner and stale-assessment check), Playwright **14 passed** (journey 8/9 now waits for the banner to say "awaiting verification"), build.
+- **Warnings.** pytest's 12 warnings are the known LiteLLM-internal pydantic notices.
+- **API imports:** the API process loads neither LangGraph, LangSmith, the graph nor LiteLLM (checked).
+- **Deliberate-bug check** (reverted): removing the per-transaction deduplication makes the delivery-order test fail (more than one request per transaction).
+- **Environment:** the dev DB is at `0015`, and both roles were re-provisioned; no servers were left running after E2E.
 
 ## Step 3.7 — platform agent proposals (ADR-0024)
 - **Owner decisions (2026-11-14):**
@@ -66,7 +96,7 @@
   - the proposal response has its source links, and the catalog tools have `usable_now`;
   - the Proposals page shows "by the platform" with a source-workflow link, and a **Permission review** (risk, usable now or permission only, owner needed for HIGH, or "Requests no tools").
 
-## Checks last executed (Step 3.7)
+## Checks (Step 3.7)
 - **Full gate (`check.ps1 -E2E`) ✔, exit 0:**
   - backend: ruff format (155 files), ruff check, mypy (155 files), alembic check;
   - pytest **941 passed** (938 plus 3 new integration tests: one proposal per uncovered skill set with dedupe and INACTIVE approval; none without the setting; frozen source links). The catalog test now also checks `usable_now`;
@@ -497,6 +527,6 @@
 None.
 
 ## Next exact action
-1. **Push Step 3.7** on the owner's go-ahead, and confirm CI on GitHub. Phase 3 is then complete.
-2. **Step 4.1 (LangGraph workflow state and nodes):** present a short plan and get the owner's go-ahead, including the new LangGraph dependency.
+1. **Push Step 4.1** on the owner's go-ahead, and confirm CI on GitHub.
+2. **Step 4.2 (PostgreSQL checkpoint persistence):** present a short plan and get the owner's go-ahead.
 3. **Before any hosted deployment:** settle OD-14, OD-19 and OD-20.

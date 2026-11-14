@@ -283,6 +283,15 @@ export interface Proposal {
 
 // --- workflows and tasks --------------------------------------------------------------------
 
+export interface NextStep {
+  kind: string;
+  actor: "people" | "agents" | "platform" | "none";
+  summary: string;
+  task_ids: Uuid[];
+  assessed_at: IsoDateTime;
+  graph_version: string;
+}
+
 export interface WorkflowSettings {
   autonomy_policy: AutonomyPolicy;
   budget_limit: string | null;
@@ -307,6 +316,8 @@ export interface Workflow {
   normalized_requirements: PromptAnalysis | null;
   plan_status: PlanStatus;
   confirmed_plan_version: number | null;
+  /** The orchestration graph's latest assessment; null until the first one (ADR-0025). */
+  next_step: NextStep | null;
   autonomy_policy: AutonomyPolicy;
   budget_limit: string | null;
   currency: string;

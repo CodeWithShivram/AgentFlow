@@ -138,6 +138,10 @@ test("journeys 8 and 9: approve, start, assign an agent and monitor execution", 
 
   // Journey 9: the outbox relay, Celery worker and Writer runtime (mock model) run the task.
   await expect(visibleText(page, "Submitted")).toBeVisible({ timeout: 60_000 });
+  // Step 4.1: a worker reassesses the workflow with the orchestration graph after each change.
+  await expect(page.getByRole("region", { name: "Next step" })).toContainText("awaiting verification", {
+    timeout: 30_000,
+  });
   await page.getByRole("button", { name: "Details" }).click();
   const attempts = page.getByRole("list", { name: "Execution attempts for Draft the notes" });
   await expect(attempts.getByText("Attempt 1", { exact: true })).toBeVisible();

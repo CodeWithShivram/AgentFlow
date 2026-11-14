@@ -12,6 +12,7 @@ from app.agents.specialists import AgentRuntimeUnavailableError
 from app.db.sync_session import get_worker_session_factory, session_scope
 from app.execution import cleanup, outbox, relay, runner
 from app.llm.gateway import ModelGatewayError, get_model_gateway
+from app.orchestration import job as orchestration_job
 from app.planning import analysis, plan
 from app.tools.gateway import ToolError
 from app.worker.celery_app import EXECUTION_QUEUE, celery_app, settings
@@ -23,6 +24,7 @@ EVENT_ROUTES = {
     outbox.TASK_DISPATCH: ("agentflow.execute_task", EXECUTION_QUEUE),
     outbox.WORKFLOW_ANALYZE: ("agentflow.analyze_workflow", EXECUTION_QUEUE),
     outbox.WORKFLOW_PLAN: ("agentflow.plan_workflow", EXECUTION_QUEUE),
+    outbox.WORKFLOW_ORCHESTRATE: ("agentflow.orchestrate_workflow", EXECUTION_QUEUE),
 }
 _FINISH_ATTEMPTS = 3
 # Default agent timeout (handoff section 6): 600 s. Hard limit gives the soft one room to finish.
@@ -121,6 +123,21 @@ def execute_task(
         extra={"event_id": event_id, "execution_id": str(claimed.execution_id), "outcome": outcome},
     )
     return outcome
+
+
+@celery_app.task(name="agentflow.orchestrate_workflow", soft_time_limit=30, time_limit=60)
+def orchestrate_workflow(event_id: str, workspace_id: str, workflow_id: str) -> str:
+    """Reassesses a workflow with the orchestration graph (ADR-0025). Idempotent on
+    `event_id`; no model call, one short transaction."""
+    with session_scope(get_worker_session_factory()) as session:
+        outcome = orchestration_job.run(
+            session,
+            event_id=uuid.UUID(event_id),
+            workspace_id=uuid.UUID(workspace_id),
+            workflow_id=uuid.UUID(workflow_id),
+        )
+    logger.info("workflow assessed", extra={"event_id": event_id, "outcome": outcome.value})
+    return outcome.value
 
 
 @celery_app.task(

@@ -173,6 +173,17 @@ class AssignRequest(BaseModel):
 # --- responses ------------------------------------------------------------------------------
 
 
+class NextStepResponse(BaseModel):
+    """The orchestration graph's latest assessment of a workflow (ADR-0025)."""
+
+    kind: str
+    actor: Literal["people", "agents", "platform", "none"]
+    summary: str
+    task_ids: list[uuid.UUID]
+    assessed_at: datetime
+    graph_version: str
+
+
 class WorkflowResponse(BaseModel):
     id: uuid.UUID
     workspace_id: uuid.UUID
@@ -186,6 +197,8 @@ class WorkflowResponse(BaseModel):
     plan_status: PlanStatus
     # The draft version last confirmed into tasks (Step 2.5).
     confirmed_plan_version: int | None
+    # Null until the orchestration graph has assessed the workflow once (ADR-0025).
+    next_step: NextStepResponse | None = None
     autonomy_policy: AutonomyPolicy
     budget_limit: Decimal | None
     currency: str

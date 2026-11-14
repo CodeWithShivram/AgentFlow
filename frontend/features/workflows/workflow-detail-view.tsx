@@ -31,6 +31,7 @@ import { PLAN_EDIT_REOPENS, PLAN_EDITABLE, WORKFLOW_STATUS_HELP } from "./status
 import { type TaskAction, TaskList } from "./task-list";
 import { TaskFormDialog } from "./task-form-dialog";
 import { useWorkflow, workflowKeys } from "./use-workflow";
+import { NextStepBanner } from "./next-step-banner";
 import { WorkflowActions } from "./workflow-actions";
 
 export function WorkflowDetailView() {
@@ -111,6 +112,8 @@ export function WorkflowDetailView() {
           <p className="text-sm text-muted-foreground">You have read-only access to this workflow.</p>
         )}
       </header>
+
+      <NextStepBanner nextStep={wf.next_step} />
 
       {planEditable && PLAN_EDIT_REOPENS.has(wf.status) ? (
         <Alert>

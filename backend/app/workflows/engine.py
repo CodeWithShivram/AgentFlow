@@ -215,6 +215,31 @@ def request_plan(session: Session, workflow: Workflow, *, actor: Actor) -> uuid.
     return event_id
 
 
+_ORCHESTRATION_MARKER = "agentflow.orchestration_requested"
+
+
+def request_orchestration(session: Session, workflow: Workflow) -> None:
+    """Asks a worker to reassess the workflow with the orchestration graph (ADR-0025): one
+    `workflow.orchestrate` outbox row per transaction that changes a status, written in that
+    transaction. The job reads the committed state, so later requests supersede nothing."""
+    # Deduplicated per transaction: rows flushed earlier in it are no longer in `session.new`.
+    transaction = session.get_transaction()
+    marker: tuple[object, set[uuid.UUID]] | None = session.info.get(_ORCHESTRATION_MARKER)
+    if marker is None or marker[0] is not transaction:
+        marker = (transaction, set())
+        session.info[_ORCHESTRATION_MARKER] = marker
+    if workflow.id in marker[1]:
+        return
+    marker[1].add(workflow.id)
+    outbox.enqueue(
+        session,
+        outbox.WORKFLOW_ORCHESTRATE,
+        workspace_id=workflow.workspace_id,
+        workflow_id=workflow.id,
+        payload={"workspace_id": str(workflow.workspace_id), "workflow_id": str(workflow.id)},
+    )
+
+
 def _dispatch_waiting(session: Session, workflow: Workflow) -> None:
     if workflow.status != W.RUNNING:
         return
@@ -250,6 +275,7 @@ def transition_workflow(
     if reason:
         payload["reason"] = reason
     record_event(session, workflow, _workflow_event_type(source, target), payload=payload)
+    request_orchestration(session, workflow)
     if source == W.PENDING and target == W.PLANNING:
         # Planning starts with an analysis of the request, in the background.
         request_analysis(session, workflow, actor=actor)
@@ -367,6 +393,7 @@ def transition_task(
         task_id=task.id,
         payload=payload,
     )
+    request_orchestration(session, workflow)
     if target == T.ASSIGNED and workflow.status == W.RUNNING:
         request_dispatch(session, workflow, task)
     # Flush so later queries in this transaction (and DB constraints) see the change; app

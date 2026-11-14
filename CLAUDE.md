@@ -98,6 +98,11 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   so the API may use them; drafts are always acyclic. Confirming a draft (ADR-0017, `tasks.confirm_plan_draft`) is a plan
   edit under the workflow lock and revision: errors block, warnings need acknowledgement, existing tasks are replaced
   (removed as history) or appended by explicit choice; it never starts work.
+- Orchestration (ADR-0025, `app/orchestration/`): a LangGraph graph imported only by workers. Every status-changing
+  transaction writes one `workflow.orchestrate` outbox row (`engine.request_orchestration`); the job assesses under the
+  workflow lock and stores `workflows.next_step` without bumping `revision`. Nodes only read and decide; any node that
+  acts must change state through the engine. Keep LangSmith tracing disabled (`langsmith.configure(enabled=False)`).
+  Tests that count outbox rows must filter by event type.
 - Workflow events are append-only.
 
 ## Security

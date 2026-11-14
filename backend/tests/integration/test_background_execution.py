@@ -135,6 +135,7 @@ def _world(admin: Factory, *, tasks: int = 1, max_parallel: int = 3) -> World:
                 OutboxEvent.event_type == outbox.WORKFLOW_ANALYZE,
             )
         )
+        _drop_orchestration_requests(s)
         s.commit()
         return World(workspace.id, workflow.id, [t.id for t in rows], agent.id, version.id, user.id)
 
@@ -150,12 +151,19 @@ def _task(s: Session, task_id: uuid.UUID) -> WorkflowTask:
     return s.execute(select(WorkflowTask).where(WorkflowTask.id == task_id)).scalar_one()
 
 
+def _drop_orchestration_requests(s: Session) -> None:
+    """These tests exercise task dispatch and the relay, so the orchestration requests that
+    status changes also write are removed; tests/integration/test_orchestration.py covers them."""
+    s.execute(delete(OutboxEvent).where(OutboxEvent.event_type == outbox.WORKFLOW_ORCHESTRATE))
+
+
 def _assign(admin: Factory, world: World, task_id: uuid.UUID, *, commit: bool = True) -> None:
     with session_scope(admin) as s:
         workflow = _locked(s, world)
         task = _task(s, task_id)
         task.assigned_agent_id, task.assigned_agent_version_id = world.agent_id, world.version_id
         engine.transition_task(s, workflow, task, TaskStatus.ASSIGNED, actor=Actor.USER)
+        _drop_orchestration_requests(s)
         if commit:
             s.commit()
         else:
@@ -804,7 +812,9 @@ def test_dispatch_reaches_a_real_worker_through_redis(
             connection.default_channel.queue_purge(EXECUTION_QUEUE)
 
     execution = _scalar(admin_factory, select(AgentExecution))
-    event = _scalar(admin_factory, select(OutboxEvent))
+    event = _scalar(
+        admin_factory, select(OutboxEvent).where(OutboxEvent.event_type == outbox.TASK_DISPATCH)
+    )
     assert execution.status == ExecutionStatus.SUCCEEDED
     assert execution.dispatch_event_id == event.id
     assert event.status == OutboxStatus.PUBLISHED
@@ -1005,6 +1015,7 @@ def _assign_version(admin: Factory, world: World, configuration: dict[str, Any])
         workflow, task = _locked(s, world), _task(s, world.task_ids[0])
         task.assigned_agent_id, task.assigned_agent_version_id = world.agent_id, version.id
         engine.transition_task(s, workflow, task, TaskStatus.ASSIGNED, actor=Actor.USER)
+        _drop_orchestration_requests(s)
         s.commit()
 
 

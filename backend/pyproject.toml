@@ -9,6 +9,7 @@ dependencies = [
     "celery[redis]>=5.7.0",
     "email-validator>=2.3.0",
     "fastapi>=0.162.1",
+    "langgraph>=1.2.22",
     "litellm>=1.109.1",
     "psycopg[binary]>=3.3.8",
     "pydantic-settings>=2.16.2",

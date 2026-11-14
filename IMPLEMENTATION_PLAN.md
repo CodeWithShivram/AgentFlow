@@ -146,13 +146,13 @@ Acceptance (phase): deterministic tests with mock model responses; invalid plans
 | 3.4 | Research, Analyst, Writer, General agents | DONE (ADR-0021) — `d51668f` |
 | 3.5 | Developer and QA agents (no unsafe shell/code execution) | DONE (ADR-0022) — `46cb587` |
 | 3.6 | Rule-based agent selection with persisted rationale | DONE (ADR-0023) — `3fbde4f` |
-| 3.7 | Agent proposal workflow with admin approval before activation | DONE (ADR-0024) — see `progress.md` |
+| 3.7 | Agent proposal workflow with admin approval before activation | DONE (ADR-0024) — `437faab` |
 
 ## Phase 4 — Orchestration and scheduling
 
 | Step | Title | Status |
 |---|---|---|
-| 4.1 | LangGraph workflow state and nodes | NOT_STARTED |
+| 4.1 | LangGraph workflow state and nodes | DONE (ADR-0025) — see `progress.md` |
 | 4.2 | PostgreSQL checkpoint persistence | NOT_STARTED |
 | 4.3 | Celery dispatch and worker lifecycle (outbox hardening, idempotent claims) | NOT_STARTED |
 | 4.4 | Dependency-aware scheduling and concurrency limits | NOT_STARTED |

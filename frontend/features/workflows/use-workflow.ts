@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef } from "react";
 
 import { api } from "@/lib/api";
-import type { EventPage, Task, Uuid, WorkflowEvent } from "@/lib/api/types";
+import type { EventPage, Task, Uuid, Workflow, WorkflowEvent } from "@/lib/api/types";
 
 import { TASK_IN_FLIGHT, WORKFLOW_ACTIVE } from "./status";
 
@@ -24,6 +24,17 @@ export const workflowKeys = {
 const TASK_PAGE = 100;
 const EVENT_PAGE = 500;
 const MAX_EVENT_PAGES_PER_POLL = 10;
+// After a change, a worker reassesses the workflow (ADR-0025) without writing an event; the next
+// few polls also refresh the workflow while its assessment is older than the latest event.
+const ASSESSMENT_CHECKS = 5;
+
+/** True when the workflow's next step was assessed before the latest event. */
+export function assessmentIsStale(workflow: Workflow | undefined, events: WorkflowEvent[]): boolean {
+  const latest = events.at(-1)?.created_at;
+  if (!workflow || !latest) return false;
+  const assessed = workflow.next_step?.assessed_at;
+  return !assessed || Date.parse(assessed) < Date.parse(latest);
+}
 
 /** Polling interval: fast after a change, slowing down while nothing happens. */
 export function pollDelay(unchangedPolls: number, failed: boolean): number {
@@ -64,6 +75,7 @@ export async function fetchNewEvents(
 export function useWorkflow(workspaceId: Uuid, workflowId: Uuid) {
   const queryClient = useQueryClient();
   const unchangedPolls = useRef(0);
+  const assessmentChecks = useRef(0);
 
   const workflow = useQuery({
     queryKey: workflowKeys.detail(workspaceId, workflowId),
@@ -92,8 +104,10 @@ export function useWorkflow(workspaceId: Uuid, workflowId: Uuid) {
         (after) => api.workflows.events(workspaceId, workflowId, { after, limit: EVENT_PAGE }),
         previous,
       );
+      const detailKey = workflowKeys.detail(workspaceId, workflowId);
       if (next.length > previous.length) {
         unchangedPolls.current = 0;
+        assessmentChecks.current = ASSESSMENT_CHECKS;
         if (previous.length > 0) {
           void queryClient.invalidateQueries({
             queryKey: workflowKeys.detail(workspaceId, workflowId),
@@ -102,6 +116,12 @@ export function useWorkflow(workspaceId: Uuid, workflowId: Uuid) {
         }
       } else {
         unchangedPolls.current += 1;
+        if (assessmentChecks.current > 0) {
+          assessmentChecks.current -= 1;
+          if (assessmentIsStale(queryClient.getQueryData<Workflow>(detailKey), next)) {
+            void queryClient.invalidateQueries({ queryKey: detailKey, exact: true });
+          }
+        }
       }
       return next;
     },
