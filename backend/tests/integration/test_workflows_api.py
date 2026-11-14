@@ -486,6 +486,8 @@ def test_agent_catalog_matches_platform_policy(
     assert {t["name"]: t["risk"] for t in body["tools"]} == {
         n: t.risk.value for n, t in TOOLS.items()
     }
+    # No tool is implemented yet (ADR-0019), so none is usable (Step 3.7 permission review).
+    assert {t["name"]: t["usable_now"] for t in body["tools"]} == dict.fromkeys(TOOLS, False)
     assert anonymous.status_code == 401
 
 

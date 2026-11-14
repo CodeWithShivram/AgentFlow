@@ -137,6 +137,8 @@ class CatalogTool(BaseModel):
     risk: str
     description: str
     available_in_phase_1: bool
+    # Implemented and enabled now (ADR-0019); granting an unusable tool records a permission only.
+    usable_now: bool
 
 
 class AgentCatalogResponse(BaseModel):
@@ -233,4 +235,7 @@ class ProposalResponse(BaseModel):
     reviewed_at: datetime | None
     review_note: str | None
     agent_id: uuid.UUID | None
+    # Set for platform proposals (ADR-0024): the workflow task that had no suitable agent.
+    source_workflow_id: uuid.UUID | None
+    source_task_id: uuid.UUID | None
     created_at: datetime

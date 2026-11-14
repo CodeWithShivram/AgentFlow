@@ -1,5 +1,6 @@
 """Plan drafts (Step 2.3) in PostgreSQL: chained after analysis, regenerate, failure, safety."""
 
+import json
 import uuid
 from collections.abc import Callable
 from functools import partial
@@ -7,7 +8,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -501,3 +502,133 @@ def test_confirming_after_approval_reopens_planning(
 
     assert again.status_code == 200
     assert again.json()["status"] == "PLANNING"  # the approval request is invalidated
+
+
+# --- platform agent proposals (Step 3.7, ADR-0024) -----------------------------------------------
+
+
+def _planned(key: str, skills: list[str]) -> dict[str, Any]:
+    return {
+        "key": key,
+        "title": f"Task {key}",
+        "required_skills": skills,
+        "deliverables": [f"Result {key}"],
+        "acceptance_criteria": [{"id": "c1", "description": "Done."}],
+    }
+
+
+def _drafted_with(
+    owner: TestClient,
+    admin: Factory,
+    jobs: dict[str, Callable[..., str]],
+    *,
+    allow_proposals: bool,
+) -> str:
+    """A confirmed-ready draft whose first task needs research and writing together (no single
+    built-in has both); the second needs research only; the third repeats the first's skills."""
+    created = owner.post(
+        _url(owner),
+        json={"prompt": PROMPT, "settings": {"allow_dynamic_agent_proposals": allow_proposals}},
+        headers=csrf(owner),
+    ).json()
+    owner.post(
+        _url(owner, created["id"], "/transitions"),
+        json={"to_status": "PLANNING", "revision": created["revision"]},
+        headers=csrf(owner),
+    )
+    (request,) = _requests(admin, created["id"], outbox.WORKFLOW_ANALYZE)
+    assert jobs["analysis"](request) == "ready"
+    draft = {
+        "summary": "Research and write.",
+        "tasks": [
+            _planned("t1", ["research", "report_writing"]),
+            _planned("t2", ["research"]),
+            _planned("t3", ["report_writing", "research"]),
+        ],
+    }
+    adapter = MockModelAdapter()
+    adapter.script(plan.PURPOSE, json.dumps(draft))
+    assert (
+        jobs["plan"](_requests(admin, created["id"], outbox.WORKFLOW_PLAN)[0], adapter) == "ready"
+    )
+    workflow_id: str = created["id"]
+    return workflow_id
+
+
+def _proposals(owner: TestClient) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = owner.get(
+        f"{API}/workspaces/{my_workspace(owner)}/agent-proposals"
+    ).json()["items"]
+    return items
+
+
+def test_confirming_files_one_platform_proposal_per_uncovered_skill_set(
+    owner: TestClient,
+    admin_factory: Factory,
+    jobs: dict[str, Callable[..., str]],
+    seeded_builtins: Settings,
+) -> None:
+    workflow_id = _drafted_with(owner, admin_factory, jobs, allow_proposals=True)
+
+    assert _confirm(owner, workflow_id).status_code == 200
+
+    (proposal,) = _proposals(owner)
+    first = next(t for t in _tasks(owner, workflow_id) if t["title"] == "Task t1")
+    assert proposal["status"] == "PENDING" and proposal["requested_by"] is None
+    assert proposal["source_workflow_id"] == workflow_id
+    assert proposal["source_task_id"] == first["id"]
+    assert proposal["name"] == "Specialist: report writing, research"
+    assert proposal["category"] == "custom"
+    configuration = proposal["proposed_configuration"]
+    assert configuration["capabilities"] == ["report_writing", "research"]
+    assert configuration["tools"] == []  # least privilege
+    assert configuration["system_instruction_ref"] == "builtin://general/v1"
+    assert "Task t1" in proposal["rationale"]
+    events = owner.get(_url(owner, workflow_id, "/events")).json()["items"]
+    assert events[-1]["payload"]["agent_proposals_created"] == 1
+
+    # Confirming again files no duplicate of the pending proposal.
+    assert _confirm(owner, workflow_id, existing_tasks="append").status_code == 200
+    assert len(_proposals(owner)) == 1
+    events = owner.get(_url(owner, workflow_id, "/events")).json()["items"]
+    assert events[-1]["payload"]["agent_proposals_created"] == 0
+
+    # Approval still needs an admin and creates an INACTIVE agent with exactly that version.
+    approved = owner.post(
+        f"{API}/workspaces/{my_workspace(owner)}/agent-proposals/{proposal['id']}/approve",
+        json={"note": "ok"},
+        headers=csrf(owner),
+    )
+    assert approved.status_code == 200, approved.text
+    agent = owner.get(
+        f"{API}/workspaces/{my_workspace(owner)}/agents/{approved.json()['agent_id']}"
+    ).json()
+    assert agent["status"] == "INACTIVE"
+
+
+def test_no_platform_proposals_unless_the_workflow_allows_them(
+    owner: TestClient,
+    admin_factory: Factory,
+    jobs: dict[str, Callable[..., str]],
+    seeded_builtins: Settings,
+) -> None:
+    workflow_id = _drafted_with(owner, admin_factory, jobs, allow_proposals=False)
+
+    assert _confirm(owner, workflow_id).status_code == 200
+
+    assert _proposals(owner) == []
+    events = owner.get(_url(owner, workflow_id, "/events")).json()["items"]
+    assert events[-1]["payload"]["agent_proposals_created"] == 0
+
+
+def test_platform_proposal_links_are_frozen(
+    owner: TestClient,
+    admin_factory: Factory,
+    jobs: dict[str, Callable[..., str]],
+    seeded_builtins: Settings,
+) -> None:
+    workflow_id = _drafted_with(owner, admin_factory, jobs, allow_proposals=True)
+    assert _confirm(owner, workflow_id).status_code == 200
+
+    with session_scope(admin_factory) as s, pytest.raises(DBAPIError):
+        s.execute(text("UPDATE agent_proposals SET source_task_id = NULL"))

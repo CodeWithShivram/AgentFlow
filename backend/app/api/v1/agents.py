@@ -26,6 +26,7 @@ from app.schemas.agents import (
 from app.schemas.workspaces import Page
 from app.services import agents as service
 from app.services.authorization import WorkspaceAccess
+from app.tools.registry import REGISTRY
 
 router = APIRouter(prefix="/workspaces/{workspace_id}", tags=["agents"])
 catalog_router = APIRouter(tags=["agents"])
@@ -44,6 +45,7 @@ async def agent_catalog(_: CurrentPrincipal) -> AgentCatalogResponse:
                 risk=t.risk.value,
                 description=t.description,
                 available_in_phase_1=t.available_in_phase_1,
+                usable_now=REGISTRY[t.name].available,
             )
             for t in sorted(TOOLS.values(), key=lambda t: (t.risk, t.name))
         ],
@@ -103,6 +105,8 @@ def _proposal(proposal: AgentProposal) -> ProposalResponse:
         reviewed_at=proposal.reviewed_at,
         review_note=proposal.review_note,
         agent_id=proposal.agent_id,
+        source_workflow_id=proposal.source_workflow_id,
+        source_task_id=proposal.source_task_id,
         created_at=proposal.created_at,
     )
 

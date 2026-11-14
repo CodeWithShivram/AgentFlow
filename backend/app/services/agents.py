@@ -523,3 +523,76 @@ async def reject_proposal(
     )
     await session.commit()
     return proposal
+
+
+# --- platform proposals (ADR-0024) -----------------------------------------------------------
+
+# The safe template: the General runtime's instructions, the task's skills, and no tools.
+PROPOSAL_INSTRUCTION_REF = "builtin://general/v1"
+
+
+@dataclass(frozen=True)
+class Gap:
+    """A task no active agent can take, by its required skills (ADR-0023 hard filters)."""
+
+    task_id: uuid.UUID
+    task_title: str
+    skills: list[str]
+
+
+def _skill_label(skill: str) -> str:
+    return skill.replace("_", " ")
+
+
+async def propose_specialists(
+    session: AsyncSession, *, workflow_id: uuid.UUID, workspace_id: uuid.UUID, gaps: list[Gap]
+) -> list[AgentProposal]:
+    """Files one PENDING proposal per distinct skill set that no active agent covers, in the
+    caller's transaction. Nothing is granted: approval still needs an admin who is not the
+    proposer, and an approved agent starts INACTIVE (ADR-0008).
+
+    Skipped: skill sets already pending, and sets whose generated name is already an agent's
+    (that specialist exists and may only need activating)."""
+    pending = await repository.pending_proposal_skill_sets(session, workspace_id=workspace_id)
+    created: list[AgentProposal] = []
+    for gap in gaps:
+        skills = sorted(set(gap.skills))
+        if not skills or frozenset(skills) in pending:
+            continue
+        labels = ", ".join(_skill_label(s) for s in skills)
+        name = f"Specialist: {labels}"[:100]
+        if await repository.name_taken(session, workspace_id=workspace_id, name=name):
+            continue
+        configuration = AgentConfiguration(
+            system_instruction_ref=PROPOSAL_INSTRUCTION_REF, capabilities=skills, tools=[]
+        )
+        proposal = AgentProposal(
+            id=uuid.uuid4(),
+            workspace_id=workspace_id,
+            name=name,
+            category="custom",
+            description=f"Handles tasks that need {labels}.",
+            rationale=(
+                f"Proposed by the platform: the task '{gap.task_title[:200]}' needs {labels}, "
+                "and no active agent has all of these skills. The proposal requests no tools "
+                "and uses the General agent's instructions."
+            ),
+            proposed_configuration=_stored(configuration),
+            status=AgentProposalStatus.PENDING,
+            requested_by=None,
+            source_workflow_id=workflow_id,
+            source_task_id=gap.task_id,
+        )
+        session.add(proposal)
+        await session.flush()  # the audit row references it
+        _audit(
+            session,
+            AgentAuditAction.PROPOSAL_SUBMITTED,
+            workspace_id=workspace_id,
+            actor_user_id=None,
+            proposal_id=proposal.id,
+            details={"source": "platform", "workflow_id": str(workflow_id)},
+        )
+        pending.add(frozenset(skills))
+        created.append(proposal)
+    return created

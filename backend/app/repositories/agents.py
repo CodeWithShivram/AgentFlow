@@ -178,3 +178,16 @@ async def active_with_versions(
         .order_by(Agent.name, Agent.id)
     )
     return [(row[0], row[1]) for row in rows]
+
+
+async def pending_proposal_skill_sets(
+    session: AsyncSession, *, workspace_id: uuid.UUID
+) -> set[frozenset[str]]:
+    """Capability sets of the workspace's PENDING proposals, to avoid filing duplicates."""
+    rows = await session.execute(
+        select(AgentProposal.proposed_configuration).where(
+            AgentProposal.workspace_id == workspace_id,
+            AgentProposal.status == AgentProposalStatus.PENDING,
+        )
+    )
+    return {frozenset(str(c) for c in cfg.get("capabilities", [])) for cfg in rows.scalars()}

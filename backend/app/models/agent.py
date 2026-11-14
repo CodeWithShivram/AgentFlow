@@ -136,6 +136,20 @@ class AgentProposal(Base):
             "reviewed_by IS NULL OR requested_by IS NULL OR reviewed_by <> requested_by",
             name="reviewer_not_requester",
         ),
+        # Platform proposals (ADR-0024) point to the workflow task that lacked an agent.
+        CheckConstraint(
+            "source_task_id IS NULL OR source_workflow_id IS NOT NULL", name="task_needs_workflow"
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id", "source_workflow_id"],
+            ["workflows.workspace_id", "workflows.id"],
+            name="fk_agent_proposals_source_workflow",
+        ),
+        ForeignKeyConstraint(
+            ["source_workflow_id", "source_task_id"],
+            ["workflow_tasks.workflow_id", "workflow_tasks.id"],
+            name="fk_agent_proposals_source_task",
+        ),
         Index("ix_agent_proposals_workspace_id_status", "workspace_id", "status"),
     )
 
@@ -160,6 +174,9 @@ class AgentProposal(Base):
     review_note: Mapped[str | None] = mapped_column(Text)
     # The agent created on approval.
     agent_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("agents.id", ondelete="CASCADE"))
+    # Set for platform proposals: the workflow and task that had no suitable agent.
+    source_workflow_id: Mapped[uuid.UUID | None]
+    source_task_id: Mapped[uuid.UUID | None]
     created_at: Mapped[datetime] = created_at_column()
     updated_at: Mapped[datetime] = updated_at_column()
 

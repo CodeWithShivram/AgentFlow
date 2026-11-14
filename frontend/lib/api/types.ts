@@ -211,6 +211,8 @@ export interface CatalogTool {
   risk: ToolRisk;
   description: string;
   available_in_phase_1: boolean;
+  /** Implemented and enabled now; granting an unusable tool records a permission only. */
+  usable_now: boolean;
 }
 
 export interface AgentCatalog {
@@ -273,6 +275,9 @@ export interface Proposal {
   reviewed_at: IsoDateTime | null;
   review_note: string | null;
   agent_id: Uuid | null;
+  /** Set for platform proposals: the workflow task that had no suitable agent. */
+  source_workflow_id: Uuid | null;
+  source_task_id: Uuid | null;
   created_at: IsoDateTime;
 }
 

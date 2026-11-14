@@ -72,6 +72,10 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   weights or factors only with a new version. Unmeasured factors are `not_scored`, never guessed. Assignments always
   store a server-computed `agent_selections` row (append-only, RLS) in the same transaction; never trust a client
   rationale. People decide; the platform only suggests.
+- Platform proposals (ADR-0024): only `agents.propose_specialists`, from plan confirmation when the workflow allows
+  proposals and a task has no eligible agent. The template is fixed (task skills, `builtin://general/v1`, no tools);
+  the platform never proposes tools or instructions. `requested_by` is NULL; approval stays ADMIN-only and creates an
+  INACTIVE agent. Source links are frozen with the proposal.
 - Tools (ADR-0019): agents call tools only via `context.tools.invoke(...)` (`app/tools/gateway.py`). A tool needs a
   `ToolDefinition` with an implementation in `app/tools/registry.py` (strict argument/result models) plus catalog policy;
   contracts list only usable grants. Calls outside the contract or over 50 per attempt are violations that fail the

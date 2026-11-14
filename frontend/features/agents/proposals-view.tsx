@@ -37,6 +37,7 @@ import { useCan, useWorkspace } from "@/lib/workspace";
 import { agentFormDefaults, type AgentFormValues, toConfiguration } from "./agent-config-fields";
 import { AgentForm } from "./agent-form";
 import { ConfigSummary } from "./config-summary";
+import { PermissionReview } from "./permission-review";
 
 const PAGE_SIZE = 20;
 type Decision = "approve" | "reject";
@@ -180,7 +181,7 @@ export function ProposalsView() {
                         <StatusBadge status={p.status} />
                         <span className="text-xs font-normal text-muted-foreground">
                           {humanize(p.category)} · submitted <RelativeTime value={p.created_at} />
-                          {own ? " by you" : ""}
+                          {own ? " by you" : p.requested_by === null ? " by the platform" : ""}
                         </span>
                       </CardTitle>
                     </CardHeader>
@@ -189,6 +190,16 @@ export function ProposalsView() {
                         <span className="font-medium">Rationale: </span>
                         {p.rationale}
                       </p>
+                      {p.source_workflow_id ? (
+                        <p className="text-sm">
+                          A task in{" "}
+                          <Link className="underline" href={workspacePath(workspace.id, `workflows/${p.source_workflow_id}`)}>
+                            this workflow
+                          </Link>{" "}
+                          had no suitable agent.
+                        </p>
+                      ) : null}
+                      <PermissionReview configuration={p.proposed_configuration} isOwner={isOwner} />
                       <details>
                         <summary className="cursor-pointer text-sm text-muted-foreground">Proposed configuration</summary>
                         <div className="mt-2">

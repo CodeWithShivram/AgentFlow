@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agents.selection import Candidate
 from app.core.errors import AppError
 from app.models import (
+    AgentProposal,
     AgentSelection,
     TaskDependency,
     TaskStatus,
@@ -525,6 +526,7 @@ async def confirm_plan_draft(
         raise PlanLimitError(f"A workflow may have at most {MAX_TASKS_PER_WORKFLOW} tasks.")
 
     ids: dict[str, uuid.UUID] = {}
+    created: list[WorkflowTask] = []
     for planned in proposal.tasks:
         task = WorkflowTask(
             id=uuid.uuid4(),
@@ -543,6 +545,7 @@ async def confirm_plan_draft(
             revision=1,
         )
         session.add(task)
+        created.append(task)
         ids[planned.key] = task.id
     await session.flush()
     for planned in proposal.tasks:
@@ -573,6 +576,11 @@ async def confirm_plan_draft(
                 task_id=ids[planned.key],
                 payload={"depends_on_task_id": str(ids[key])},
             )
+    proposals = (
+        await _propose_for_unassignable(session, workflow, created)
+        if workflow.allow_dynamic_agent_proposals
+        else []
+    )
     workflow.confirmed_plan_version = version
     record_event(
         session,
@@ -586,8 +594,33 @@ async def confirm_plan_draft(
             "tasks_created": len(proposal.tasks),
             "tasks_removed": removed,
             "acknowledged_warnings": warnings,
+            "agent_proposals_created": len(proposals),
         },
     )
     workflow.revision += 1
     await session.commit()
     return workflow
+
+
+async def _propose_for_unassignable(
+    session: AsyncSession, workflow: Workflow, tasks: list[WorkflowTask]
+) -> list[AgentProposal]:
+    """Platform proposals (ADR-0024) for confirmed tasks that no active agent can take, one per
+    distinct skill set. Only for workflows that allow dynamic agent proposals."""
+    gaps: list[agent_service.Gap] = []
+    seen: set[frozenset[str]] = set()
+    for task in tasks:
+        skills = frozenset(task.required_skills)
+        if not skills or skills in seen:
+            continue
+        seen.add(skills)
+        ranked = await selection_service.rank_for_task(
+            session, workspace_id=workflow.workspace_id, task=task
+        )
+        if not any(candidate.eligible for candidate in ranked):
+            gaps.append(
+                agent_service.Gap(task_id=task.id, task_title=task.title, skills=sorted(skills))
+            )
+    return await agent_service.propose_specialists(
+        session, workflow_id=workflow.id, workspace_id=workflow.workspace_id, gaps=gaps
+    )

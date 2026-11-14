@@ -1,9 +1,9 @@
 # AgentFlow Progress
 
 ## Current position
-- Phase: 3 — Specialized agents (Phase 2 complete; Phase 1 released as `v0.1.0`, pushed with its tag)
-- Last completed step: 3.6 — Rule-based agent selection with persisted rationale
-- Next step: 3.7 — Agent proposal workflow with admin approval before activation, which needs a short plan and the owner's go-ahead
+- Phase: 3 — Specialized agents, complete (Phase 2 complete; Phase 1 released as `v0.1.0`, pushed with its tag)
+- Last completed step: 3.7 — Agent proposal workflow with admin approval before activation
+- Next step: 4.1 — LangGraph workflow state and nodes (Phase 4, orchestration and scheduling). It adds a new dependency (LangGraph, handoff §3), so it needs a short plan and the owner's decisions.
 
 ## Completed steps
 | Step | Commit message | Hash |
@@ -32,22 +32,48 @@
 | 3.3 | `feat(llm): add LiteLLM provider adapter with usage capture` | `3abd85a` (pushed, CI ✔) |
 | 3.4 | `feat(agents): add Research, Analyst, Writer and General agents` | `d51668f` (pushed, CI ✔) |
 | 3.5 | `feat(agents): add Developer and QA agents without execution` | `46cb587` (pushed, CI ✔) |
-| 3.6 | `feat(agents): add rule-based agent selection with stored rationale` | latest commit touching `docs/ADR/0023-rule-based-agent-selection.md` |
+| 3.6 | `feat(agents): add rule-based agent selection with stored rationale` | `3fbde4f` (pushed, CI ✔) |
+| 3.7 | `feat(agents): file platform agent proposals with permission review` | latest commit touching `docs/ADR/0024-platform-agent-proposals.md` |
 
 ## Environment snapshot (2026-11-14)
 | Item | Value |
 |---|---|
-| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `46cb587` plus tag `v0.1.0` (owner-authorized) |
+| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `3fbde4f` plus tag `v0.1.0` (owner-authorized) |
 | Python / uv / Node / npm | 3.12.14 via uv 0.12.9 / Node 24.13.0 / npm 11.6.2 |
 | Celery / kombu | 5.7.0 / 5.7.0 |
 | Docker | 29.9.3 — `agentflow` stack healthy (Docker Desktop must be started first; it had stopped and was restarted in Steps 3.1 and 3.4) |
-| Dev database | `agentflow` at `0013 (head)`; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
+| Dev database | `agentflow` at `0014 (head)`; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
 | Local `.env` | holds generated `WORKER_DB_PASSWORD` and (new) `API_DB_PASSWORD` (gitignored) |
 | Port 8000 | Used by another local project (`easa`); smoke tests used 8010 |
 | E2E | API :8011 (as `agentflow_api`), frontend :3100, database `agentflow_e2e` (reset each run), Redis DBs 2/3, installed Google Chrome |
 | Frontend audit | `npm audit --omit=dev`: 0 vulnerabilities; dev-only: 8 moderate, all the existing `minimatch` chain via ESLint |
 | Test HTTP client | `httpx2` 2.16.0 (replaces `httpx`, OD-10); `httpx` is back only as a LiteLLM dependency |
 | LiteLLM | 1.109.1, imported by workers only when `MODEL_PROVIDER=litellm`; `.env` keeps the mock |
+
+## Step 3.7 — platform agent proposals (ADR-0024)
+- **Owner decisions (2026-11-14):**
+  - proposals are filed automatically when a draft is confirmed;
+  - a safe template, with no model;
+  - a per-tool permission review.
+- **The gap:** the built-ins cover every single skill, so the gap is a task whose skill **set** no single active agent covers (no eligible ADR-0023 candidate).
+- **Trigger:**
+  - `confirm_plan_draft` checks each distinct new skill set when the workflow allows proposals, and `agents.propose_specialists` files PENDING proposals;
+  - it skips skill sets already pending and specialists that already exist by name;
+  - audit with no actor and `source: platform`; `PLAN_CONFIRMED.agent_proposals_created`.
+- **Template:** `Specialist: <skills>`, category `custom`, exactly the task's skills, `builtin://general/v1`, no tools, default model and limits, and a rationale naming the task. `requested_by` is NULL. Approval is unchanged (ADMIN, not the author; INACTIVE agent).
+- **Migration `0014_platform_agent_proposals`:** `source_workflow_id`/`source_task_id` with composite workspace keys, a task-needs-workflow check, and the freeze trigger extended to the links (CREATE OR REPLACE; downgrade restores the 0003 version).
+- **API and frontend:**
+  - the proposal response has its source links, and the catalog tools have `usable_now`;
+  - the Proposals page shows "by the platform" with a source-workflow link, and a **Permission review** (risk, usable now or permission only, owner needed for HIGH, or "Requests no tools").
+
+## Checks last executed (Step 3.7)
+- **Full gate (`check.ps1 -E2E`) ✔, exit 0:**
+  - backend: ruff format (155 files), ruff check, mypy (155 files), alembic check;
+  - pytest **941 passed** (938 plus 3 new integration tests: one proposal per uncovered skill set with dedupe and INACTIVE approval; none without the setting; frozen source links). The catalog test now also checks `usable_now`;
+  - frontend: eslint, typecheck, Vitest **100** (2 new: permission review), Playwright **14 passed**, build.
+- **Migration round trip:** `0014` downgraded and re-applied cleanly on the dev DB before the gate.
+- **Deliberate-bug check** (reverted): ignoring the workflow's "Allow agent proposals" setting makes the no-proposals test fail.
+- **Environment:** the dev DB is at `0014`, and both roles were re-provisioned; no servers were left running after E2E.
 
 ## Step 3.6 — rule-based agent selection (ADR-0023)
 - **Owner decisions (2026-11-14):**
@@ -68,7 +94,7 @@
 - **Migration `0013_agent_selections`:** composite foreign keys, a `RESTRICT` user reference, rank/eligibility checks, an append-only trigger, and RLS tenant and platform policies (no worker grant).
 - **Frontend:** the Assign dialog now uses the suggestions: suitable agents best first with a "Suggested" badge, score and reasons, plus a separate "Not suitable" list with the failed rules.
 
-## Checks last executed (Step 3.6)
+## Checks (Step 3.6)
 - **Full gate (`check.ps1 -E2E`) ✔ on the second run, exit 0:**
   - backend: ruff format (154 files), ruff check, mypy (154 files), alembic check;
   - pytest **938 passed** (929 plus 9 new: 6 unit ranking tests, 3 API tests for suggestions, the stored rationale with the append-only check, and workspace scoping);
@@ -471,6 +497,6 @@
 None.
 
 ## Next exact action
-1. **Push Step 3.6** on the owner's go-ahead, and confirm CI on GitHub.
-2. **Step 3.7 (agent proposal workflow with admin approval before activation):** present a short plan and get the owner's go-ahead.
+1. **Push Step 3.7** on the owner's go-ahead, and confirm CI on GitHub. Phase 3 is then complete.
+2. **Step 4.1 (LangGraph workflow state and nodes):** present a short plan and get the owner's go-ahead, including the new LangGraph dependency.
 3. **Before any hosted deployment:** settle OD-14, OD-19 and OD-20.
