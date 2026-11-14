@@ -105,6 +105,12 @@ def test_every_table_is_workspace_scoped_or_explicitly_exempt() -> None:
         "refresh_tokens": "belongs to an auth session",
         "agent_audit_events": "workspace_id is NULL for built-in agent history",
         "inbox_messages": "consumed event IDs only; the events themselves are workspace-scoped",
+        # LangGraph's own checkpoint schema (ADR-0026): worker-only, no API grants, platform-only
+        # RLS; thread_id is the workflow id, and the state holds identifiers and statuses only.
+        "checkpoint_migrations": "library schema bookkeeping; no tenant data",
+        "checkpoints": "worker-only library schema keyed by workflow id (ADR-0026)",
+        "checkpoint_blobs": "worker-only library schema keyed by workflow id (ADR-0026)",
+        "checkpoint_writes": "worker-only library schema keyed by workflow id (ADR-0026)",
     }
     for table in Base.metadata.sorted_tables:
         if table.name in exempt:

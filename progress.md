@@ -2,8 +2,8 @@
 
 ## Current position
 - Phase: 4 — Orchestration and scheduling (Phases 2 and 3 complete; Phase 1 released as `v0.1.0`, pushed with its tag)
-- Last completed step: 4.1 — LangGraph workflow state and nodes
-- Next step: 4.2 — PostgreSQL checkpoint persistence, which needs a short plan and the owner's go-ahead (likely the `langgraph-checkpoint-postgres` dependency)
+- Last completed step: 4.2 — PostgreSQL checkpoint persistence
+- Next step: 4.3 — Celery dispatch and worker lifecycle (outbox hardening, idempotent claims), which needs a short plan and the owner's go-ahead
 
 ## Completed steps
 | Step | Commit message | Hash |
@@ -34,23 +34,49 @@
 | 3.5 | `feat(agents): add Developer and QA agents without execution` | `46cb587` (pushed, CI ✔) |
 | 3.6 | `feat(agents): add rule-based agent selection with stored rationale` | `3fbde4f` (pushed, CI ✔) |
 | 3.7 | `feat(agents): file platform agent proposals with permission review` | `437faab` (pushed, CI ✔) |
-| 4.1 | `feat(orchestration): add LangGraph workflow assessment graph` | latest commit touching `docs/ADR/0025-orchestration-graph.md` |
+| 4.1 | `feat(orchestration): add LangGraph workflow assessment graph` | `de4da58` (pushed, CI ✔) |
+| 4.2 | `feat(orchestration): persist graph checkpoints in PostgreSQL` | latest commit touching `docs/ADR/0026-orchestration-checkpoints.md` |
 
 ## Environment snapshot (2026-11-14)
 | Item | Value |
 |---|---|
-| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `437faab` plus tag `v0.1.0` (owner-authorized) |
+| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `de4da58` plus tag `v0.1.0` (owner-authorized) |
 | Python / uv / Node / npm | 3.12.14 via uv 0.12.9 / Node 24.13.0 / npm 11.6.2 |
 | Celery / kombu | 5.7.0 / 5.7.0 |
 | Docker | 29.9.3 — `agentflow` stack healthy (Docker Desktop must be started first; it had stopped and was restarted in Steps 3.1 and 3.4) |
-| Dev database | `agentflow` at `0015 (head)`; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
+| Dev database | `agentflow` at `0016 (head)`; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
 | Local `.env` | holds generated `WORKER_DB_PASSWORD` and (new) `API_DB_PASSWORD` (gitignored) |
 | Port 8000 | Used by another local project (`easa`); smoke tests used 8010 |
 | E2E | API :8011 (as `agentflow_api`), frontend :3100, database `agentflow_e2e` (reset each run), Redis DBs 2/3, installed Google Chrome |
 | Frontend audit | `npm audit --omit=dev`: 0 vulnerabilities; dev-only: 8 moderate, all the existing `minimatch` chain via ESLint |
 | Test HTTP client | `httpx2` 2.16.0 (replaces `httpx`, OD-10); `httpx` is back only as a LiteLLM dependency |
 | LiteLLM | 1.109.1, imported by workers only when `MODEL_PROVIDER=litellm`; `.env` keeps the mock |
-| LangGraph | 1.2.22 (with langchain-core 1.8.0 and langsmith 0.14.17), imported by workers only; LangSmith tracing disabled |
+| LangGraph | 1.2.22 (with langchain-core 1.8.0 and langsmith 0.14.17), imported by workers only; LangSmith tracing disabled; checkpoints via `langgraph-checkpoint-postgres` 3.2.1 |
+
+## Step 4.2 — orchestration checkpoints (ADR-0026)
+- **Owner decisions (2026-11-14):**
+  - the library checkpointer on our own tables;
+  - the latest 20 checkpoints per workflow.
+- **New dependency:** `langgraph-checkpoint-postgres` 3.2.1 (plus `psycopg-pool` 3.3.3).
+- **Migration `0016_orchestration_checkpoints`:**
+  - the library's four tables with its columns and keys, our index names, and its 10 migrations recorded as applied (`setup()` is never called, and is a tested no-op);
+  - RLS enabled and forced with only the platform policy.
+  - Models mirror the tables, so `alembic check` covers them; a unit test pins the library's migration count and columns.
+- **Access:** the API is excluded from all four tables. The worker gets SELECT/INSERT/UPDATE/DELETE on the data tables and nothing on `checkpoint_migrations`.
+- **Job:**
+  - a `PostgresSaver` on the job session's psycopg connection, so checkpoints commit with the assessment under the workflow lock;
+  - thread = workflow id; `next_step.checkpoint_id` is recorded.
+  - `assess()` returns `(step, checkpoint_id)`.
+- **Retention (hourly cleanup):** `checkpoints` (beyond 20 per thread, or workflow gone), `checkpoint_writes` (checkpoint gone), `checkpoint_blobs` (no longer referenced).
+
+## Checks last executed (Step 4.2)
+- **Full gate (`check.ps1 -E2E`) ✔ on the second run, exit 0:**
+  - backend: ruff format (164 files), ruff check, mypy (164 files), alembic check;
+  - pytest **965 passed** (961 plus 4 new: 2 unit pin tests for library migrations and columns, 2 integration tests for per-workflow checkpointing with no API access, no prompt text and a no-op `setup()`, and retention keeping the newest 20 and dropping orphans);
+  - frontend: eslint, typecheck, Vitest **104**, Playwright **14 passed**, build.
+- **First gate run failed:** `test_every_table_is_workspace_scoped_or_explicitly_exempt` correctly flagged the four checkpoint tables. They were added to its exemption list, each with its reason (library schema, worker-only, platform-only RLS, keyed by workflow id).
+- **Deliberate-bug check** (reverted): making retention keep the oldest checkpoints makes the retention test fail.
+- **Environment:** the dev DB is at `0016`, and both roles were re-provisioned; no servers were left running after E2E.
 
 ## Step 4.1 — LangGraph orchestration graph (ADR-0025)
 - **Owner decisions (2026-11-14):**
@@ -70,7 +96,7 @@
 - **Tests changed:** the relay and dispatch tests remove orchestration requests in their setup, as they did for analysis requests. The real-worker test selects the dispatch event by type.
 - **Bug found by a new test and fixed:** tasks awaiting rework keep their previous assignment, and were first counted but left out of the listed task IDs. Counting and listing now share one rule.
 
-## Checks last executed (Step 4.1)
+## Checks (Step 4.1)
 - **Full gate (`check.ps1 -E2E`) ✔, exit 0:**
   - backend: ruff format (161 files), ruff check, mypy (161 files), alembic check;
   - pytest **961 passed** (941 plus 20 new: 17 unit graph tests including the LangSmith-off check, and 3 integration tests: one request per transaction, stored without a revision bump, redelivery, any delivery order, a foreign-workspace delivery);
@@ -527,6 +553,6 @@
 None.
 
 ## Next exact action
-1. **Push Step 4.1** on the owner's go-ahead, and confirm CI on GitHub.
-2. **Step 4.2 (PostgreSQL checkpoint persistence):** present a short plan and get the owner's go-ahead.
+1. **Push Step 4.2** on the owner's go-ahead, and confirm CI on GitHub.
+2. **Step 4.3 (Celery dispatch and worker lifecycle):** present a short plan and get the owner's go-ahead.
 3. **Before any hosted deployment:** settle OD-14, OD-19 and OD-20.

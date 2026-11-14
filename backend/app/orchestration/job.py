@@ -2,9 +2,10 @@
 outbox event is delivered.
 
 One transaction, under the workflow row lock: record the delivery in the inbox (a redelivered
-event stops here), snapshot the workflow and its active tasks, run the graph, and store its
-assessment. Reading under the lock means every run reflects the committed state at that moment,
-so the order in which deliveries arrive does not matter. The assessment never bumps `revision`:
+event stops here), snapshot the workflow and its active tasks, run the graph with the Postgres
+checkpointer (thread = workflow id, ADR-0026), and store its assessment. Reading under the
+lock means every run reflects the committed state at that moment, so the order in which
+deliveries arrive does not matter. The assessment never bumps `revision`:
 it changes no plan, task or status.
 """
 
@@ -12,6 +13,8 @@ import uuid
 from datetime import UTC, datetime
 from enum import StrEnum
 
+import psycopg
+from langgraph.checkpoint.postgres import PostgresSaver
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -53,11 +56,20 @@ def run(
         for task in engine.list_tasks(session, workflow)
         if task.removed_at is None
     ]
-    step = assess(workflow.status.value, tasks)
+    # The checkpointer writes through this session's own connection, so the checkpoint commits
+    # (or rolls back) together with the stored assessment (ADR-0026).
+    connection = session.connection().connection.driver_connection
+    if not isinstance(connection, psycopg.Connection):  # the worker engine is psycopg 3
+        raise TypeError("the orchestration job needs a psycopg connection")
+    checkpointer = PostgresSaver(connection)
+    step, checkpoint_id = assess(
+        workflow.status.value, tasks, checkpointer=checkpointer, thread_id=str(workflow.id)
+    )
     workflow.next_step = {
         **step,
         "assessed_at": datetime.now(UTC).isoformat(),
         "graph_version": GRAPH_VERSION,
+        "checkpoint_id": checkpoint_id,
     }
     session.commit()
     return Outcome.ASSESSED

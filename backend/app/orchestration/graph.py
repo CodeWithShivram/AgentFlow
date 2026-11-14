@@ -15,6 +15,8 @@ from functools import lru_cache
 from typing import Any, Literal, NotRequired, TypedDict
 
 import langsmith
+from langchain_core.runnables import RunnableConfig
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
@@ -238,7 +240,7 @@ _TERMINALS = {
 
 
 @lru_cache(maxsize=1)
-def build_graph() -> CompiledStateGraph[Any, Any, Any, Any]:
+def _builder() -> StateGraph[OrchestrationState, Any, OrchestrationState, OrchestrationState]:
     graph = StateGraph(OrchestrationState)
     graph.add_node("count_tasks", count_tasks)
     for name, node in _TERMINALS.items():
@@ -246,11 +248,30 @@ def build_graph() -> CompiledStateGraph[Any, Any, Any, Any]:
         graph.add_edge(name, END)
     graph.add_edge(START, "count_tasks")
     graph.add_conditional_edges("count_tasks", route, {name: name for name in _TERMINALS})
-    return graph.compile()
+    return graph
 
 
-def assess(workflow_status: str, tasks: list[TaskView]) -> NextStep:
-    """Runs the graph on a snapshot and returns the next step."""
-    result = build_graph().invoke({"workflow_status": workflow_status, "tasks": tasks})
+def build_graph(
+    checkpointer: BaseCheckpointSaver[Any] | None = None,
+) -> CompiledStateGraph[Any, Any, Any, Any]:
+    """The compiled graph; with a checkpointer, every run is saved per thread (ADR-0026)."""
+    return _builder().compile(checkpointer=checkpointer)
+
+
+def assess(
+    workflow_status: str,
+    tasks: list[TaskView],
+    *,
+    checkpointer: BaseCheckpointSaver[Any] | None = None,
+    thread_id: str | None = None,
+) -> tuple[NextStep, str | None]:
+    """Runs the graph on a snapshot. Returns the next step and, when checkpointed, the id of the
+    checkpoint that recorded this run."""
+    graph = build_graph(checkpointer)
+    config: RunnableConfig = {"configurable": {"thread_id": thread_id}} if checkpointer else {}
+    result = graph.invoke({"workflow_status": workflow_status, "tasks": tasks}, config)
     next_step: NextStep = result["next_step"]
-    return next_step
+    if checkpointer is None:
+        return next_step, None
+    saved = graph.get_state(config).config["configurable"]
+    return next_step, str(saved["checkpoint_id"])

@@ -49,10 +49,24 @@ WORKER_GRANTS: dict[str, tuple[str, ...]] = {
     "workflow_plans": ("SELECT", "INSERT"),
     # Tool invocation records (ADR-0019), written by the tool gateway in workers.
     "tool_invocations": ("SELECT", "INSERT"),
+    # LangGraph checkpoints (ADR-0026): the library upserts; the hourly cleanup deletes.
+    "checkpoints": ("SELECT", "INSERT", "UPDATE", "DELETE"),
+    "checkpoint_blobs": ("SELECT", "INSERT", "UPDATE", "DELETE"),
+    "checkpoint_writes": ("SELECT", "INSERT", "UPDATE", "DELETE"),
 }
 API_PRIVILEGES = ("SELECT", "INSERT", "UPDATE", "DELETE")
 # Tables the API never touches: migration bookkeeping and worker-only state.
-API_EXCLUDED_TABLES = frozenset({"alembic_version", "inbox_messages"})
+API_EXCLUDED_TABLES = frozenset(
+    {
+        "alembic_version",
+        "inbox_messages",
+        # Orchestration checkpoints are worker-only (ADR-0026).
+        "checkpoint_migrations",
+        "checkpoints",
+        "checkpoint_blobs",
+        "checkpoint_writes",
+    }
+)
 _ROLE_NAME = re.compile(r"[a-z_][a-z0-9_]{0,62}")
 _LOGIN_ATTRIBUTES = (
     "LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT PASSWORD {}"

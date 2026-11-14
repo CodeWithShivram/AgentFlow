@@ -103,6 +103,10 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   workflow lock and stores `workflows.next_step` without bumping `revision`. Nodes only read and decide; any node that
   acts must change state through the engine. Keep LangSmith tracing disabled (`langsmith.configure(enabled=False)`).
   Tests that count outbox rows must filter by event type.
+- Checkpoints (ADR-0026): `PostgresSaver` on tables created by migration 0016 (never call its `setup()`); a library
+  upgrade that changes its migrations needs a new Alembic migration first (pin test). Checkpoint tables are worker-only
+  (no API grants, platform-only RLS); the job checkpoints on its own session connection (thread = workflow id), and the
+  hourly cleanup keeps 20 per workflow.
 - Workflow events are append-only.
 
 ## Security

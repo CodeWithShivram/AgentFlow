@@ -1,16 +1,27 @@
 """The orchestration job in PostgreSQL (Step 4.1, ADR-0025), run as the restricted worker role."""
 
 import uuid
-from typing import Any
+from typing import Any, cast
 
+import psycopg
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from langgraph.checkpoint.postgres import PostgresSaver
+from sqlalchemy import create_engine, select, text
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.core.config import Settings
 from app.db.sync_session import session_scope
-from app.execution import outbox
-from app.models import OutboxEvent
+from app.execution import cleanup, outbox
+from app.models import (
+    Checkpoint,
+    CheckpointBlob,
+    CheckpointWrite,
+    OutboxEvent,
+    Workflow,
+)
+from app.models.checkpoint import CHECKPOINT_SCHEMA_VERSIONS
 from app.orchestration import job
 from tests.integration.api_helpers import (
     API,
@@ -148,3 +159,122 @@ def test_a_delivery_for_a_workflow_of_another_workspace_assesses_nothing(
     assert _run(worker_factory, forged) == job.Outcome.MISSING
     assert _workflow(owner, workflow_id)["next_step"] is None
     assert _run(worker_factory, request) == job.Outcome.ASSESSED
+
+
+# --- checkpoints (Step 4.2, ADR-0026) ------------------------------------------------------------
+
+
+def _delivery(workspace_id: str, workflow_id: str) -> OutboxEvent:
+    """A fresh delivery of a reassessment request (only its id and payload are used)."""
+    return OutboxEvent(
+        id=uuid.uuid4(),
+        workspace_id=uuid.UUID(workspace_id),
+        event_type=outbox.WORKFLOW_ORCHESTRATE,
+        payload={"workspace_id": workspace_id, "workflow_id": workflow_id},
+    )
+
+
+def _checkpoint_ids(admin: Factory, thread_id: str) -> list[str]:
+    with session_scope(admin) as s:
+        return list(
+            s.scalars(
+                select(Checkpoint.checkpoint_id)
+                .where(Checkpoint.thread_id == thread_id)
+                .order_by(Checkpoint.checkpoint_id)
+            )
+        )
+
+
+def test_every_assessment_is_checkpointed_per_workflow_and_only_workers_can_read_them(
+    owner: TestClient, admin_factory: Factory, worker_factory: Factory, api_settings: Settings
+) -> None:
+    prompt = "Summarise the confidential board minutes."
+    workflow_id = owner.post(_url(owner), json={"prompt": prompt}, headers=csrf(owner)).json()["id"]
+    workspace_id = my_workspace(owner)
+    _move(owner, workflow_id, "PLANNING")
+
+    for _ in range(2):
+        assert _run(worker_factory, _delivery(workspace_id, workflow_id)) == job.Outcome.ASSESSED
+
+    checkpoints = _checkpoint_ids(admin_factory, workflow_id)
+    assert len(checkpoints) >= 2  # one thread per workflow, a checkpoint per run (and step)
+    with session_scope(admin_factory) as s:
+        workflow = s.get(Workflow, uuid.UUID(workflow_id))
+        assert workflow is not None and workflow.next_step is not None
+        assert workflow.next_step["checkpoint_id"] == checkpoints[-1]
+        stored = [
+            str(row.checkpoint) + str(row.metadata_)
+            for row in s.scalars(select(Checkpoint).where(Checkpoint.thread_id == workflow_id))
+        ]
+        stored += [
+            (blob.blob or b"").decode("latin-1")
+            for blob in s.scalars(
+                select(CheckpointBlob).where(CheckpointBlob.thread_id == workflow_id)
+            )
+        ]
+    assert stored and not any("board minutes" in text for text in stored)  # no prompt text
+
+    # The API role has no access at all, and the library's own setup() would change nothing.
+    engine = create_engine(api_settings.api_database_url)
+    try:
+        with engine.connect() as connection, pytest.raises(ProgrammingError):
+            connection.execute(text("SELECT count(*) FROM checkpoints"))
+    finally:
+        engine.dispose()
+    with psycopg.connect(
+        api_settings.database_url.render_as_string(hide_password=False).replace("+psycopg", ""),
+        autocommit=True,
+    ) as connection:
+        PostgresSaver(connection).setup()  # type: ignore[arg-type]
+        versions = connection.execute("SELECT count(*) FROM checkpoint_migrations").fetchone()
+    assert versions == (CHECKPOINT_SCHEMA_VERSIONS,)
+
+
+def test_cleanup_keeps_the_newest_checkpoints_per_workflow_and_drops_orphans(
+    owner: TestClient, admin_factory: Factory, worker_factory: Factory
+) -> None:
+    workflow_id = owner.post(
+        _url(owner), json={"prompt": "Write a short report."}, headers=csrf(owner)
+    ).json()["id"]
+    workspace_id = my_workspace(owner)
+    _move(owner, workflow_id, "PLANNING")
+    for _ in range(12):
+        assert _run(worker_factory, _delivery(workspace_id, workflow_id)) == job.Outcome.ASSESSED
+    before = _checkpoint_ids(admin_factory, workflow_id)
+    assert len(before) > cleanup.CHECKPOINTS_KEPT_PER_WORKFLOW
+    orphan = str(uuid.uuid4())  # a thread whose workflow no longer exists
+    with session_scope(admin_factory) as s:
+        s.add(Checkpoint(thread_id=orphan, checkpoint_id="1", checkpoint={}, metadata_={}))
+        s.add(CheckpointBlob(thread_id=orphan, channel="tasks", version="1", type="empty"))
+        s.add(
+            CheckpointWrite(
+                thread_id=orphan, checkpoint_id="1", task_id="t", idx=0, channel="c", blob=b""
+            )
+        )
+        s.commit()
+
+    counts = cleanup.run_cleanup(worker_factory, batch_size=5, max_batches=20)
+
+    after = _checkpoint_ids(admin_factory, workflow_id)
+    assert after == before[-cleanup.CHECKPOINTS_KEPT_PER_WORKFLOW :]  # the newest are kept
+    assert _checkpoint_ids(admin_factory, orphan) == []
+    assert counts["checkpoints"] == len(before) - len(after) + 1
+    assert counts["checkpoint_writes"] >= 1 and counts["checkpoint_blobs"] >= 1
+    with session_scope(admin_factory) as s:
+        referenced = s.scalars(select(Checkpoint).where(Checkpoint.thread_id == workflow_id))
+        versions = {
+            (channel, version)
+            for row in referenced
+            for channel, version in cast(dict[str, str], row.checkpoint["channel_versions"]).items()
+        }
+        blobs = {
+            (b.channel, b.version)
+            for b in s.scalars(
+                select(CheckpointBlob).where(CheckpointBlob.thread_id == workflow_id)
+            )
+        }
+    assert blobs and blobs <= versions  # every remaining blob is still referenced
+    # The thread continues from its newest checkpoint, and cleanup trims it back to the limit.
+    assert _run(worker_factory, _delivery(workspace_id, workflow_id)) == job.Outcome.ASSESSED
+    cleanup.run_cleanup(worker_factory, batch_size=5, max_batches=20)
+    assert len(_checkpoint_ids(admin_factory, workflow_id)) == cleanup.CHECKPOINTS_KEPT_PER_WORKFLOW

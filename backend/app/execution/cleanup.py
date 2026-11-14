@@ -18,6 +18,9 @@ are kept longer or kept:
 | workspace_invitations (accepted)          | never (they record how membership was granted)   |
 | outbox_events (PUBLISHED)                 | published more than 7 days ago (FAILED are kept) |
 | inbox_messages                            | processed more than 7 days ago                   |
+| checkpoints (ADR-0026)                    | beyond each workflow's 20 newest; all once the   |
+|                                           | workflow no longer exists                        |
+| checkpoint_writes / checkpoint_blobs      | no remaining checkpoint refers to them           |
 """
 
 import logging
@@ -26,18 +29,22 @@ from collections.abc import Callable
 from datetime import timedelta
 from typing import Any
 
-from sqlalchemy import Delete, and_, delete, func, or_, select, tuple_
+from sqlalchemy import Delete, String, and_, cast, delete, exists, func, or_, select, tuple_
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.sync_session import session_scope
 from app.models import (
     AuthSession,
+    Checkpoint,
+    CheckpointBlob,
+    CheckpointWrite,
     IdempotencyKey,
     InboxMessage,
     OutboxEvent,
     OutboxStatus,
     RefreshToken,
     SessionRevocationReason,
+    Workflow,
     WorkspaceInvitation,
 )
 
@@ -47,6 +54,8 @@ AUTH_RECORD_RETENTION = timedelta(days=30)
 SECURITY_RECORD_RETENTION = timedelta(days=90)
 INVITATION_RETENTION = timedelta(days=30)
 MESSAGE_RETENTION = timedelta(days=7)
+# Orchestration checkpoints kept per workflow (thread), newest first (ADR-0026).
+CHECKPOINTS_KEPT_PER_WORKFLOW = 20
 
 
 def _before(retention: timedelta) -> Any:
@@ -102,6 +111,78 @@ def _inbox(batch: int) -> Delete:
     )
 
 
+def _checkpoints(batch: int) -> Delete:
+    # Checkpoint ids are time-ordered (UUIDv6), so ordering by id puts the newest first.
+    ranked = select(
+        Checkpoint.thread_id,
+        Checkpoint.checkpoint_ns,
+        Checkpoint.checkpoint_id,
+        func.row_number()
+        .over(
+            partition_by=(Checkpoint.thread_id, Checkpoint.checkpoint_ns),
+            order_by=Checkpoint.checkpoint_id.desc(),
+        )
+        .label("position"),
+    ).subquery()
+    workflow_exists = exists().where(cast(Workflow.id, String) == ranked.c.thread_id)
+    keys = (
+        select(ranked.c.thread_id, ranked.c.checkpoint_ns, ranked.c.checkpoint_id)
+        .where(or_(ranked.c.position > CHECKPOINTS_KEPT_PER_WORKFLOW, ~workflow_exists))
+        .limit(batch)
+    )
+    return delete(Checkpoint).where(
+        tuple_(Checkpoint.thread_id, Checkpoint.checkpoint_ns, Checkpoint.checkpoint_id).in_(keys)
+    )
+
+
+def _checkpoint_writes(batch: int) -> Delete:
+    has_checkpoint = exists().where(
+        Checkpoint.thread_id == CheckpointWrite.thread_id,
+        Checkpoint.checkpoint_ns == CheckpointWrite.checkpoint_ns,
+        Checkpoint.checkpoint_id == CheckpointWrite.checkpoint_id,
+    )
+    keys = select(
+        CheckpointWrite.thread_id,
+        CheckpointWrite.checkpoint_ns,
+        CheckpointWrite.checkpoint_id,
+        CheckpointWrite.task_id,
+        CheckpointWrite.idx,
+    ).where(~has_checkpoint)
+    return delete(CheckpointWrite).where(
+        tuple_(
+            CheckpointWrite.thread_id,
+            CheckpointWrite.checkpoint_ns,
+            CheckpointWrite.checkpoint_id,
+            CheckpointWrite.task_id,
+            CheckpointWrite.idx,
+        ).in_(keys.limit(batch))
+    )
+
+
+def _checkpoint_blobs(batch: int) -> Delete:
+    # A blob is one channel value at one version; checkpoints refer to it in channel_versions.
+    referenced = exists().where(
+        Checkpoint.thread_id == CheckpointBlob.thread_id,
+        Checkpoint.checkpoint_ns == CheckpointBlob.checkpoint_ns,
+        Checkpoint.checkpoint["channel_versions"][CheckpointBlob.channel].astext
+        == CheckpointBlob.version,
+    )
+    keys = select(
+        CheckpointBlob.thread_id,
+        CheckpointBlob.checkpoint_ns,
+        CheckpointBlob.channel,
+        CheckpointBlob.version,
+    ).where(~referenced)
+    return delete(CheckpointBlob).where(
+        tuple_(
+            CheckpointBlob.thread_id,
+            CheckpointBlob.checkpoint_ns,
+            CheckpointBlob.channel,
+            CheckpointBlob.version,
+        ).in_(keys.limit(batch))
+    )
+
+
 CATEGORIES: dict[str, Callable[[int], Delete]] = {
     "idempotency_keys": _idempotency,
     "refresh_tokens": _refresh_tokens,
@@ -109,6 +190,10 @@ CATEGORIES: dict[str, Callable[[int], Delete]] = {
     "workspace_invitations": _invitations,
     "outbox_events": _outbox,
     "inbox_messages": _inbox,
+    # Checkpoints first, then the writes and blobs they no longer refer to.
+    "checkpoints": _checkpoints,
+    "checkpoint_writes": _checkpoint_writes,
+    "checkpoint_blobs": _checkpoint_blobs,
 }
 
 

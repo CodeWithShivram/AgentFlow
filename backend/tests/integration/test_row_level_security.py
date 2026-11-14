@@ -46,6 +46,9 @@ ROW_LEVEL_SECURED = {
     "workflow_plans",
     "tool_invocations",
     "agent_selections",
+    "checkpoints",
+    "checkpoint_blobs",
+    "checkpoint_writes",
 }
 # Read before any workspace context exists (login, refresh, invitation by token) or worker-only.
 OUTSIDE_RLS = {
@@ -54,6 +57,7 @@ OUTSIDE_RLS = {
     "refresh_tokens",
     "workspace_invitations",
     "inbox_messages",
+    "checkpoint_migrations",
 }
 
 

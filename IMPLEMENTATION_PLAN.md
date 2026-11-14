@@ -152,8 +152,8 @@ Acceptance (phase): deterministic tests with mock model responses; invalid plans
 
 | Step | Title | Status |
 |---|---|---|
-| 4.1 | LangGraph workflow state and nodes | DONE (ADR-0025) — see `progress.md` |
-| 4.2 | PostgreSQL checkpoint persistence | NOT_STARTED |
+| 4.1 | LangGraph workflow state and nodes | DONE (ADR-0025) — `de4da58` |
+| 4.2 | PostgreSQL checkpoint persistence | DONE (ADR-0026) — see `progress.md` |
 | 4.3 | Celery dispatch and worker lifecycle (outbox hardening, idempotent claims) | NOT_STARTED |
 | 4.4 | Dependency-aware scheduling and concurrency limits | NOT_STARTED |
 | 4.5 | Cancellation and restart recovery | NOT_STARTED |

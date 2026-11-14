@@ -16,6 +16,7 @@ from app.models.auth import (
     WorkspaceInvitation,
 )
 from app.models.base import Base
+from app.models.checkpoint import Checkpoint, CheckpointBlob, CheckpointMigration, CheckpointWrite
 from app.models.execution import (
     AgentExecution,
     ExecutionStatus,
@@ -57,6 +58,10 @@ __all__ = [
     "AuthSession",
     "AutonomyPolicy",
     "Base",
+    "Checkpoint",
+    "CheckpointBlob",
+    "CheckpointMigration",
+    "CheckpointWrite",
     "ExecutionStatus",
     "IdempotencyKey",
     "IdempotencyStatus",
