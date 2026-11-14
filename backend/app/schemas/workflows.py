@@ -271,6 +271,54 @@ class ExecutionList(BaseModel):
     items: list[ExecutionResponse]
 
 
+class SelectionFactor(BaseModel):
+    """One selection rule's verdict for a candidate (ADR-0023)."""
+
+    name: str
+    outcome: Literal["pass", "fail", "scored", "not_scored"]
+    points: float
+    detail: str
+
+
+class AgentSuggestion(BaseModel):
+    agent_id: uuid.UUID
+    agent_name: str
+    agent_version_id: uuid.UUID
+    agent_version: int
+    eligible: bool
+    score: float
+    # 1 = best eligible candidate; null for excluded candidates.
+    rank: int | None
+    factors: list[SelectionFactor]
+
+
+class AgentSuggestionList(BaseModel):
+    rules_version: str
+    # Eligible candidates best first, then excluded ones.
+    items: list[AgentSuggestion]
+
+
+class AgentSelectionResponse(BaseModel):
+    """The stored rationale of one assignment."""
+
+    id: uuid.UUID
+    agent_id: uuid.UUID
+    agent_version_id: uuid.UUID
+    decided_by_user_id: uuid.UUID | None
+    rules_version: str
+    eligible: bool
+    score: float
+    rank: int | None
+    top_agent_id: uuid.UUID | None
+    candidate_count: int
+    factors: list[SelectionFactor]
+    created_at: datetime
+
+
+class AgentSelectionList(BaseModel):
+    items: list[AgentSelectionResponse]
+
+
 class PlanDraftSummary(BaseModel):
     """A generated plan draft (Step 2.3). The full draft is previewed in Step 2.4."""
 

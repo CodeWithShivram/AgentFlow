@@ -45,6 +45,7 @@ ROW_LEVEL_SECURED = {
     "llm_usage",
     "workflow_plans",
     "tool_invocations",
+    "agent_selections",
 }
 # Read before any workspace context exists (login, refresh, invitation by token) or worker-only.
 OUTSIDE_RLS = {

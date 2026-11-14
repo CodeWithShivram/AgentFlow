@@ -164,3 +164,17 @@ async def active_capabilities(session: AsyncSession, *, workspace_id: uuid.UUID)
     for configuration in rows.scalars():
         skills.update(str(c) for c in configuration.get("capabilities", []))
     return skills
+
+
+async def active_with_versions(
+    session: AsyncSession, *, workspace_id: uuid.UUID
+) -> list[tuple[Agent, AgentVersion]]:
+    """ACTIVE agents visible to the workspace (its own and built-ins) with their active version:
+    the candidates for agent selection (ADR-0023)."""
+    rows = await session.execute(
+        select(Agent, AgentVersion)
+        .join(AgentVersion, Agent.active_version_id == AgentVersion.id)
+        .where(_visible_to(workspace_id), Agent.status == AgentStatus.ACTIVE)
+        .order_by(Agent.name, Agent.id)
+    )
+    return [(row[0], row[1]) for row in rows]

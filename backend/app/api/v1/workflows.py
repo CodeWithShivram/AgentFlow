@@ -5,16 +5,22 @@ app.services.tasks and app.services.transitions.
 """
 
 import uuid
+from dataclasses import asdict
 from datetime import timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, Path, Query, Response, status
 from fastapi.responses import JSONResponse
 
+from app.agents.selection import RULES_VERSION
 from app.api.deps import DbSession, SettingsDep, workspace_role
 from app.models import WorkflowStatus, WorkflowTask, WorkspaceRole
 from app.repositories import workflows as repository
 from app.schemas.workflows import (
+    AgentSelectionList,
+    AgentSelectionResponse,
+    AgentSuggestion,
+    AgentSuggestionList,
     AssignRequest,
     DependencyRequest,
     EventPage,
@@ -26,6 +32,7 @@ from app.schemas.workflows import (
     PlanDraftSummary,
     PlanIssueResponse,
     RevisionReasonRequest,
+    SelectionFactor,
     TaskCreateRequest,
     TaskResponse,
     TaskUpdateRequest,
@@ -371,6 +378,58 @@ async def assign_agent(
         session, access, workflow_id, task_id, agent_id=body.agent_id, revision=body.revision
     )
     return await _task_response(session, access, workflow_id, task)
+
+
+@router.get("/{workflow_id}/tasks/{task_id}/agent-suggestions")
+async def suggest_agents(
+    workflow_id: uuid.UUID, task_id: uuid.UUID, access: Viewer, session: DbSession
+) -> AgentSuggestionList:
+    """Every ACTIVE agent ranked for the task by the selection rules, with the reason for each
+    factor (ADR-0023). Suggestions only: members still choose and assign."""
+    ranked = await task_service.suggest_agents(session, access, workflow_id, task_id)
+    return AgentSuggestionList(
+        rules_version=RULES_VERSION,
+        items=[
+            AgentSuggestion(
+                agent_id=c.agent_id,
+                agent_name=c.agent_name,
+                agent_version_id=c.agent_version_id,
+                agent_version=c.agent_version,
+                eligible=c.eligible,
+                score=c.score,
+                rank=c.rank,
+                factors=[SelectionFactor(**asdict(f)) for f in c.factors],
+            )
+            for c in ranked
+        ],
+    )
+
+
+@router.get("/{workflow_id}/tasks/{task_id}/agent-selections")
+async def list_agent_selections(
+    workflow_id: uuid.UUID, task_id: uuid.UUID, access: Viewer, session: DbSession
+) -> AgentSelectionList:
+    """Why each assigned agent was chosen, newest first (ADR-0023)."""
+    rows = await task_service.list_agent_selections(session, access, workflow_id, task_id)
+    return AgentSelectionList(
+        items=[
+            AgentSelectionResponse(
+                id=s.id,
+                agent_id=s.agent_id,
+                agent_version_id=s.agent_version_id,
+                decided_by_user_id=s.decided_by_user_id,
+                rules_version=s.rules_version,
+                eligible=s.eligible,
+                score=float(s.score),
+                rank=s.rank,
+                top_agent_id=s.top_agent_id,
+                candidate_count=s.candidate_count,
+                factors=[SelectionFactor.model_validate(f) for f in s.factors],
+                created_at=s.created_at,
+            )
+            for s in rows
+        ]
+    )
 
 
 @router.get("/{workflow_id}/tasks/{task_id}/executions")

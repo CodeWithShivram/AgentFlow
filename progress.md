@@ -2,8 +2,8 @@
 
 ## Current position
 - Phase: 3 — Specialized agents (Phase 2 complete; Phase 1 released as `v0.1.0`, pushed with its tag)
-- Last completed step: 3.5 — Developer and QA agents (no unsafe shell or code execution)
-- Next step: 3.6 — Rule-based agent selection with persisted rationale, which needs a short plan and the owner's go-ahead
+- Last completed step: 3.6 — Rule-based agent selection with persisted rationale
+- Next step: 3.7 — Agent proposal workflow with admin approval before activation, which needs a short plan and the owner's go-ahead
 
 ## Completed steps
 | Step | Commit message | Hash |
@@ -31,22 +31,54 @@
 | 3.2 | `feat(tools): add tool registry and server-side tool gateway` | `54bf1d4` (pushed, CI ✔) |
 | 3.3 | `feat(llm): add LiteLLM provider adapter with usage capture` | `3abd85a` (pushed, CI ✔) |
 | 3.4 | `feat(agents): add Research, Analyst, Writer and General agents` | `d51668f` (pushed, CI ✔) |
-| 3.5 | `feat(agents): add Developer and QA agents without execution` | latest commit touching `docs/ADR/0022-developer-and-qa-agents.md` |
+| 3.5 | `feat(agents): add Developer and QA agents without execution` | `46cb587` (pushed, CI ✔) |
+| 3.6 | `feat(agents): add rule-based agent selection with stored rationale` | latest commit touching `docs/ADR/0023-rule-based-agent-selection.md` |
 
 ## Environment snapshot (2026-11-14)
 | Item | Value |
 |---|---|
-| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `d51668f` plus tag `v0.1.0` (owner-authorized) |
+| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `46cb587` plus tag `v0.1.0` (owner-authorized) |
 | Python / uv / Node / npm | 3.12.14 via uv 0.12.9 / Node 24.13.0 / npm 11.6.2 |
 | Celery / kombu | 5.7.0 / 5.7.0 |
 | Docker | 29.9.3 — `agentflow` stack healthy (Docker Desktop must be started first; it had stopped and was restarted in Steps 3.1 and 3.4) |
-| Dev database | `agentflow` at `0012 (head)`; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
+| Dev database | `agentflow` at `0013 (head)`; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
 | Local `.env` | holds generated `WORKER_DB_PASSWORD` and (new) `API_DB_PASSWORD` (gitignored) |
 | Port 8000 | Used by another local project (`easa`); smoke tests used 8010 |
 | E2E | API :8011 (as `agentflow_api`), frontend :3100, database `agentflow_e2e` (reset each run), Redis DBs 2/3, installed Google Chrome |
 | Frontend audit | `npm audit --omit=dev`: 0 vulnerabilities; dev-only: 8 moderate, all the existing `minimatch` chain via ESLint |
 | Test HTTP client | `httpx2` 2.16.0 (replaces `httpx`, OD-10); `httpx` is back only as a LiteLLM dependency |
 | LiteLLM | 1.109.1, imported by workers only when `MODEL_PROVIDER=litellm`; `.env` keeps the mock |
+
+## Step 3.6 — rule-based agent selection (ADR-0023)
+- **Owner decisions (2026-11-14):**
+  - the platform suggests and people assign;
+  - no history scoring until verification;
+  - a new append-only table;
+  - the Assign dialog ranks agents with reasons.
+- **`app/agents/selection.py` (`selection/v1`, pure):**
+  - hard filters: skills and runtime;
+  - scored: `skill_fit` (40, specialists first), `tool_fit` (20, usable grants), `workload` (30 / (1 + in-flight));
+  - not scored: `history`, `cost`, `latency` and `policy`, each with its reason;
+  - order: eligible by score, then name, then id; excluded last.
+  - Runnable references come from the instruction registry, so the API never loads the model gateway.
+- **Service and API:**
+  - `selection.rank_for_task` / `record_selection`;
+  - `assign_agent` stores a server-computed `agent_selections` row and adds `selection_id`/`selection_rank` to the event;
+  - `GET …/agent-suggestions` and `GET …/agent-selections` (Viewer).
+- **Migration `0013_agent_selections`:** composite foreign keys, a `RESTRICT` user reference, rank/eligibility checks, an append-only trigger, and RLS tenant and platform policies (no worker grant).
+- **Frontend:** the Assign dialog now uses the suggestions: suitable agents best first with a "Suggested" badge, score and reasons, plus a separate "Not suitable" list with the failed rules.
+
+## Checks last executed (Step 3.6)
+- **Full gate (`check.ps1 -E2E`) ✔ on the second run, exit 0:**
+  - backend: ruff format (154 files), ruff check, mypy (154 files), alembic check;
+  - pytest **938 passed** (929 plus 9 new: 6 unit ranking tests, 3 API tests for suggestions, the stored rationale with the append-only check, and workspace scoping);
+  - frontend: eslint, typecheck, Vitest **98** (2 new: dialog ranking and free choice), Playwright **14 passed**, build.
+- **First gate run failed in E2E.** Journey 8/9 hit a revision conflict on "Submit plan for approval":
+  - **Cause:** the API log showed the task was created and the workflow refetched, but the page re-rendered late under load, so the click sent the old revision. The server refused it correctly.
+  - **Fix:** the journey's inline task-adding steps (since Step 3.1) now wait for the new task's heading, as the shared `addTask` helper does. No assertion was removed.
+- **Deliberate-bug check** (reverted): inverting the ranking order makes 2 ranking tests fail.
+- **Environment:** the dev DB is at `0013`, and both roles were re-provisioned; no servers were left running after E2E.
+- **Also fixed:** a SQLAlchemy 2.1 deprecation (`Result.tuples()`) in the new workload query.
 
 ## Step 3.5 — Developer and QA agents (ADR-0022)
 - **Owner decisions (2026-11-14):**
@@ -65,7 +97,7 @@
 - **Frontend:** the executions panel shows proposed files and tests (collapsible, `<pre>`) and designed test cases, as plain text, marked not applied or run.
 - **Tests changed:** two Step 3.4 tests that listed Developer and QA as having no runtime now expect their runtimes. Unknown and custom references still fail.
 
-## Checks last executed (Step 3.5)
+## Checks (Step 3.5)
 - **Full gate (`check.ps1 -E2E`) ✔, exit 0:**
   - backend: ruff format (149 files), ruff check, mypy (149 files), alembic check;
   - pytest **929 passed** (900 plus 29 new: path, output and runtime tests for Developer and QA);
@@ -439,6 +471,6 @@
 None.
 
 ## Next exact action
-1. **Push Step 3.5** on the owner's go-ahead, and confirm CI on GitHub.
-2. **Step 3.6 (rule-based agent selection with persisted rationale):** present a short plan and get the owner's go-ahead.
+1. **Push Step 3.6** on the owner's go-ahead, and confirm CI on GitHub.
+2. **Step 3.7 (agent proposal workflow with admin approval before activation):** present a short plan and get the owner's go-ahead.
 3. **Before any hosted deployment:** settle OD-14, OD-19 and OD-20.

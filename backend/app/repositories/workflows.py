@@ -9,8 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
     AgentExecution,
+    AgentSelection,
     AgentVersion,
     TaskDependency,
+    TaskStatus,
     ToolInvocation,
     Workflow,
     WorkflowEvent,
@@ -225,3 +227,38 @@ async def get_plan_draft(
         )
     )
     return result.scalar_one_or_none()
+
+
+async def in_flight_by_agent(
+    session: AsyncSession, *, workspace_id: uuid.UUID
+) -> dict[uuid.UUID, int]:
+    """Per agent, the workspace's tasks that are ASSIGNED, QUEUED or IN_PROGRESS (ADR-0023)."""
+    rows = await session.execute(
+        select(WorkflowTask.assigned_agent_id, func.count())
+        .where(
+            WorkflowTask.workspace_id == workspace_id,
+            WorkflowTask.assigned_agent_id.is_not(None),
+            WorkflowTask.removed_at.is_(None),
+            WorkflowTask.status.in_(
+                [TaskStatus.ASSIGNED, TaskStatus.QUEUED, TaskStatus.IN_PROGRESS]
+            ),
+        )
+        .group_by(WorkflowTask.assigned_agent_id)
+    )
+    return {agent_id: count for agent_id, count in rows if agent_id is not None}
+
+
+async def list_agent_selections(
+    session: AsyncSession, workflow: Workflow, task_id: uuid.UUID
+) -> list[AgentSelection]:
+    """Selection rationales of one task, newest first."""
+    rows = await session.execute(
+        select(AgentSelection)
+        .where(
+            AgentSelection.task_id == task_id,
+            AgentSelection.workflow_id == workflow.id,
+            AgentSelection.workspace_id == workflow.workspace_id,
+        )
+        .order_by(AgentSelection.created_at.desc(), AgentSelection.id)
+    )
+    return list(rows.scalars())

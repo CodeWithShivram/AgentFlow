@@ -144,8 +144,8 @@ Acceptance (phase): deterministic tests with mock model responses; invalid plans
 | 3.2 | Tool registry and server-side permission enforcement | DONE (ADR-0019) — `54bf1d4` |
 | 3.3 | LiteLLM integration behind gateway adapter + provider usage capture | DONE (ADR-0020) — `3abd85a` |
 | 3.4 | Research, Analyst, Writer, General agents | DONE (ADR-0021) — `d51668f` |
-| 3.5 | Developer and QA agents (no unsafe shell/code execution) | DONE (ADR-0022) — see `progress.md` |
-| 3.6 | Rule-based agent selection with persisted rationale | NOT_STARTED |
+| 3.5 | Developer and QA agents (no unsafe shell/code execution) | DONE (ADR-0022) — `46cb587` |
+| 3.6 | Rule-based agent selection with persisted rationale | DONE (ADR-0023) — see `progress.md` |
 | 3.7 | Agent proposal workflow with admin approval before activation | NOT_STARTED |
 
 ## Phase 4 — Orchestration and scheduling

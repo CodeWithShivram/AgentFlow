@@ -6,6 +6,7 @@ import type {
   AcceptedMembership,
   Agent,
   AgentCatalog,
+  AgentSuggestionList,
   AgentInput,
   AgentStatus,
   AgentUpdate,
@@ -173,6 +174,9 @@ export function createEndpoints(client: ApiClient) {
         client.post<Task>(`${task(workspaceId, workflowId, taskId)}/cancel`, { revision, reason }),
       executions: (workspaceId: Uuid, workflowId: Uuid, taskId: Uuid) =>
         client.get<{ items: Execution[] }>(`${task(workspaceId, workflowId, taskId)}/executions`),
+      /** Active agents ranked for the task by the selection rules, with reasons (Step 3.6). */
+      agentSuggestions: (workspaceId: Uuid, workflowId: Uuid, taskId: Uuid) =>
+        client.get<AgentSuggestionList>(`${task(workspaceId, workflowId, taskId)}/agent-suggestions`),
     },
   };
 }

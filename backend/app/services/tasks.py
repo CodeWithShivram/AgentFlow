@@ -18,8 +18,10 @@ from typing import Any, Literal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents.selection import Candidate
 from app.core.errors import AppError
 from app.models import (
+    AgentSelection,
     TaskDependency,
     TaskStatus,
     Workflow,
@@ -34,9 +36,10 @@ from app.repositories import workflows as repository
 from app.schemas.agents import AgentConfiguration
 from app.schemas.workflows import TaskCreateRequest, TaskUpdateRequest
 from app.services import agents as agent_service
+from app.services import selection as selection_service
 from app.services.authorization import WorkspaceAccess
 from app.services.transitions import record_event, transition_task, transition_workflow
-from app.services.workflows import PlanDraftNotFoundError, lock_for_change
+from app.services.workflows import PlanDraftNotFoundError, get_workflow, lock_for_change
 from app.workflows.state_machine import PLAN_EDIT_REOPENS, PLAN_EDITABLE, Actor
 
 T, W = TaskStatus, WorkflowStatus
@@ -394,6 +397,20 @@ async def assign_agent(
     missing = sorted(set(task.required_skills) - capabilities)
     if missing:
         raise AgentLacksSkillsError(details={"missing_skills": missing})
+    # The rationale is recomputed here by the server rules (ADR-0023) and stored with the
+    # assignment, including when the member picked someone other than the top suggestion.
+    ranked = await selection_service.rank_for_task(
+        session, workspace_id=access.workspace_id, task=task
+    )
+    selection = selection_service.record_selection(
+        session,
+        workflow,
+        task,
+        ranked,
+        agent_id=agent_id,
+        agent_version_id=version.id,
+        user_id=access.user_id,
+    )
     previous = (task.assigned_agent_id, task.assigned_agent_version_id)
     retry = task.status == T.REWORK_REQUIRED
     task.assigned_agent_id = agent_id
@@ -415,10 +432,32 @@ async def assign_agent(
             "previous_agent_id": str(previous[0]) if previous[0] else None,
             "previous_agent_version_id": str(previous[1]) if previous[1] else None,
             "attempt_count": task.attempt_count,
+            "selection_id": str(selection.id),
+            "selection_rank": selection.rank,
         },
     )
     await session.commit()
     return task
+
+
+async def suggest_agents(
+    session: AsyncSession, access: WorkspaceAccess, workflow_id: uuid.UUID, task_id: uuid.UUID
+) -> list[Candidate]:
+    """Every ACTIVE agent ranked for the task by the selection rules (ADR-0023). Read-only."""
+    workflow = await get_workflow(session, access, workflow_id)
+    task = await _get_task(session, workflow, task_id)
+    return await selection_service.rank_for_task(
+        session, workspace_id=access.workspace_id, task=task
+    )
+
+
+async def list_agent_selections(
+    session: AsyncSession, access: WorkspaceAccess, workflow_id: uuid.UUID, task_id: uuid.UUID
+) -> list[AgentSelection]:
+    """The stored rationales of the task's assignments, newest first."""
+    workflow = await get_workflow(session, access, workflow_id)
+    await _get_task(session, workflow, task_id)  # 404 for unknown or foreign tasks
+    return await repository.list_agent_selections(session, workflow, task_id)
 
 
 async def cancel_task(

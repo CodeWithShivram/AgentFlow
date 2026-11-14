@@ -116,6 +116,9 @@ test("journeys 8 and 9: approve, start, assign an agent and monitor execution", 
   await taskDialog.getByLabel("Acceptance criteria").fill("Lists every change");
   await taskDialog.getByRole("button", { name: "Add task" }).click();
   await expect(taskDialog).toBeHidden();
+  // Like addTask(): wait until the page shows the new task, so the next action uses the
+  // workflow revision after the edit (a stale one is correctly refused as a conflict).
+  await expect(page.getByRole("heading", { level: 3, name: "Draft the notes" })).toBeVisible();
   await page.getByRole("button", { name: "Submit plan for approval" }).click();
   await expect(visibleText(page, "Awaiting approval")).toBeVisible();
   await page.getByRole("button", { name: "Approve plan" }).click();
@@ -127,6 +130,8 @@ test("journeys 8 and 9: approve, start, assign an agent and monitor execution", 
   // Journey 8: assign a built-in agent; the task pins its published version.
   await page.getByRole("button", { name: "Assign agent" }).click();
   const dialog = page.getByRole("dialog", { name: "Assign an agent" });
+  // Step 3.6: agents are ranked with reasons; the member may pick any suitable one.
+  await expect(dialog.getByText("Suggested", { exact: true })).toBeVisible();
   await dialog.getByRole("radio", { name: /Writer/ }).click();
   await dialog.getByRole("button", { name: "Assign" }).click();
   await expect(dialog).toBeHidden();

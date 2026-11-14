@@ -27,6 +27,7 @@ from app.models.execution import (
 )
 from app.models.idempotency import IdempotencyKey, IdempotencyStatus
 from app.models.plan import WorkflowPlan
+from app.models.selection import AgentSelection
 from app.models.tenancy import User, Workspace, WorkspaceMember, WorkspaceRole
 from app.models.usage import LlmCallStatus, LlmUsage
 from app.models.workflow import (
@@ -49,6 +50,7 @@ __all__ = [
     "AgentAuditEvent",
     "AgentProposal",
     "AgentProposalStatus",
+    "AgentSelection",
     "AgentStatus",
     "AgentVersion",
     "AnalysisStatus",

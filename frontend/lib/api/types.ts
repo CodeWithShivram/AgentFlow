@@ -372,6 +372,31 @@ export interface EventPage {
   last_sequence: number | null;
 }
 
+/** One selection rule's verdict for a candidate (ADR-0023). */
+export interface SelectionFactor {
+  name: string;
+  outcome: "pass" | "fail" | "scored" | "not_scored";
+  points: number;
+  detail: string;
+}
+
+export interface AgentSuggestion {
+  agent_id: Uuid;
+  agent_name: string;
+  agent_version_id: Uuid;
+  agent_version: number;
+  eligible: boolean;
+  score: number;
+  /** 1 = best eligible candidate; null for excluded candidates. */
+  rank: number | null;
+  factors: SelectionFactor[];
+}
+
+export interface AgentSuggestionList {
+  rules_version: string;
+  items: AgentSuggestion[];
+}
+
 export interface Execution {
   id: Uuid;
   task_id: Uuid;

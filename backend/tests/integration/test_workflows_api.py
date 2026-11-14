@@ -623,3 +623,92 @@ def test_task_deliverables_are_created_updated_and_validated(
 
     for bad in ([""], ["x" * 2001], [f"d{i}" for i in range(21)], ["sk-" + "a" * 40]):
         assert add_task(owner, workspace, workflow, deliverables=bad).status_code == 422
+
+
+# --- agent selection (Step 3.6, ADR-0023) --------------------------------------------------------
+
+
+def _suggestions(client: TestClient, workspace: str, workflow: str, task: str) -> dict[str, Any]:
+    response = client.get(wf_url(workspace, f"/{workflow}/tasks/{task}/agent-suggestions"))
+    assert response.status_code == 200, response.text
+    body: dict[str, Any] = response.json()
+    return body
+
+
+def test_suggestions_rank_eligible_agents_and_explain_exclusions(
+    owner: TestClient, workspace: str, workflow: str
+) -> None:
+    task = add_task(owner, workspace, workflow, required_skills=["report_writing"]).json()
+
+    body = _suggestions(owner, workspace, workflow, task["id"])
+
+    assert body["rules_version"] == "selection/v1"
+    eligible = [i for i in body["items"] if i["eligible"]]
+    assert [(i["agent_name"], i["rank"]) for i in eligible] == [("Writer", 1)]
+    researcher = next(i for i in body["items"] if i["agent_name"] == "Researcher")
+    assert researcher["rank"] is None and researcher["score"] == 0.0
+    skills = next(f for f in researcher["factors"] if f["name"] == "skills")
+    assert skills == {
+        "name": "skills",
+        "outcome": "fail",
+        "points": 0.0,
+        "detail": "Missing required skills: report_writing.",
+    }
+    writer_factors = {f["name"]: f["outcome"] for f in eligible[0]["factors"]}
+    assert writer_factors["history"] == "not_scored" and writer_factors["runtime"] == "pass"
+
+
+def test_every_assignment_stores_the_server_computed_rationale(
+    owner: TestClient, workspace: str, workflow: str, admin_factory: Any
+) -> None:
+    task = add_task(owner, workspace, workflow, required_skills=[]).json()
+    for status in ("PLANNING", "READY", "RUNNING"):
+        move(owner, workspace, workflow, status)
+    task = task_of(owner, workspace, workflow, task["id"])
+    suggested = _suggestions(owner, workspace, workflow, task["id"])["items"]
+    writer = next(i for i in suggested if i["agent_name"] == "Writer")
+    assert suggested[0]["agent_name"] != "Writer"  # the member does not pick the top suggestion
+
+    response = owner.post(
+        wf_url(workspace, f"/{workflow}/tasks/{task['id']}/assign"),
+        json={"agent_id": writer["agent_id"], "revision": task["revision"]},
+        headers=csrf(owner),
+    )
+    assert response.status_code == 200, response.text
+
+    (selection,) = owner.get(
+        wf_url(workspace, f"/{workflow}/tasks/{task['id']}/agent-selections")
+    ).json()["items"]
+    me = owner.get(f"{API}/auth/me").json()["user"]["id"]
+    assert selection["agent_id"] == writer["agent_id"] and selection["eligible"] is True
+    assert selection["rank"] == writer["rank"] and selection["score"] == writer["score"]
+    assert selection["top_agent_id"] == suggested[0]["agent_id"]
+    assert selection["candidate_count"] == len(suggested)
+    assert selection["decided_by_user_id"] == me and selection["rules_version"] == "selection/v1"
+    assert selection["factors"] == writer["factors"]
+    assigned = next(
+        e for e in events(owner, workspace, workflow) if e["event_type"] == "TASK_ASSIGNED"
+    )
+    assert assigned["payload"]["selection_id"] == selection["id"]
+    assert assigned["payload"]["selection_rank"] == writer["rank"]
+
+    # Rationales are history: the database rejects any change.
+    from sqlalchemy import text
+
+    from app.db.sync_session import session_scope
+
+    with session_scope(admin_factory) as s, pytest.raises(DBAPIError):
+        s.execute(text("UPDATE agent_selections SET rank = 1"))
+
+
+def test_selection_endpoints_are_workspace_scoped(
+    new_client: ClientFactory, owner: TestClient, workspace: str, workflow: str
+) -> None:
+    task = add_task(owner, workspace, workflow).json()
+    mallory = new_client()
+    register(mallory, new_email())
+    theirs = my_workspace(mallory)
+    for target in (workspace, theirs):
+        for suffix in ("agent-suggestions", "agent-selections"):
+            response = mallory.get(wf_url(target, f"/{workflow}/tasks/{task['id']}/{suffix}"))
+            assert response.status_code == 404, (target, suffix)
