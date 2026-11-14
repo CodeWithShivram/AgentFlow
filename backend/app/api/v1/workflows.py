@@ -26,6 +26,8 @@ from app.schemas.workflows import (
     EventPage,
     ExecutionList,
     ExecutionResponse,
+    FailedJobList,
+    FailedJobResponse,
     PlanConfirmRequest,
     PlanDraftList,
     PlanDraftPreview,
@@ -43,6 +45,7 @@ from app.schemas.workflows import (
     WorkflowTransitionRequest,
 )
 from app.schemas.workspaces import Page
+from app.services import background_jobs
 from app.services import tasks as task_service
 from app.services import workflows as service
 from app.services.authorization import WorkspaceAccess
@@ -54,6 +57,7 @@ Limit = Annotated[int, Query(ge=1, le=100)]
 Offset = Annotated[int, Query(ge=0, le=100_000)]
 Viewer = Annotated[WorkspaceAccess, Depends(workspace_role(WorkspaceRole.VIEWER))]
 Member = Annotated[WorkspaceAccess, Depends(workspace_role(WorkspaceRole.MEMBER))]
+Admin = Annotated[WorkspaceAccess, Depends(workspace_role(WorkspaceRole.ADMIN))]
 IdempotencyKeyHeader = Annotated[str | None, Header(alias="Idempotency-Key", max_length=255)]
 
 
@@ -430,6 +434,24 @@ async def list_agent_selections(
             for s in rows
         ]
     )
+
+
+@router.get("/{workflow_id}/failed-jobs")
+async def list_failed_jobs(
+    workflow_id: uuid.UUID, access: Viewer, session: DbSession
+) -> FailedJobList:
+    """Background jobs of this workflow the relay gave up on, newest first (ADR-0027)."""
+    events = await background_jobs.list_for_workflow(session, access, workflow_id)
+    return FailedJobList(items=[background_jobs.failed_job_response(e) for e in events])
+
+
+@router.post("/{workflow_id}/failed-jobs/{event_id}/retry")
+async def retry_failed_job(
+    workflow_id: uuid.UUID, event_id: uuid.UUID, access: Admin, session: DbSession
+) -> FailedJobResponse:
+    """Requeues a failed job with fresh attempts (ADMIN). Safe: consumers deduplicate."""
+    event = await background_jobs.retry(session, access, workflow_id, event_id)
+    return background_jobs.failed_job_response(event)
 
 
 @router.get("/{workflow_id}/tasks/{task_id}/executions")

@@ -34,6 +34,10 @@ _MAX_BACKOFF_SECONDS = 300
 _MAX_ERROR_LENGTH = 1000
 
 
+class PermanentPublishError(Exception):
+    """Publishing can never succeed (no route, malformed payload): retrying is pointless."""
+
+
 class _AddsRows(Protocol):
     def add(self, instance: object, /) -> None: ...
 
@@ -143,10 +147,11 @@ def mark_failed(
     attempts: int,
     max_attempts: int,
     error: str,
+    permanent: bool = False,
 ) -> bool:
     """Step 3 (failure). Keeps the event: back to PENDING with exponential backoff, or FAILED
-    once `max_attempts` is reached. Never deletes it."""
-    give_up = attempts >= max_attempts
+    once `max_attempts` is reached, or at once when the failure is permanent. Never deletes it."""
+    give_up = permanent or attempts >= max_attempts
     backoff = timedelta(seconds=min(2**attempts, _MAX_BACKOFF_SECONDS))
     result = session.execute(
         update(OutboxEvent)

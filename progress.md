@@ -2,8 +2,8 @@
 
 ## Current position
 - Phase: 4 — Orchestration and scheduling (Phases 2 and 3 complete; Phase 1 released as `v0.1.0`, pushed with its tag)
-- Last completed step: 4.2 — PostgreSQL checkpoint persistence
-- Next step: 4.3 — Celery dispatch and worker lifecycle (outbox hardening, idempotent claims), which needs a short plan and the owner's go-ahead
+- Last completed step: 4.3 — Celery dispatch and worker lifecycle (outbox hardening, idempotent claims)
+- Next step: 4.4 — Dependency-aware scheduling and concurrency limits, which needs a short plan and the owner's go-ahead
 
 ## Completed steps
 | Step | Commit message | Hash |
@@ -35,16 +35,17 @@
 | 3.6 | `feat(agents): add rule-based agent selection with stored rationale` | `3fbde4f` (pushed, CI ✔) |
 | 3.7 | `feat(agents): file platform agent proposals with permission review` | `437faab` (pushed, CI ✔) |
 | 4.1 | `feat(orchestration): add LangGraph workflow assessment graph` | `de4da58` (pushed, CI ✔) |
-| 4.2 | `feat(orchestration): persist graph checkpoints in PostgreSQL` | latest commit touching `docs/ADR/0026-orchestration-checkpoints.md` |
+| 4.2 | `feat(orchestration): persist graph checkpoints in PostgreSQL` | `c7657ef` (pushed, CI ✔) |
+| 4.3 | `feat(execution): surface and retry failed jobs and report worker health` | latest commit touching `docs/ADR/0027-outbox-hardening-and-worker-health.md` |
 
 ## Environment snapshot (2026-11-14)
 | Item | Value |
 |---|---|
-| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `de4da58` plus tag `v0.1.0` (owner-authorized) |
+| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `c7657ef` plus tag `v0.1.0` (owner-authorized) |
 | Python / uv / Node / npm | 3.12.14 via uv 0.12.9 / Node 24.13.0 / npm 11.6.2 |
 | Celery / kombu | 5.7.0 / 5.7.0 |
 | Docker | 29.9.3 — `agentflow` stack healthy (Docker Desktop must be started first; it had stopped and was restarted in Steps 3.1 and 3.4) |
-| Dev database | `agentflow` at `0016 (head)`; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
+| Dev database | `agentflow` at `0017 (head)`; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
 | Local `.env` | holds generated `WORKER_DB_PASSWORD` and (new) `API_DB_PASSWORD` (gitignored) |
 | Port 8000 | Used by another local project (`easa`); smoke tests used 8010 |
 | E2E | API :8011 (as `agentflow_api`), frontend :3100, database `agentflow_e2e` (reset each run), Redis DBs 2/3, installed Google Chrome |
@@ -52,6 +53,35 @@
 | Test HTTP client | `httpx2` 2.16.0 (replaces `httpx`, OD-10); `httpx` is back only as a LiteLLM dependency |
 | LiteLLM | 1.109.1, imported by workers only when `MODEL_PROVIDER=litellm`; `.env` keeps the mock |
 | LangGraph | 1.2.22 (with langchain-core 1.8.0 and langsmith 0.14.17), imported by workers only; LangSmith tracing disabled; checkpoints via `langgraph-checkpoint-postgres` 3.2.1 |
+
+## Step 4.3 — outbox hardening, failed jobs and worker health (ADR-0027)
+- **Owner decisions (2026-11-14):**
+  - failed jobs on the workflow page, with admin retry;
+  - stranded executions (OD-17) moved to Step 4.5;
+  - readiness reports the relay heartbeat and backlog.
+- **Permanent failures:** `outbox.PermanentPublishError` for no route, or a payload missing the ids in `REQUIRED_PAYLOAD`; the relay marks such events FAILED after one attempt (`mark_failed(permanent=True)`).
+- **Failed jobs (resolves OD-18):**
+  - `app/services/background_jobs.py`;
+  - `GET …/workflows/{id}/failed-jobs` (Viewer), `GET /workspaces/{id}/failed-jobs` (ADMIN, paginated), `POST …/failed-jobs/{event_id}/retry` (ADMIN, workflow lock);
+  - a retry resets the event to PENDING with 0 attempts and writes `BACKGROUND_JOB_RETRIED` (migration `0017`). Responses expose `error_type` only, never `last_error`.
+- **Heartbeat:**
+  - the relay task writes `agentflow:workers:relay_heartbeat` (run time and oldest due-pending age, TTL 300 s) to the app Redis database after each run; failures are logged, never fatal;
+  - `/health/ready` adds `workers`: ok / unavailable (silent > 60 s) / lagging (backlog > 300 s).
+- **Frontend:** a "N background jobs failed" section on the workflow page (purpose, task, attempts, error type, time), with Retry for admins.
+- **Tests changed:**
+  - the readiness tests now write a relay heartbeat (the unit test expects `workers: unavailable` without Redis);
+  - the unknown-route test now expects the more specific `PermanentPublishError`, and a missing-payload test was added.
+
+## Checks last executed (Step 4.3)
+- **Full gate (`check.ps1 -E2E`) ✔, exit 0:**
+  - backend: ruff format (169 files), ruff check, mypy (169 files), alembic check;
+  - pytest **982 passed** (965 plus 17 new: 9 unit heartbeat/error-type tests, 1 unit missing-payload test, 7 integration tests for failed-job visibility, retry and audit, workspace scoping, permanent publish failures and heartbeat recording, plus 2 readiness cases);
+  - frontend: eslint, typecheck, Vitest **107** (3 new: failed-jobs section), Playwright **14 passed** (the stack's readiness wait now includes the relay heartbeat), build.
+- **Deliberate-bug check** (reverted): making the relay retry permanent failures makes both permanent-failure tests fail (the events stay PENDING).
+  - A first attempt at this check is void: Docker had stopped (machine restart), so both tests errored at setup with connection timeouts. Docker Desktop was restarted and the check rerun.
+- **Environment:**
+  - the dev DB is at `0017`; no servers were left running after E2E;
+  - in this session the Git Bash shell lacked coreutils (`cp`, `grep`), so PowerShell was used for those steps.
 
 ## Step 4.2 — orchestration checkpoints (ADR-0026)
 - **Owner decisions (2026-11-14):**
@@ -69,7 +99,7 @@
   - `assess()` returns `(step, checkpoint_id)`.
 - **Retention (hourly cleanup):** `checkpoints` (beyond 20 per thread, or workflow gone), `checkpoint_writes` (checkpoint gone), `checkpoint_blobs` (no longer referenced).
 
-## Checks last executed (Step 4.2)
+## Checks (Step 4.2)
 - **Full gate (`check.ps1 -E2E`) ✔ on the second run, exit 0:**
   - backend: ruff format (164 files), ruff check, mypy (164 files), alembic check;
   - pytest **965 passed** (961 plus 4 new: 2 unit pin tests for library migrations and columns, 2 integration tests for per-workflow checkpointing with no API access, no prompt text and a no-op `setup()`, and retention keeping the newest 20 and dropping orphans);
@@ -542,8 +572,8 @@
 - **Live provider path unverified:** Step 3.3 was verified offline only, by owner decision.
 - **OD-14:** trusted proxy IP handling, before hosted deployment.
 - **OD-19:** the hosted frontend must share a host with the API (CSRF cookie readability); a CSP with nonces is not set yet.
-- **OD-17:** a worker crash after claim leaves the task IN_PROGRESS; recovery is Phase 4.
-- **OD-18:** FAILED outbox rows are kept but not surfaced or replayable yet (Phase 4).
+- **OD-17:** a worker crash after claim leaves the task IN_PROGRESS; recovery is Step 4.5.
+- **Readiness depends on workers** (ADR-0027): the API reports not ready without a running worker and Beat.
 - **OD-16:** replanning for tasks blocked by a cancelled dependency.
 - **Celery:** time limits are not enforced by the Windows `solo` pool, only by Linux prefork. Exactly one Beat must run. Dispatch latency is up to 5 s.
 - **Polling:** live updates poll, since there is no SSE endpoint. The dashboard makes 13 count requests, and Activity covers only the 10 newest workflows.
@@ -553,6 +583,6 @@
 None.
 
 ## Next exact action
-1. **Push Step 4.2** on the owner's go-ahead, and confirm CI on GitHub.
-2. **Step 4.3 (Celery dispatch and worker lifecycle):** present a short plan and get the owner's go-ahead.
+1. **Push Step 4.3** on the owner's go-ahead, and confirm CI on GitHub.
+2. **Step 4.4 (dependency-aware scheduling and concurrency limits):** present a short plan and get the owner's go-ahead.
 3. **Before any hosted deployment:** settle OD-14, OD-19 and OD-20.

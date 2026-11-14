@@ -68,7 +68,7 @@ def test_readiness_reports_each_unavailable_dependency(
     assert response.status_code == 503
     assert response.json() == {
         "status": "not_ready",
-        "checks": {"database": "unavailable", "redis": "unavailable"},
+        "checks": {"database": "unavailable", "redis": "unavailable", "workers": "unavailable"},
     }
     _assert_no_infrastructure_details(response.text, settings)
 
@@ -86,6 +86,7 @@ def test_failed_check_is_logged_without_secrets(
     output = capsys.readouterr().out
     assert "database health check failed" in output
     assert "redis health check failed" in output
+    assert "worker health check failed" in output
     assert UNIT_PG_PASSWORD not in output
     assert UNIT_REDIS_PASSWORD not in output
 

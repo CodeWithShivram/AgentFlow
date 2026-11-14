@@ -365,3 +365,21 @@ class EventPage(BaseModel):
     items: list[WorkflowEventResponse]
     # Pass as `after` to continue; null when there are no events yet.
     last_sequence: int | None
+
+
+class FailedJobResponse(BaseModel):
+    """A background job the relay gave up on (ADR-0027). Identifiers and an error type only."""
+
+    id: uuid.UUID
+    event_type: str
+    workflow_id: uuid.UUID | None
+    task_id: uuid.UUID | None
+    attempts: int
+    # The exception class only (e.g. "ConnectionError"); never the error text.
+    error_type: str | None
+    created_at: datetime
+    failed_at: datetime
+
+
+class FailedJobList(BaseModel):
+    items: list[FailedJobResponse]

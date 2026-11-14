@@ -59,6 +59,7 @@ def relay_once(
                     attempts=event.attempts,
                     max_attempts=max_attempts,
                     error=_safe_error(exc),
+                    permanent=isinstance(exc, outbox.PermanentPublishError),
                 )
             if not kept:
                 report.lease_lost += 1

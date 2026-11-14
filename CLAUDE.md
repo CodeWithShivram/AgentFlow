@@ -107,6 +107,10 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   upgrade that changes its migrations needs a new Alembic migration first (pin test). Checkpoint tables are worker-only
   (no API grants, platform-only RLS); the job checkpoints on its own session connection (thread = workflow id), and the
   hourly cleanup keeps 20 per workflow.
+- Outbox hardening (ADR-0027): raise `outbox.PermanentPublishError` for failures that can never succeed (no route,
+  missing payload ids in `REQUIRED_PAYLOAD`), so the relay fails them at once. Failed jobs are retried only via
+  `background_jobs.retry` (ADMIN, workflow lock, `BACKGROUND_JOB_RETRIED` event); clients see `error_type`, never
+  `last_error`. Readiness includes the relay heartbeat in Redis; tests hitting `/health/ready` must write one.
 - Workflow events are append-only.
 
 ## Security

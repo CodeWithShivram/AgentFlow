@@ -122,6 +122,8 @@ class WorkflowEventType(StrEnum):
     PLAN_GENERATION_FAILED = "PLAN_GENERATION_FAILED"
     # Added in Step 2.5: a draft became the workflow's tasks.
     PLAN_CONFIRMED = "PLAN_CONFIRMED"
+    # Added in Step 4.3: an admin requeued a failed background job (ADR-0027).
+    BACKGROUND_JOB_RETRIED = "BACKGROUND_JOB_RETRIED"
 
 
 class Workflow(Base):

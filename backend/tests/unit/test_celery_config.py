@@ -88,8 +88,17 @@ def test_published_message_carries_identifiers_only(monkeypatch: pytest.MonkeyPa
 
 
 def test_unknown_event_types_are_not_published() -> None:
-    with pytest.raises(ValueError, match="no route"):
+    # Permanent (ADR-0027): the relay marks such events FAILED at once instead of retrying.
+    with pytest.raises(outbox.PermanentPublishError, match="no route"):
         tasks.publish_event(outbox.ClaimedEvent(uuid.uuid4(), "unknown.event", {}, 1))
+
+
+def test_events_missing_required_identifiers_are_not_published() -> None:
+    event = outbox.ClaimedEvent(uuid.uuid4(), outbox.TASK_DISPATCH, {"workspace_id": "w"}, 1)
+    with pytest.raises(
+        outbox.PermanentPublishError, match="agent_version_id, task_id, workflow_id"
+    ):
+        tasks.publish_event(event)
 
 
 def test_production_rejects_a_placeholder_worker_password() -> None:

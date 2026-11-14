@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, Query, status
 from app.api.deps import CurrentPrincipal, DbSession, RateLimiterDep, SettingsDep, workspace_role
 from app.models import WorkspaceRole
 from app.repositories import workspaces as repository
+from app.schemas.workflows import FailedJobResponse
 from app.schemas.workspaces import (
     AcceptedMembershipResponse,
     InvitationAcceptRequest,
@@ -21,6 +22,7 @@ from app.schemas.workspaces import (
     Page,
     WorkspaceResponse,
 )
+from app.services import background_jobs
 from app.services import workspaces as service
 from app.services.authorization import WorkspaceAccess
 
@@ -120,4 +122,20 @@ async def accept_invitation(
     )
     return AcceptedMembershipResponse(
         workspace_id=workspace.id, workspace_name=workspace.name, role=role
+    )
+
+
+@router.get("/workspaces/{workspace_id}/failed-jobs")
+async def list_workspace_failed_jobs(
+    access: AdminAccess, session: DbSession, limit: Limit = 50, offset: Offset = 0
+) -> Page[FailedJobResponse]:
+    """Every background job of the workspace the relay gave up on (ADMIN, ADR-0027)."""
+    events, total = await background_jobs.list_for_workspace(
+        session, access, limit=limit, offset=offset
+    )
+    return Page(
+        items=[background_jobs.failed_job_response(e) for e in events],
+        total=total,
+        limit=limit,
+        offset=offset,
     )

@@ -1,16 +1,20 @@
 """Celery tasks. Thin wrappers: the logic lives in app.execution (runner, relay, cleanup)."""
 
 import logging
+import os
 import time
 import uuid
+from typing import Any
 
 from celery.exceptions import SoftTimeLimitExceeded
-from sqlalchemy.exc import OperationalError
+from redis import Redis
+from redis.exceptions import RedisError
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
 from app.agents.contract import AgentSubmission, InvalidSubmissionError
 from app.agents.specialists import AgentRuntimeUnavailableError
 from app.db.sync_session import get_worker_session_factory, session_scope
-from app.execution import cleanup, outbox, relay, runner
+from app.execution import cleanup, heartbeat, outbox, relay, runner
 from app.llm.gateway import ModelGatewayError, get_model_gateway
 from app.orchestration import job as orchestration_job
 from app.planning import analysis, plan
@@ -26,6 +30,14 @@ EVENT_ROUTES = {
     outbox.WORKFLOW_PLAN: ("agentflow.plan_workflow", EXECUTION_QUEUE),
     outbox.WORKFLOW_ORCHESTRATE: ("agentflow.orchestrate_workflow", EXECUTION_QUEUE),
 }
+# The identifiers each event's task needs; a payload missing one can never be consumed.
+_WORKFLOW_IDS = frozenset({"workspace_id", "workflow_id"})
+REQUIRED_PAYLOAD = {
+    outbox.TASK_DISPATCH: _WORKFLOW_IDS | {"task_id", "agent_version_id"},
+    outbox.WORKFLOW_ANALYZE: _WORKFLOW_IDS,
+    outbox.WORKFLOW_PLAN: _WORKFLOW_IDS,
+    outbox.WORKFLOW_ORCHESTRATE: _WORKFLOW_IDS,
+}
 _FINISH_ATTEMPTS = 3
 # Default agent timeout (handoff section 6): 600 s. Hard limit gives the soft one room to finish.
 EXECUTION_SOFT_TIME_LIMIT = runner.AGENT_TIME_LIMIT_SECONDS
@@ -39,7 +51,10 @@ def publish_event(event: outbox.ClaimedEvent) -> None:
     """Hands one outbox event to the broker. Raises if the broker does not accept it."""
     route = EVENT_ROUTES.get(event.event_type)
     if route is None:
-        raise ValueError(f"no route for outbox event type {event.event_type!r}")
+        raise outbox.PermanentPublishError(f"no route for outbox event type {event.event_type!r}")
+    missing = REQUIRED_PAYLOAD[event.event_type] - set(event.payload)
+    if missing:
+        raise outbox.PermanentPublishError(f"payload lacks {', '.join(sorted(missing))}")
     task_name, queue = route
     celery_app.send_task(
         task_name,
@@ -50,10 +65,44 @@ def publish_event(event: outbox.ClaimedEvent) -> None:
     )
 
 
+_heartbeat_clients: dict[int, Redis] = {}
+
+
+def _heartbeat_client() -> Redis:
+    """A Redis client per worker process (created lazily, like the database engine)."""
+    pid = os.getpid()
+    if pid not in _heartbeat_clients:
+        _heartbeat_clients.clear()
+        _heartbeat_clients[pid] = Redis(
+            host=settings.redis_host,
+            port=settings.redis_port,
+            db=settings.redis_db,
+            password=settings.redis_password.get_secret_value(),
+            socket_connect_timeout=settings.redis_socket_timeout_seconds,
+            socket_timeout=settings.redis_socket_timeout_seconds,
+        )
+    return _heartbeat_clients[pid]
+
+
+def _record_heartbeat(factory: Any) -> None:
+    """Readiness reads this (ADR-0027). A failure here never stops the relay."""
+    try:
+        with session_scope(factory) as session:
+            oldest_due = heartbeat.oldest_due_seconds(session)
+        _heartbeat_client().set(
+            heartbeat.KEY,
+            heartbeat.encode(at=time.time(), oldest_due=oldest_due),
+            ex=heartbeat.TTL_SECONDS,
+        )
+    except (RedisError, OSError, SQLAlchemyError) as exc:
+        logger.warning("relay heartbeat failed", extra={"error_type": type(exc).__name__})
+
+
 @celery_app.task(name="agentflow.relay_outbox", ignore_result=True)
 def relay_outbox() -> dict[str, int]:
+    factory = get_worker_session_factory()
     report = relay.relay_once(
-        get_worker_session_factory(),
+        factory,
         publish_event,
         batch_size=settings.outbox_batch_size,
         lease_seconds=settings.outbox_lease_seconds,
@@ -61,6 +110,7 @@ def relay_outbox() -> dict[str, int]:
     )
     if report.claimed:
         logger.info("outbox relay", extra=vars(report))
+    _record_heartbeat(factory)
     return vars(report)
 
 

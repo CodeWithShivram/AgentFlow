@@ -153,8 +153,8 @@ Acceptance (phase): deterministic tests with mock model responses; invalid plans
 | Step | Title | Status |
 |---|---|---|
 | 4.1 | LangGraph workflow state and nodes | DONE (ADR-0025) — `de4da58` |
-| 4.2 | PostgreSQL checkpoint persistence | DONE (ADR-0026) — see `progress.md` |
-| 4.3 | Celery dispatch and worker lifecycle (outbox hardening, idempotent claims) | NOT_STARTED |
+| 4.2 | PostgreSQL checkpoint persistence | DONE (ADR-0026) — `c7657ef` |
+| 4.3 | Celery dispatch and worker lifecycle (outbox hardening, idempotent claims) | DONE (ADR-0027) — see `progress.md` |
 | 4.4 | Dependency-aware scheduling and concurrency limits | NOT_STARTED |
 | 4.5 | Cancellation and restart recovery | NOT_STARTED |
 | 4.6 | Parallel and sequential execution tests | NOT_STARTED |
@@ -222,8 +222,8 @@ Acceptance (phase): deterministic tests with mock model responses; invalid plans
 | OD-14 | Trusted reverse-proxy client IP handling for rate limits | before any proxied deployment | Rate limits use the direct peer IP today. |
 | OD-15 | ~~Database-level case-insensitive agent names~~ **Resolved 2026-11-12 in Step 1.9a (ADR-0012)** | before 1.10 | Unique index `uq_agents_workspace_id_lower_name`. |
 | OD-16 | Replanning / recovery for tasks blocked by a cancelled dependency | Phase 5 | Today only cancelling the workflow resolves it (ADR-0009). |
-| OD-17 | Recover executions stranded by a worker crash after claim (task stays IN_PROGRESS) | Phase 4 | Needs heartbeat/time-out sweep (ADR-0010). |
-| OD-18 | Surface and replay FAILED outbox events; dead-letter tooling | Phase 4 | Rows are kept, not yet visible (ADR-0010). |
+| OD-17 | Recover executions stranded by a worker crash after claim (task stays IN_PROGRESS) | Step 4.5 (owner decision 2026-11-14) | Needs a time-out sweep (ADR-0010, ADR-0027). |
+| OD-18 | ~~Surface and replay FAILED outbox events; dead-letter tooling~~ **Resolved 2026-11-14 in Step 4.3 (ADR-0027)** | Phase 4 | Failed jobs listed per workflow and workspace; ADMIN retry with an audit event. |
 | OD-19 | Hosted frontend topology and Content-Security-Policy | before any hosted deployment | The app must read the API's CSRF cookie, so the frontend and API must share a host (e.g. a reverse proxy routing `/api`). A CSP needs per-request nonces for Next.js inline scripts (ADR-0011). |
 | OD-21 | Token counts LiteLLM estimates for providers that do not report usage (e.g. Ollama) are indistinguishable from reported ones | Phase 7 pricing | Recorded with `reported_via: "litellm"` (ADR-0020); pricing must treat such providers' counts as unverified. |
 | OD-20 | Non-superuser schema owner for migrations | before any hosted deployment | Migrations still run as the administrator (`POSTGRES_USER`); applications never connect as it (ADR-0012). |

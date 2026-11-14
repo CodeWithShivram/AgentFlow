@@ -7,6 +7,7 @@ import type {
   Agent,
   AgentCatalog,
   AgentSuggestionList,
+  FailedJob,
   AgentInput,
   AgentStatus,
   AgentUpdate,
@@ -128,6 +129,12 @@ export function createEndpoints(client: ApiClient) {
         client.get<{ items: PlanDraftSummary[] }>(`${wf(workspaceId, workflowId)}/plan-drafts`),
       planDraft: (workspaceId: Uuid, workflowId: Uuid, version: number) =>
         client.get<PlanDraftPreview>(`${wf(workspaceId, workflowId)}/plan-drafts/${version}`),
+      /** Background jobs of the workflow the platform gave up on (Step 4.3). */
+      failedJobs: (workspaceId: Uuid, workflowId: Uuid) =>
+        client.get<{ items: FailedJob[] }>(`${wf(workspaceId, workflowId)}/failed-jobs`),
+      /** Requeues a failed job (ADMIN). */
+      retryFailedJob: (workspaceId: Uuid, workflowId: Uuid, jobId: Uuid) =>
+        client.post<FailedJob>(`${wf(workspaceId, workflowId)}/failed-jobs/${jobId}/retry`),
       /** Turns a plan draft into the workflow's tasks (Step 2.5). */
       confirmPlanDraft: (
         workspaceId: Uuid,

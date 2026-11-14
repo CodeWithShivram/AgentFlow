@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.db.session import create_engine, create_session_factory, get_db_session
+from app.execution import heartbeat
 from app.main import create_app
 from tests.conftest import make_client
 from tests.integration.conftest import INFRA_HINT
@@ -115,11 +116,38 @@ def test_health_endpoint_ok(client: TestClient, path: str) -> None:
     assert response.json() == {"status": "ok"}
 
 
-def test_readiness_ok(client: TestClient, settings: Settings) -> None:
+@pytest.fixture
+def relay_heartbeat(settings: Settings) -> Iterator[Callable[[float, int], None]]:
+    """Writes the relay heartbeat (ADR-0027) as a worker would; removed afterwards."""
+    client = redis.Redis(
+        host=settings.redis_host,
+        port=settings.redis_port,
+        db=settings.redis_db,
+        password=settings.redis_password.get_secret_value(),
+    )
+
+    def write(seconds_ago: float, oldest_due: int) -> None:
+        value = heartbeat.encode(at=time.time() - seconds_ago, oldest_due=oldest_due)
+        client.set(heartbeat.KEY, value, ex=heartbeat.TTL_SECONDS)
+
+    try:
+        yield write
+    finally:
+        client.delete(heartbeat.KEY)
+        client.close()
+
+
+def test_readiness_ok(
+    client: TestClient, settings: Settings, relay_heartbeat: Callable[[float, int], None]
+) -> None:
+    relay_heartbeat(1, 0)
     response = client.get("/api/v1/health/ready")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ready", "checks": {"database": "ok", "redis": "ok"}}
+    assert response.json() == {
+        "status": "ready",
+        "checks": {"database": "ok", "redis": "ok", "workers": "ok"},
+    }
     for secret in settings.secret_values():
         assert secret not in response.text
 
@@ -143,7 +171,29 @@ async def test_session_returns_connection_to_pool(settings: Settings) -> None:
         await engine.dispose()
 
 
-def test_shutdown_closes_database_and_redis_connections(settings: Settings) -> None:
+@pytest.mark.parametrize(
+    ("seconds_ago", "oldest_due", "expected"),
+    [(120, 0, "unavailable"), (1, 900, "lagging")],
+)
+def test_readiness_reports_silent_or_lagging_workers(
+    client: TestClient,
+    relay_heartbeat: Callable[[float, int], None],
+    seconds_ago: float,
+    oldest_due: int,
+    expected: str,
+) -> None:
+    relay_heartbeat(seconds_ago, oldest_due)
+    response = client.get("/api/v1/health/ready")
+
+    assert response.status_code == 503
+    assert response.json()["checks"]["workers"] == expected
+    assert response.json()["checks"]["database"] == "ok"
+
+
+def test_shutdown_closes_database_and_redis_connections(
+    settings: Settings, relay_heartbeat: Callable[[float, int], None]
+) -> None:
+    relay_heartbeat(1, 0)
     with make_client(_app(settings)) as client:
         assert client.get("/api/v1/health/ready").status_code == 200
         assert _postgres_connections(settings) >= 1

@@ -283,6 +283,18 @@ export interface Proposal {
 
 // --- workflows and tasks --------------------------------------------------------------------
 
+/** A background job the platform gave up on (ADR-0027): identifiers and an error type only. */
+export interface FailedJob {
+  id: Uuid;
+  event_type: string;
+  workflow_id: Uuid | null;
+  task_id: Uuid | null;
+  attempts: number;
+  error_type: string | null;
+  created_at: IsoDateTime;
+  failed_at: IsoDateTime;
+}
+
 export interface NextStep {
   kind: string;
   actor: "people" | "agents" | "platform" | "none";
