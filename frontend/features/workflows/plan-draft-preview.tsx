@@ -1,8 +1,9 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRightIcon, CircleCheckIcon, LoaderCircleIcon } from "lucide-react";
 import { useState } from "react";
+import { toast } from "sonner";
 
 import { RelativeTime } from "@/components/common/relative-time";
 import { EmptyState, ErrorState, ListSkeleton } from "@/components/common/states";
@@ -18,12 +19,13 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { api } from "@/lib/api";
+import { describeError } from "@/lib/api/errors";
 import type { PlanDraftPreview as Preview, PlannedTask, Workflow } from "@/lib/api/types";
 import { humanize } from "@/lib/format";
 import { useCan, useWorkspace } from "@/lib/workspace";
 
 import { ConfirmPlanDialog } from "./confirm-plan-dialog";
-import { PLAN_EDITABLE } from "./status";
+import { PLAN_EDITABLE, REPLAN_STATUSES } from "./status";
 import { workflowKeys } from "./use-workflow";
 
 /**
@@ -38,7 +40,12 @@ interface PlanDraftPreviewProps {
 }
 
 export function PlanDraftPreview({ workflow, existingTaskCount, onConfirmed, onConflict }: PlanDraftPreviewProps) {
-  const canConfirm = useCan("MEMBER") && PLAN_EDITABLE.has(workflow.status);
+  const isMember = useCan("MEMBER");
+  const isAdmin = useCan("ADMIN");
+  const replannable = REPLAN_STATUSES.has(workflow.status);
+  // Confirming a replan is the approval where the workflow requires one (ADR-0033).
+  const canConfirmReplan = replannable && (workflow.autonomy_policy === "approval_required" ? isAdmin : isMember);
+  const canConfirmPlan = isMember && PLAN_EDITABLE.has(workflow.status);
   const workspace = useWorkspace();
   const [chosen, setChosen] = useState<number | null>(null);
   const drafts = useQuery({
@@ -53,6 +60,11 @@ export function PlanDraftPreview({ workflow, existingTaskCount, onConfirmed, onC
     queryFn: () => api.workflows.planDraft(workspace.id, workflow.id, version ?? 0),
     enabled: version !== null,
   });
+
+  const replanButton =
+    replannable && isMember ? (
+      <ReplanButton workflow={workflow} />
+    ) : null;
 
   if (workflow.plan_status === "NOT_REQUESTED") {
     return (
@@ -98,7 +110,9 @@ export function PlanDraftPreview({ workflow, existingTaskCount, onConfirmed, onC
           <p role="status" className="flex items-center gap-2 pb-2 text-sm text-muted-foreground">
             <LoaderCircleIcon className="size-4 animate-spin" aria-hidden /> A newer draft is being generated…
           </p>
-        ) : null}
+        ) : (
+          replanButton
+        )}
       </div>
       {preview.isPending ? (
         <ListSkeleton rows={4} label="Loading the plan draft" />
@@ -108,7 +122,7 @@ export function PlanDraftPreview({ workflow, existingTaskCount, onConfirmed, onC
         <DraftView
           preview={preview.data}
           workflow={workflow}
-          canConfirm={canConfirm}
+          canConfirm={preview.data.kind === "replan" ? canConfirmReplan : canConfirmPlan}
           existingTaskCount={existingTaskCount}
           onConfirmed={onConfirmed}
           onConflict={onConflict}
@@ -134,6 +148,8 @@ function DraftView({ preview, workflow, canConfirm, existingTaskCount, onConfirm
   const errors = preview.issues.filter((i) => i.severity === "error");
   const warnings = preview.issues.filter((i) => i.severity === "warning");
   const titles = (keys: string[]) => keys.map((k) => byKey.get(k)?.title ?? k).join(", ");
+  const kept = new Map((preview.basis ?? []).map((b) => [b.key, b.title]));
+  const keptTitles = (keys: string[]) => keys.map((k) => kept.get(k) ?? k).join(", ");
 
   return (
     <div className="space-y-4">
@@ -143,6 +159,11 @@ function DraftView({ preview, workflow, canConfirm, existingTaskCount, onConfirm
           <span className="text-muted-foreground">
             · Version {preview.version}, generated <RelativeTime value={preview.created_at} />
           </span>
+          {preview.kind === "replan" ? (
+            <Badge variant="outline" className="ml-2">
+              Replan
+            </Badge>
+          ) : null}
           {confirmed ? (
             <Badge variant="secondary" className="ml-2">
               Confirmed
@@ -163,6 +184,22 @@ function DraftView({ preview, workflow, canConfirm, existingTaskCount, onConfirm
         onConflict={onConflict}
       />
 
+      {preview.kind === "replan" ? (
+        <section aria-label="Completed work kept" className="rounded-md border p-3 text-sm">
+          <p className="font-medium">
+            Keeps {kept.size} completed {kept.size === 1 ? "task" : "tasks"}; replaces the unfinished ones
+          </p>
+          {kept.size > 0 ? (
+            <ul className="mt-1 list-disc space-y-1 pl-5">
+              {[...kept.values()].map((title, i) => (
+                <li key={i} className="break-words">
+                  {title}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </section>
+      ) : null}
       {errors.length > 0 ? (
         <Alert variant="destructive">
           <AlertTitle>This draft cannot be used</AlertTitle>
@@ -208,7 +245,7 @@ function DraftView({ preview, workflow, canConfirm, existingTaskCount, onConfirm
                 <ul className="space-y-2">
                   {stage.map((key) => {
                     const task = byKey.get(key);
-                    return task ? <TaskCard key={key} task={task} titles={titles} /> : null;
+                    return task ? <TaskCard key={key} task={task} titles={titles} keptTitles={keptTitles} /> : null;
                   })}
                 </ul>
               </section>
@@ -234,7 +271,32 @@ function DraftView({ preview, workflow, canConfirm, existingTaskCount, onConfirm
   );
 }
 
-function TaskCard({ task, titles }: { task: PlannedTask; titles: (keys: string[]) => string }) {
+function ReplanButton({ workflow }: { workflow: Workflow }) {
+  const workspace = useWorkspace();
+  const queryClient = useQueryClient();
+  const replan = useMutation({
+    mutationFn: () => api.workflows.requestReplan(workspace.id, workflow.id),
+    onSuccess: (updated) => {
+      queryClient.setQueryData(workflowKeys.detail(workspace.id, workflow.id), updated);
+      void queryClient.invalidateQueries({ queryKey: workflowKeys.planDrafts(workspace.id, workflow.id) });
+      toast.success("Replan requested: a draft of the remaining work is being prepared");
+    },
+    onError: (error) => toast.error(describeError(error)),
+  });
+  return (
+    <Button variant="outline" className="mb-0.5" disabled={replan.isPending} aria-busy={replan.isPending} onClick={() => replan.mutate()}>
+      {replan.isPending ? "Requesting…" : "Replan remaining work"}
+    </Button>
+  );
+}
+
+interface TaskCardProps {
+  task: PlannedTask;
+  titles: (keys: string[]) => string;
+  keptTitles: (keys: string[]) => string;
+}
+
+function TaskCard({ task, titles, keptTitles }: TaskCardProps) {
   return (
     <li className="rounded-md border bg-card p-3 text-sm">
       <details>
@@ -256,6 +318,11 @@ function TaskCard({ task, titles }: { task: PlannedTask; titles: (keys: string[]
           </span>
           {task.depends_on.length > 0 ? (
             <span className="mt-2 block text-xs text-muted-foreground">After: {titles(task.depends_on)}</span>
+          ) : null}
+          {task.depends_on_completed?.length ? (
+            <span className="mt-1 block text-xs text-muted-foreground">
+              Builds on completed: {keptTitles(task.depends_on_completed)}
+            </span>
           ) : null}
         </summary>
         <div className="mt-3 space-y-2 border-t pt-2">

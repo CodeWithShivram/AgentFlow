@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import CheckConstraint, ForeignKeyConstraint, String, UniqueConstraint
+from sqlalchemy import CheckConstraint, ForeignKeyConstraint, String, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -27,6 +27,8 @@ class WorkflowPlan(Base):
         ),
         CheckConstraint("version >= 1", name="version_positive"),
         CheckConstraint("task_count BETWEEN 1 AND 25", name="task_count_range"),
+        CheckConstraint("kind IN ('plan', 'replan')", name="kind_known"),
+        CheckConstraint("(kind = 'replan') = (basis IS NOT NULL)", name="replan_has_basis"),
     )
 
     id: Mapped[uuid.UUID] = uuid_pk()
@@ -39,4 +41,9 @@ class WorkflowPlan(Base):
     # The outbox event of the request that produced it, and the prompt version used.
     request_id: Mapped[uuid.UUID]
     prompt_version: Mapped[str] = mapped_column(String(64))
+    # "replan" drafts revise the remaining work of a paused or blocked workflow (ADR-0033).
+    kind: Mapped[str] = mapped_column(String(16), server_default=text("'plan'"), default="plan")
+    # A replan's completed tasks when it was requested: [{key, task_id, title}]. The draft's
+    # `depends_on_completed` keys refer to these.
+    basis: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB(none_as_null=True))
     created_at: Mapped[datetime] = created_at_column()

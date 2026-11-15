@@ -26,8 +26,9 @@ def test_the_graph_is_a_compiled_langgraph_with_one_node_per_outcome() -> None:
         "running",
         "awaiting_verification",
         "blocked",
+        "unblock",
     }
-    assert GRAPH_VERSION == "orchestration/v3"
+    assert GRAPH_VERSION == "orchestration/v4"
 
 
 @pytest.mark.parametrize(
@@ -101,8 +102,29 @@ def test_submitted_work_waits_for_verification() -> None:
     ],
 )
 def test_nothing_runnable_is_blocked(tasks: list[TaskView], summary: str) -> None:
-    step = _assess("BLOCKED", tasks)
+    # A running workflow that cannot progress; a BLOCKED workflow gets `unblock` (v4).
+    step = _assess("RUNNING", tasks)
     assert step["kind"] == "blocked" and step["summary"] == summary
+
+
+def test_a_blocked_workflow_names_its_blocking_tasks_and_suggests_a_replan() -> None:
+    tasks = [
+        _task(1, "ESCALATED", assigned=True),
+        _task(2, "CANCELLED"),
+        _task(3, "BLOCKED", required=False),  # optional: does not block the workflow
+        _task(4, "COMPLETED"),
+    ]
+    step = _assess("BLOCKED", tasks)
+    assert (step["kind"], step["actor"]) == ("unblock", "people")
+    assert step["summary"] == (
+        "The workflow is blocked by 2 required tasks: reassign or retry them, or replan the "
+        "remaining work."
+    )
+    assert step["task_ids"] == ["t1", "t2"]
+    assert _assess("BLOCKED", [])["summary"] == (
+        "The workflow is blocked: resume it, or replan the remaining work."
+    )
+    assert "replan" in _assess("PAUSED", tasks)["summary"]
 
 
 def test_task_ids_are_capped() -> None:

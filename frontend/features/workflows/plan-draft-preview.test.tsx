@@ -28,6 +28,8 @@ function preview(overrides: Partial<Preview> = {}): Preview {
     version: 2,
     task_count: 3,
     prompt_version: "plan_generation/v1",
+    kind: "plan",
+    basis: null,
     created_at: new Date().toISOString(),
     plan: {
       schema_version: 1,
@@ -174,5 +176,57 @@ describe("Confirming a draft", () => {
     renderPreview({ confirmed_plan_version: 2 });
     expect(await screen.findByText("Confirmed", {}, LOAD)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Confirm again" })).toBeInTheDocument();
+  });
+});
+
+
+describe("Replanning (Step 5.4)", () => {
+  function replan(): Preview {
+    const redo = { ...task("t1", "Redo: Write report"), depends_on_completed: ["done-1"] };
+    return preview({
+      version: 3,
+      task_count: 1,
+      prompt_version: "replan/v1",
+      kind: "replan",
+      basis: [{ key: "done-1", task_id: "task-a", title: "Collect pricing" }],
+      plan: { schema_version: 1, summary: "Replan of the remaining work", tasks: [redo], risks: [] },
+      stages: [["t1"]],
+    });
+  }
+
+  it("shows what a replan keeps and what each new task builds on", async () => {
+    stub(replan());
+    renderPreview({ status: "BLOCKED", autonomy_policy: "autonomous" });
+
+    const kept = await screen.findByRole("region", { name: "Completed work kept" }, LOAD);
+    expect(kept).toHaveTextContent("Keeps 1 completed task; replaces the unfinished ones");
+    expect(within(kept).getByText("Collect pricing")).toBeInTheDocument();
+    expect(screen.getByText("Replan")).toBeInTheDocument();
+    expect(screen.getByText("Builds on completed: Collect pricing")).toBeInTheDocument();
+  });
+
+  it("confirms a replan without asking to replace or add tasks", async () => {
+    const fetchMock = stub(replan());
+    renderPreview({ status: "PAUSED", autonomy_policy: "autonomous" }, { existingTaskCount: 3 });
+
+    await userEvent.click(await screen.findByRole("button", { name: "Confirm this draft" }, LOAD));
+    const dialog = screen.getByRole("dialog", { name: "Confirm draft version 3" });
+    expect(dialog).toHaveTextContent("replaces the workflow's unfinished tasks with 1 new task");
+    expect(within(dialog).queryByText("Replace them")).not.toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Confirm plan" }));
+
+    const confirm = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/plan-drafts/3/confirm"));
+    expect(JSON.parse(String(confirm?.[1]?.body))).toEqual({ revision: 7, acknowledge_warnings: false });
+  });
+
+  it("lets members request a replan but only admins confirm one when approval is required", async () => {
+    const fetchMock = stub(replan());
+    renderPreview({ status: "BLOCKED", autonomy_policy: "approval_required" }, { role: "MEMBER" });
+
+    await userEvent.click(await screen.findByRole("button", { name: "Replan remaining work" }, LOAD));
+    expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith("/replan") && init?.method === "POST")).toBe(
+      true,
+    );
+    expect(screen.queryByRole("button", { name: "Confirm this draft" })).not.toBeInTheDocument();
   });
 });

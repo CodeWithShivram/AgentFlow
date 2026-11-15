@@ -23,12 +23,15 @@ from app.core.errors import AppError
 from app.models import (
     AgentProposal,
     AgentSelection,
+    AutonomyPolicy,
     TaskDependency,
     TaskStatus,
     Workflow,
     WorkflowEventType,
+    WorkflowPlan,
     WorkflowStatus,
     WorkflowTask,
+    WorkspaceRole,
 )
 from app.planning.dag import analyse_plan
 from app.planning.schema import PlanProposal
@@ -38,14 +41,20 @@ from app.schemas.agents import AgentConfiguration
 from app.schemas.workflows import TaskCreateRequest, TaskUpdateRequest
 from app.services import agents as agent_service
 from app.services import selection as selection_service
-from app.services.authorization import WorkspaceAccess
+from app.services.authorization import InsufficientRoleError, WorkspaceAccess, role_at_least
 from app.services.transitions import (
     TransitionPreconditionError,
     record_event,
     transition_task,
     transition_workflow,
 )
-from app.services.workflows import PlanDraftNotFoundError, get_workflow, lock_for_change
+from app.services.workflows import (
+    REPLAN_STATUSES,
+    PlanDraftNotFoundError,
+    ReplanNotAllowedError,
+    get_workflow,
+    lock_for_change,
+)
 from app.workflows.state_machine import (
     PLAN_EDIT_REOPENS,
     PLAN_EDITABLE,
@@ -117,6 +126,18 @@ class PlanWarningsNotAcknowledgedError(AppError):
     status_code = 409
     code = "PLAN_WARNINGS_NOT_ACKNOWLEDGED"
     message = "This plan draft has warnings; review and acknowledge them to confirm it."
+
+
+class TasksInFlightError(AppError):
+    status_code = 409
+    code = "TASKS_IN_FLIGHT"
+    message = "Wait until no task is running or being verified, then confirm the replan."
+
+
+class PlanDraftStaleError(AppError):
+    status_code = 409
+    code = "PLAN_DRAFT_STALE"
+    message = "The tasks this replan builds on have changed; request a new replan."
 
 
 class ExistingTasksModeRequiredError(AppError):
@@ -539,6 +560,10 @@ async def confirm_plan_draft(
     if draft is None:
         raise PlanDraftNotFoundError()
     proposal = PlanProposal.model_validate(draft.plan)
+    if draft.kind == "replan":
+        return await _confirm_replan(
+            session, access, workflow, draft, proposal, acknowledge_warnings=acknowledge_warnings
+        )
     skills = await agents_repository.active_capabilities(session, workspace_id=access.workspace_id)
     report = analyse_plan(
         proposal.tasks, max_parallel_tasks=workflow.max_parallel_tasks, available_skills=skills
@@ -562,6 +587,43 @@ async def confirm_plan_draft(
     if total > MAX_TASKS_PER_WORKFLOW:
         raise PlanLimitError(f"A workflow may have at most {MAX_TASKS_PER_WORKFLOW} tasks.")
 
+    created = await _add_planned_tasks(session, access, workflow, proposal, version, {})
+    proposals = (
+        await _propose_for_unassignable(session, workflow, created)
+        if workflow.allow_dynamic_agent_proposals
+        else []
+    )
+    workflow.confirmed_plan_version = version
+    record_event(
+        session,
+        workflow,
+        WorkflowEventType.PLAN_CONFIRMED,
+        payload={
+            "actor": Actor.USER.value,
+            "user_id": str(access.user_id),
+            "version": version,
+            "existing_tasks": existing_tasks,
+            "tasks_created": len(proposal.tasks),
+            "tasks_removed": removed,
+            "acknowledged_warnings": warnings,
+            "agent_proposals_created": len(proposals),
+        },
+    )
+    workflow.revision += 1
+    await session.commit()
+    return workflow
+
+
+async def _add_planned_tasks(
+    session: AsyncSession,
+    access: WorkspaceAccess,
+    workflow: Workflow,
+    proposal: PlanProposal,
+    version: int,
+    completed: dict[str, uuid.UUID],
+) -> list[WorkflowTask]:
+    """Creates a draft's tasks (PENDING) and its dependencies, with their events. `completed`
+    maps a replan's basis keys to the kept tasks (ADR-0033)."""
     ids: dict[str, uuid.UUID] = {}
     created: list[WorkflowTask] = []
     for planned in proposal.tasks:
@@ -598,12 +660,16 @@ async def confirm_plan_draft(
                 "plan_task_key": planned.key,
             },
         )
-    # New tasks depend only on new tasks, and drafts are acyclic, so no cycle can form.
+    # New tasks depend on new tasks (drafts are acyclic) or on completed tasks, which have no
+    # unfinished dependencies of their own, so no cycle can form.
     for planned in proposal.tasks:
-        for key in planned.depends_on:
+        targets = [ids[key] for key in planned.depends_on] + [
+            completed[key] for key in planned.depends_on_completed
+        ]
+        for target in targets:
             session.add(
                 TaskDependency(
-                    task_id=ids[planned.key], depends_on_task_id=ids[key], workflow_id=workflow.id
+                    task_id=ids[planned.key], depends_on_task_id=target, workflow_id=workflow.id
                 )
             )
             record_event(
@@ -611,14 +677,96 @@ async def confirm_plan_draft(
                 workflow,
                 WorkflowEventType.DEPENDENCY_ADDED,
                 task_id=ids[planned.key],
-                payload={"depends_on_task_id": str(ids[key])},
+                payload={"depends_on_task_id": str(target)},
             )
+    return created
+
+
+# Statuses that block a replan until they finish: the work is running or being verified.
+_IN_FLIGHT = frozenset({T.QUEUED, T.IN_PROGRESS, T.SUBMITTED, T.VERIFYING})
+
+
+async def _confirm_replan(
+    session: AsyncSession,
+    access: WorkspaceAccess,
+    workflow: Workflow,
+    draft: WorkflowPlan,
+    proposal: PlanProposal,
+    *,
+    acknowledge_warnings: bool,
+) -> Workflow:
+    """Replaces the unfinished tasks of a paused or blocked workflow with a replan draft
+    (ADR-0033). Completed tasks stay as they are; the replaced ones are kept as removed history.
+    Workflows that require plan approval need an admin, since confirming is the approval. It
+    never resumes work."""
+    if workflow.status not in REPLAN_STATUSES:
+        raise ReplanNotAllowedError(details={"status": workflow.status.value})
+    if workflow.autonomy_policy == AutonomyPolicy.APPROVAL_REQUIRED and not role_at_least(
+        access.role, WorkspaceRole.ADMIN
+    ):
+        raise InsufficientRoleError()
+    active = [t for t in await repository.list_tasks(session, workflow) if t.removed_at is None]
+    in_flight = [t for t in active if t.status in _IN_FLIGHT]
+    if in_flight:
+        raise TasksInFlightError(details={"task_ids": [str(t.id) for t in in_flight]})
+    by_id = {str(t.id): t for t in active}
+    basis = draft.basis or []
+    if any(
+        item["task_id"] not in by_id or by_id[item["task_id"]].status != T.COMPLETED
+        for item in basis
+    ):
+        raise PlanDraftStaleError()
+    skills = await agents_repository.active_capabilities(session, workspace_id=access.workspace_id)
+    report = analyse_plan(
+        proposal.tasks,
+        max_parallel_tasks=workflow.max_parallel_tasks,
+        available_skills=skills,
+        completed_keys=[item["key"] for item in basis],
+    )
+    if report.has_errors:
+        raise PlanDraftInvalidError(details={"codes": [i.code for i in report.issues]})
+    warnings = sorted({i.code for i in report.issues if i.severity == "warning"})
+    if warnings and not acknowledge_warnings:
+        raise PlanWarningsNotAcknowledgedError(details={"codes": warnings})
+
+    # A failure is final history (and a removed task must be CANCELLED), so FAILED tasks stay
+    # as they are; only optional ones can be here, since a failed required task fails the
+    # workflow. Their work is planned again like any unfinished task's.
+    replaced = [t for t in active if t.status not in (T.COMPLETED, T.FAILED)]
+    for task in replaced:
+        if task.status == T.CANCELLED:  # already final: only removed from the plan
+            removed_edges = await repository.delete_edges_touching(
+                session, workflow_id=workflow.id, task_id=task.id
+            )
+            task.removed_at = datetime.now(UTC)
+            task.revision += 1
+            record_event(
+                session,
+                workflow,
+                WorkflowEventType.TASK_REMOVED,
+                task_id=task.id,
+                payload={
+                    "actor": Actor.USER.value,
+                    "user_id": str(access.user_id),
+                    "reason": "replaced by replan",
+                    "removed_dependency_edges": removed_edges,
+                },
+            )
+        else:
+            await _remove_from_plan(session, workflow, task, reason="replaced by replan")
+    total = await repository.count_tasks(session, workflow.id) + len(proposal.tasks)
+    if total > MAX_TASKS_PER_WORKFLOW:
+        raise PlanLimitError(f"A workflow may have at most {MAX_TASKS_PER_WORKFLOW} tasks.")
+    completed = {item["key"]: uuid.UUID(item["task_id"]) for item in basis}
+    created = await _add_planned_tasks(
+        session, access, workflow, proposal, draft.version, completed
+    )
     proposals = (
         await _propose_for_unassignable(session, workflow, created)
         if workflow.allow_dynamic_agent_proposals
         else []
     )
-    workflow.confirmed_plan_version = version
+    workflow.confirmed_plan_version = draft.version
     record_event(
         session,
         workflow,
@@ -626,10 +774,11 @@ async def confirm_plan_draft(
         payload={
             "actor": Actor.USER.value,
             "user_id": str(access.user_id),
-            "version": version,
-            "existing_tasks": existing_tasks,
+            "version": draft.version,
+            "kind": "replan",
             "tasks_created": len(proposal.tasks),
-            "tasks_removed": removed,
+            "tasks_removed": len(replaced),
+            "tasks_kept": len(basis),
             "acknowledged_warnings": warnings,
             "agent_proposals_created": len(proposals),
         },

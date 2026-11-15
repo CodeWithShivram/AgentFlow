@@ -495,7 +495,12 @@ def test_a_real_worker_runs_a_diamond_with_parallel_middle_tasks(
     monkeypatch.setattr(runner, "get_worker_session_factory", lambda: worker_factory)
     models = ModelGateway(api_settings, _SlowAdapter(), partial(record_model_call, worker_factory))
     monkeypatch.setattr(runner, "get_model_gateway", lambda: models)
-    monkeypatch.setattr(tasks, "get_model_gateway", lambda: models)  # the semantic evaluator
+    # The semantic evaluator answers at once: only the agents' calls are slow, so evaluations do
+    # not hold the worker's threads while the middle tasks should overlap.
+    evaluator = ModelGateway(
+        api_settings, MockModelAdapter(), partial(record_model_call, worker_factory)
+    )
+    monkeypatch.setattr(tasks, "get_model_gateway", lambda: evaluator)
     graph = _start_graph(
         admin_factory,
         tasks=4,
@@ -516,7 +521,7 @@ def test_a_real_worker_runs_a_diamond_with_parallel_middle_tasks(
         with start_worker(
             celery_app,
             pool="threads",
-            concurrency=2,
+            concurrency=3,  # two parallel attempts, plus verification jobs alongside
             perform_ping_check=False,
             shutdown_timeout=10,
             queues=[EXECUTION_QUEUE],

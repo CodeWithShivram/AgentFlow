@@ -191,6 +191,8 @@ async def preview_plan_draft(
         version=draft.version,
         task_count=draft.task_count,
         prompt_version=draft.prompt_version,
+        kind=draft.kind,
+        basis=draft.basis,
         created_at=draft.created_at,
         plan=draft.plan,
         stages=report.stages,
@@ -231,6 +233,15 @@ async def regenerate_plan(
 ) -> WorkflowResponse:
     """Requests a new plan draft from the current analysis. It runs in a worker."""
     return service.workflow_response(await service.regenerate_plan(session, access, workflow_id))
+
+
+@router.post("/{workflow_id}/replan")
+async def request_replan(
+    workflow_id: uuid.UUID, access: Member, session: DbSession
+) -> WorkflowResponse:
+    """Requests a draft of the remaining work of a paused or blocked workflow (ADR-0033). It
+    runs in a worker; confirming the draft replaces the unfinished tasks."""
+    return service.workflow_response(await service.request_replan(session, access, workflow_id))
 
 
 @router.post("/{workflow_id}/start")

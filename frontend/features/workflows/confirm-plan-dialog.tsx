@@ -51,6 +51,7 @@ export function ConfirmPlanDialog({
   const workspace = useWorkspace();
   const queryClient = useQueryClient();
   const warnings = preview.issues.filter((i) => i.severity === "warning");
+  const replan = preview.kind === "replan";
   const [acknowledged, setAcknowledged] = useState(false);
   const [existing, setExisting] = useState<ExistingTasks>("replace");
 
@@ -58,13 +59,15 @@ export function ConfirmPlanDialog({
     mutationFn: () =>
       api.workflows.confirmPlanDraft(workspace.id, workflow.id, preview.version, {
         revision: workflow.revision,
-        existing_tasks: existingTaskCount > 0 ? existing : undefined,
+        existing_tasks: !replan && existingTaskCount > 0 ? existing : undefined,
         acknowledge_warnings: warnings.length > 0 ? acknowledged : false,
       }),
     onSuccess: (updated) => {
       queryClient.setQueryData(workflowKeys.detail(workspace.id, workflow.id), updated);
       void queryClient.invalidateQueries({ queryKey: workflowKeys.detail(workspace.id, workflow.id) });
-      toast.success(`Plan confirmed: ${preview.task_count} ${preview.task_count === 1 ? "task" : "tasks"} created`);
+      toast.success(
+        `${replan ? "Replan" : "Plan"} confirmed: ${preview.task_count} ${preview.task_count === 1 ? "task" : "tasks"} created`,
+      );
       onOpenChange(false);
       onConfirmed();
     },
@@ -86,16 +89,27 @@ export function ConfirmPlanDialog({
         <DialogHeader>
           <DialogTitle>Confirm draft version {preview.version}</DialogTitle>
           <DialogDescription>
-            This creates {preview.task_count} {preview.task_count === 1 ? "task" : "tasks"} with their
-            dependencies. Nothing runs until the plan is approved and started.
-            {PLAN_EDIT_REOPENS.has(workflow.status)
-              ? " The workflow goes back to planning, so the plan must be submitted again."
-              : ""}
+            {replan ? (
+              <>
+                This replaces the workflow&apos;s unfinished tasks with {preview.task_count} new{" "}
+                {preview.task_count === 1 ? "task" : "tasks"}. Its {preview.basis?.length ?? 0} completed{" "}
+                {(preview.basis?.length ?? 0) === 1 ? "task stays" : "tasks stay"} as they are, and failed tasks stay
+                as history. Nothing runs until someone resumes the workflow.
+              </>
+            ) : (
+              <>
+                This creates {preview.task_count} {preview.task_count === 1 ? "task" : "tasks"} with their
+                dependencies. Nothing runs until the plan is approved and started.
+                {PLAN_EDIT_REOPENS.has(workflow.status)
+                  ? " The workflow goes back to planning, so the plan must be submitted again."
+                  : ""}
+              </>
+            )}
           </DialogDescription>
         </DialogHeader>
         <FormError message={showError ? describeError(confirm.error) : null} />
 
-        {existingTaskCount > 0 ? (
+        {!replan && existingTaskCount > 0 ? (
           <fieldset className="grid gap-2">
             <legend className="mb-1 text-sm font-medium">
               The workflow already has {existingTaskCount} {existingTaskCount === 1 ? "task" : "tasks"}

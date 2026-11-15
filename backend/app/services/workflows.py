@@ -68,6 +68,19 @@ _ANALYSIS_RETRY_STATUSES = frozenset({W.PLANNING, W.AWAITING_APPROVAL, W.READY})
 _ANALYSIS_RETRYABLE = frozenset({AnalysisStatus.FAILED, AnalysisStatus.NOT_REQUESTED})
 
 
+# Workflows whose remaining work may be replanned (ADR-0033).
+REPLAN_STATUSES = frozenset({W.PAUSED, W.BLOCKED})
+
+
+class ReplanNotAllowedError(AppError):
+    status_code = 409
+    code = "REPLAN_NOT_ALLOWED"
+    message = (
+        "Only a paused or blocked workflow with a ready analysis can be replanned, one draft "
+        "at a time."
+    )
+
+
 class PlanNotRegeneratableError(AppError):
     status_code = 409
     code = "PLAN_NOT_REGENERATABLE"
@@ -274,6 +287,29 @@ async def regenerate_plan(
     return workflow
 
 
+async def request_replan(
+    session: AsyncSession, access: WorkspaceAccess, workflow_id: uuid.UUID
+) -> Workflow:
+    """Requests a draft of the remaining work of a paused or blocked workflow (ADR-0033). The
+    planning job drafts it in a worker; nothing changes until a person confirms it."""
+    workflow = await lock_for_change(session, access, workflow_id, revision=None)
+    if (
+        workflow.status not in REPLAN_STATUSES
+        or workflow.analysis_status != AnalysisStatus.READY
+        or workflow.plan_status == PlanStatus.PENDING
+    ):
+        raise ReplanNotAllowedError(
+            details={
+                "status": workflow.status.value,
+                "analysis_status": workflow.analysis_status.value,
+                "plan_status": workflow.plan_status.value,
+            }
+        )
+    await request_plan(session, workflow, actor=Actor.USER)
+    await session.commit()
+    return workflow
+
+
 async def preview_plan_draft(
     session: AsyncSession, access: WorkspaceAccess, workflow_id: uuid.UUID, version: int
 ) -> DraftPreview:
@@ -285,6 +321,9 @@ async def preview_plan_draft(
     proposal = PlanProposal.model_validate(draft.plan)
     skills = await agents_repository.active_capabilities(session, workspace_id=access.workspace_id)
     report = analyse_plan(
-        proposal.tasks, max_parallel_tasks=workflow.max_parallel_tasks, available_skills=skills
+        proposal.tasks,
+        max_parallel_tasks=workflow.max_parallel_tasks,
+        available_skills=skills,
+        completed_keys=[item["key"] for item in draft.basis or []],
     )
     return DraftPreview(draft=draft, report=report)

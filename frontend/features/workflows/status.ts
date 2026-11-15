@@ -13,6 +13,9 @@ export const WORKFLOW_TERMINAL: ReadonlySet<WorkflowStatus> = new Set([
 export const TASK_TERMINAL: ReadonlySet<TaskStatus> = new Set(["COMPLETED", "FAILED", "CANCELLED"]);
 
 /** Plan (tasks, dependencies) is editable; editing in the last two reopens PLANNING. */
+/** Workflows whose remaining work can be replanned (ADR-0033). */
+export const REPLAN_STATUSES: ReadonlySet<WorkflowStatus> = new Set(["PAUSED", "BLOCKED"]);
+
 export const PLAN_EDITABLE: ReadonlySet<WorkflowStatus> = new Set([
   "PENDING",
   "PLANNING",

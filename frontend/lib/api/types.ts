@@ -61,6 +61,10 @@ export interface PlanDraftSummary {
   version: number;
   task_count: number;
   prompt_version: string;
+  /** "replan": the remaining work of a paused or blocked workflow (ADR-0033). */
+  kind: "plan" | "replan";
+  /** A replan's completed tasks, kept and available to build on. */
+  basis: { key: string; task_id: Uuid; title: string }[] | null;
   created_at: IsoDateTime;
 }
 
@@ -74,6 +78,8 @@ export interface PlannedTask {
   priority: number;
   required: boolean;
   depends_on: string[];
+  /** Replans only: keys of the kept completed tasks this task builds on. */
+  depends_on_completed?: string[];
 }
 
 export interface PlanProposal {

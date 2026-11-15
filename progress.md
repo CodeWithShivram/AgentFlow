@@ -2,8 +2,8 @@
 
 ## Current position
 - Phase: 5 — Verification and recovery (Phases 2–4 complete; Phase 1 released as `v0.1.0`, pushed with its tag)
-- Last completed step: 5.3 — Rework instructions, bounded retries and reassignment
-- Next step: 5.4 — Replan with DAG validation, which needs a short plan and the owner's go-ahead
+- Last completed step: 5.4 — Replan with DAG validation
+- Next step: 5.5 — Escalation policies; only platform verification accepts tasks, which needs a short plan and the owner's go-ahead
 
 ## Completed steps
 | Step | Commit message | Hash |
@@ -42,16 +42,17 @@
 | 4.6 | `test(execution): cover parallel and sequential execution across whole graphs` | `cd50ba2` (pushed, CI ✔) |
 | 5.1 | `feat(verification): verify submissions deterministically and accept passing tasks` | `fdda86b` (pushed, CI ✔) |
 | 5.2 | `feat(verification): add semantic evaluation with structured findings` | `7f7805a` (pushed, CI ✔) |
-| 5.3 | `feat(verification): retry failed attempts with corrective instructions and reassign once` | latest commit touching `docs/ADR/0032-rework-retries-and-reassignment.md` |
+| 5.3 | `feat(verification): retry failed attempts with corrective instructions and reassign once` | `7ec5310` (pushed, CI ✔) |
+| 5.4 | `feat(planning): replan the remaining work of paused or blocked workflows` | latest commit touching `docs/ADR/0033-replanning.md` |
 
 ## Environment snapshot (2026-11-14)
 | Item | Value |
 |---|---|
-| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `7f7805a` plus tag `v0.1.0` (owner-authorized) |
+| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `7ec5310` plus tag `v0.1.0` (owner-authorized) |
 | Python / uv / Node / npm | 3.12.14 via uv 0.12.9 / Node 24.13.0 / npm 11.6.2 |
 | Celery / kombu | 5.7.0 / 5.7.0 |
 | Docker | 29.9.3 — `agentflow` stack healthy (Docker Desktop must be started first; it had stopped and was restarted in Steps 3.1 and 3.4) |
-| Dev database | `agentflow` at `0021 (head)`; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
+| Dev database | `agentflow` at `0022 (head)`; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
 | Local `.env` | holds generated `WORKER_DB_PASSWORD` and (new) `API_DB_PASSWORD` (gitignored) |
 | Port 8000 | Used by another local project (`easa`); smoke tests used 8010 |
 | E2E | API :8011 (as `agentflow_api`), frontend :3100, database `agentflow_e2e` (reset each run), Redis DBs 2/3, installed Google Chrome |
@@ -59,6 +60,54 @@
 | Test HTTP client | `httpx2` 2.16.0 (replaces `httpx`, OD-10); `httpx` is back only as a LiteLLM dependency |
 | LiteLLM | 1.109.1, imported by workers only when `MODEL_PROVIDER=litellm`; `.env` keeps the mock |
 | LangGraph | 1.2.22 (with langchain-core 1.8.0 and langsmith 0.14.17), imported by workers only; LangSmith tracing disabled; checkpoints via `langgraph-checkpoint-postgres` 3.2.1 |
+
+## Step 5.4 — replanning (ADR-0033; resolves OD-16)
+- **Owner decisions (2026-11-15):**
+  - paused or blocked workflows only, with nothing in flight; completed tasks kept, unfinished replaced;
+  - the model drafts, people confirm;
+  - the platform only suggests;
+  - confirming follows the autonomy policy.
+- **Request:** `POST …/replan` (Member; PAUSED/BLOCKED, analysis READY, no draft pending; else 409 `REPLAN_NOT_ALLOWED`).
+- **The plan job** (`app/planning/plan.py`) drafts a replan when the workflow is PAUSED or BLOCKED:
+  - `replan_basis` keys the completed tasks `done-N`, and the prompt `replan/v1` gets `<completed_tasks>` and `<unfinished_tasks>` as delimited data (titles, criteria, statuses);
+  - planned tasks gain `depends_on_completed`, and unknown keys are retried as invalid output;
+  - drafts store `kind` and `basis` (migration `0022`, with checks that a replan always has a basis);
+  - the mock replan redoes each unfinished task on top of all completed ones.
+- **Validation:** `analyse_plan(..., completed_keys=...)` reports `UNKNOWN_COMPLETED_TASK` (an error), at preview and at confirmation.
+- **Confirmation** (`tasks._confirm_replan`) refuses:
+  - workflows not PAUSED/BLOCKED (409);
+  - non-admins on approval-required workflows (403);
+  - in-flight tasks (409 `TASKS_IN_FLIGHT`);
+  - stale bases (409 `PLAN_DRAFT_STALE`).
+
+  It removes unfinished tasks as history (already CANCELLED ones are only marked removed), keeps COMPLETED and FAILED tasks, creates the new tasks with edges to completed ones, records `PLAN_CONFIRMED` (`kind`, created/removed/kept), and never resumes.
+- **Orchestration v4:** a BLOCKED workflow gets `unblock` (the blocking required tasks, suggesting reassign, retry or replan); PAUSED mentions replanning. The generic `blocked` step now applies only to running workflows that cannot progress.
+- **Frontend:**
+  - "Replan remaining work" on paused or blocked workflows;
+  - replan drafts badged, listing the kept completed work, with "Builds on completed" per task;
+  - a replan confirm dialog (no replace/add choice), offered only to those allowed to confirm.
+- **Found by the first gate run:** SQLAlchemy stores Python `None` in a JSONB column as JSON `null`, not SQL NULL, so every plain plan draft violated the new `replan_has_basis` check (15 plan-generation tests failed). `workflow_plans.basis` now uses `JSONB(none_as_null=True)`, as does `verification_results.findings` (Step 5.2) for consistency; this is Python-side only, with no migration.
+- **Found by the second gate run:** the real-worker diamond test (Step 4.6) failed its overlap check. Since Step 5.2, its slow test adapter (1 s per call) also served the semantic evaluator, so evaluations held the worker's 2 threads. The evaluator now gets a fast mock gateway and the worker 3 threads; the overlap assertion is unchanged, and the test passed 3 runs in a row.
+- **Found on the way:** removed tasks must be CANCELLED (a check constraint), so an optional FAILED task cannot be removed. Failed tasks now stay as final history while their work is replanned; the API test covers it.
+- **Tests changed (intended behaviour changes):**
+  - the graph version pins moved to v4;
+  - the generic blocked-step test now assesses a RUNNING workflow, since BLOCKED workflows get `unblock`.
+
+## Checks last executed (Step 5.4)
+- **Full gate (`check.ps1 -E2E`) ✔, exit 0, on the third run:**
+  - backend: ruff format, ruff check, mypy (187 files), alembic check;
+  - pytest **1095 passed** (1084 plus 11 new):
+    - 6 unit tests: schema, DAG checks against the basis, basis building, delimited prompt, mock replan, retries on unknown references;
+    - 4 API tests: full replan of a blocked workflow (OD-16) with resume, refusals while running or in flight, admin confirmation for approval workflows, stale basis;
+    - 1 graph test: `unblock`;
+  - frontend: eslint, typecheck, Vitest **115** (3 new: replan preview, replan confirm, request and role), Playwright **15 passed**, build.
+- **Earlier runs failed:**
+  - the first, on the JSON-null bug;
+  - the second, on the real-worker diamond's thread starvation.
+
+  Both are fixed and described above.
+- **Deliberate-bug check** (restored byte-for-byte): an empty in-flight set fails the in-flight refusal test.
+- **Environment:** the dev DB is at `0022`; no servers were left running after E2E.
 
 ## Step 5.3 — rework, retries and reassignment (ADR-0032)
 - **Owner decisions (2026-11-15):**
@@ -85,7 +134,7 @@
   - the verification test world can create several agents with given skills.
 - **Follow-up:** the selection rules' history factor is still `not_scored`; scoring it from verification outcomes needs a new rules version.
 
-## Checks last executed (Step 5.3)
+## Checks (Step 5.3)
 - **Full gate (`check.ps1 -E2E`) ✔, exit 0:**
   - backend: ruff format, ruff check, mypy (185 files), alembic check;
   - pytest **1084 passed** (1074 plus 10 new):
@@ -778,7 +827,6 @@
 - **OD-19:** the hosted frontend must share a host with the API (CSRF cookie readability); a CSP with nonces is not set yet.
 - **Recovery latency** (ADR-0029): a crashed attempt keeps its slot for up to about 13 minutes; on the Windows solo pool, an attempt slower than that can be recovered while still running (its result is then discarded).
 - **Readiness depends on workers** (ADR-0027): the API reports not ready without a running worker and Beat.
-- **OD-16:** replanning for tasks blocked by a cancelled dependency.
 - **Celery:** time limits are not enforced by the Windows `solo` pool, only by Linux prefork. Exactly one Beat must run. Dispatch latency is up to 5 s.
 - **Polling:** live updates poll, since there is no SSE endpoint. The dashboard makes 13 count requests, and Activity covers only the 10 newest workflows.
 - **Still open:** the dev-only `minimatch` finding and the Redis licence review.
@@ -787,6 +835,6 @@
 None.
 
 ## Next exact action
-1. **Push Step 5.3** on the owner's go-ahead, and confirm CI on GitHub.
-2. **Step 5.4 (replan with DAG validation):** present a short plan and get the owner's go-ahead.
+1. **Push Step 5.4** on the owner's go-ahead, and confirm CI on GitHub.
+2. **Step 5.5 (escalation policies; only platform verification accepts tasks):** present a short plan and get the owner's go-ahead.
 3. **Before any hosted deployment:** settle OD-14, OD-19 and OD-20.

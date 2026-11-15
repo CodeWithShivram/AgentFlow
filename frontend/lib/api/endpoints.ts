@@ -146,6 +146,9 @@ export function createEndpoints(client: ApiClient) {
           acknowledge_warnings: boolean;
         },
       ) => client.post<Workflow>(`${wf(workspaceId, workflowId)}/plan-drafts/${version}/confirm`, body),
+      /** Requests a draft of the remaining work of a paused or blocked workflow (ADR-0033). */
+      requestReplan: (workspaceId: Uuid, workflowId: Uuid) =>
+        client.post<Workflow>(`${wf(workspaceId, workflowId)}/replan`),
       /** Requests a new plan draft from the current analysis; it runs in a worker. */
       regeneratePlan: (workspaceId: Uuid, workflowId: Uuid) =>
         client.post<Workflow>(`${wf(workspaceId, workflowId)}/plan-drafts`),

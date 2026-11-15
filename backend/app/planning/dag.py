@@ -85,13 +85,28 @@ def analyse_plan(
     *,
     max_parallel_tasks: int,
     available_skills: Collection[str] | None = None,
+    completed_keys: Collection[str] = (),
 ) -> DagReport:
     """Validates a plan's dependency graph and lists what the user should know.
 
     `available_skills` is the union of capabilities of the workspace's ACTIVE agents; when given,
     skills nobody provides are reported (a task needing one could never be assigned).
+    `completed_keys` are a replan's completed tasks (ADR-0033); a task may build on them through
+    `depends_on_completed`. A plain plan has none, so any such reference is an error.
     """
     issues: list[PlanIssue] = []
+    for task in tasks:
+        unknown = sorted(set(getattr(task, "depends_on_completed", ())) - set(completed_keys))
+        if unknown:
+            issues.append(
+                PlanIssue(
+                    code="UNKNOWN_COMPLETED_TASK",
+                    severity="error",
+                    message="This task builds on completed tasks that are not part of the plan.",
+                    task_keys=(task.key,),
+                    details={"keys": unknown},
+                )
+            )
     cycle = find_cycle(tasks)
     if cycle:
         issues.append(

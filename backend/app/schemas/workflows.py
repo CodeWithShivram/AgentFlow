@@ -371,12 +371,23 @@ class AgentSelectionList(BaseModel):
     items: list[AgentSelectionResponse]
 
 
+class PlanBasisTask(BaseModel):
+    """A completed task a replan keeps and may build on (ADR-0033)."""
+
+    key: str
+    task_id: uuid.UUID
+    title: str
+
+
 class PlanDraftSummary(BaseModel):
     """A generated plan draft (Step 2.3). The full draft is previewed in Step 2.4."""
 
     version: int
     task_count: int
     prompt_version: str
+    # "replan": the remaining work of a paused or blocked workflow (ADR-0033).
+    kind: Literal["plan", "replan"] = "plan"
+    basis: list[PlanBasisTask] | None = None
     created_at: datetime
 
 

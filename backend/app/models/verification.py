@@ -60,5 +60,5 @@ class VerificationResult(Base):
     issues: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
     # The semantic evaluator's structured findings (ADR-0031): untrusted model text, shown as
     # plain text only. NULL for deterministic checks.
-    findings: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    findings: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True))
     created_at: Mapped[datetime] = created_at_column()

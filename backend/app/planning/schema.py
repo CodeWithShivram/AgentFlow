@@ -34,6 +34,9 @@ class PlannedTask(BaseModel):
     priority: int = Field(default=0, ge=-100, le=100)
     required: bool = True
     depends_on: Annotated[list[Slug], Field(max_length=MAX_TASKS - 1)] = []
+    # Replan drafts only (ADR-0033): keys of the workflow's completed tasks this task builds on,
+    # as listed in the replan request. Checked against the draft's basis, not here.
+    depends_on_completed: Annotated[list[Slug], Field(max_length=MAX_TASKS)] = []
 
     @model_validator(mode="after")
     def _unique_entries(self) -> "PlannedTask":
@@ -44,6 +47,8 @@ class PlannedTask(BaseModel):
             raise ValueError("acceptance criterion ids must be unique")
         if len(set(self.depends_on)) != len(self.depends_on):
             raise ValueError("depends_on must not repeat a task")
+        if len(set(self.depends_on_completed)) != len(self.depends_on_completed):
+            raise ValueError("depends_on_completed must not repeat a task")
         if self.key in self.depends_on:
             raise ValueError("a task cannot depend on itself")
         return self

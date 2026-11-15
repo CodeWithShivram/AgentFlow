@@ -135,6 +135,10 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   (two agent failures, another eligible agent), or waits for people (`NOT_RETRIED` policy codes). Corrective
   instructions are fixed platform sentences (criteria by id, deliverables by position, never user/agent/model
   text), stored on the attempt and sent to models after the delimited contract (contract v2).
+- Replanning (ADR-0033): only PAUSED/BLOCKED workflows; the plan job drafts a `kind = "replan"` draft with a
+  `basis` of completed tasks (`done-N` keys, `depends_on_completed`). Confirming keeps COMPLETED (and FAILED)
+  tasks, removes the other unfinished ones as history, refuses in-flight work and stale bases, needs ADMIN for
+  approval-required workflows, and never resumes work.
 - Workflow events are append-only.
 
 ## Security

@@ -821,3 +821,209 @@ def test_pre_assignment_during_planning_is_cleared_when_the_skills_change(
     assert edited.json()["assigned_agent_version_id"] is None
     updated = [e for e in events(owner, workspace, workflow) if e["event_type"] == "TASK_UPDATED"]
     assert updated[-1]["payload"]["pre_assignment_cleared"] is True
+
+
+# --- replanning a paused or blocked workflow (Step 5.4, ADR-0033) -------------------------------
+
+ANALYSIS = {
+    "schema_version": 1,
+    "objective": "Write a market report",
+    "requirements": [{"id": "r1", "description": "Write a market report", "priority": "must"}],
+    "constraints": [],
+    "deliverables": ["Report"],
+    "assumptions": [],
+    "ambiguities": [],
+    "suggested_skills": ["report_writing"],
+}
+
+
+def _blocked_workflow(
+    owner: TestClient, workspace: str, settings: Settings, policy: str = "autonomous"
+) -> tuple[str, str, str, str]:
+    """OD-16: task A completed, task B (needs A) cancelled, optional C idle: the workflow is
+    BLOCKED by a cancelled required task. Returns (workflow, a, b, c)."""
+    import json
+
+    workflow = create_workflow(owner, workspace, autonomy_policy=policy).json()["id"]
+    a = add_task(owner, workspace, workflow, "Collect facts").json()["id"]
+    b = add_task(owner, workspace, workflow, "Write the report").json()["id"]
+    c = add_task(owner, workspace, workflow, "Optional appendix", required=False).json()["id"]
+    assert depend(owner, workspace, workflow, b, a).status_code == 201
+    path = ["PLANNING", "READY"] if policy == "autonomous" else ["PLANNING", "AWAITING_APPROVAL"]
+    for status in [*path, *(["READY"] if policy != "autonomous" else []), "RUNNING"]:
+        assert move(owner, workspace, workflow, status).status_code == 200, status
+    # Test setup outside the API: a ready analysis (normally from the worker) and A completed
+    # (normally through execution and verification).
+    sql(
+        settings,
+        "UPDATE workflows SET analysis_status = 'READY', "
+        "normalized_requirements = CAST(:analysis AS jsonb) WHERE id = :id",
+        analysis=json.dumps(ANALYSIS),
+        id=workflow,
+    )
+    sql(
+        settings,
+        "UPDATE workflow_tasks SET status = 'COMPLETED', completed_at = now() WHERE id = :id",
+        id=a,
+    )
+    cancelled = owner.post(
+        wf_url(workspace, f"/{workflow}/tasks/{b}/cancel"),
+        json={"revision": task_of(owner, workspace, workflow, b)["revision"]},
+        headers=csrf(owner),
+    )
+    assert cancelled.status_code == 200
+    assert get_workflow(owner, workspace, workflow)["status"] == "BLOCKED"
+    return workflow, a, b, c
+
+
+def _draft_replan(
+    client: TestClient, workspace: str, workflow: str, worker_factory: Any, settings: Settings
+) -> int:
+    """Requests a replan and runs the planning job as a worker would (mock model)."""
+    from app.db.sync_session import session_scope
+    from app.llm.gateway import ModelGateway
+    from app.llm.mock import MockModelAdapter
+    from app.planning import plan
+    from tests.conftest import make_settings
+
+    response = client.post(wf_url(workspace, f"/{workflow}/replan"), headers=csrf(client))
+    assert response.status_code == 200 and response.json()["plan_status"] == "PENDING"
+    (request_id,) = sql(
+        settings, "SELECT plan_request_id FROM workflows WHERE id = :id", id=workflow
+    )[0]
+    with session_scope(worker_factory) as s:
+        job = plan.claim(
+            s,
+            event_id=request_id,
+            workspace_id=uuid.UUID(workspace),
+            workflow_id=uuid.UUID(workflow),
+        )
+    assert isinstance(job, plan.PlanJob) and job.basis is not None
+    gateway = ModelGateway(make_settings(), MockModelAdapter(), lambda record: uuid.uuid4())
+    outcome = plan.generate(gateway, job, sleep=lambda _: None)
+    with session_scope(worker_factory) as s:
+        assert plan.finish(s, job, outcome) == "ready"
+    drafts = client.get(wf_url(workspace, f"/{workflow}/plan-drafts")).json()["items"]
+    version: int = drafts[0]["version"]
+    return version
+
+
+def _confirm(client: TestClient, workspace: str, workflow: str, version: int) -> httpx2.Response:
+    response: httpx2.Response = client.post(
+        wf_url(workspace, f"/{workflow}/plan-drafts/{version}/confirm"),
+        json={
+            "revision": get_workflow(client, workspace, workflow)["revision"],
+            "acknowledge_warnings": True,
+        },
+        headers=csrf(client),
+    )
+    return response
+
+
+def test_a_blocked_workflow_is_replanned_keeping_its_completed_work(
+    owner: TestClient, workspace: str, api_settings: Settings, worker_factory: Any
+) -> None:
+    workflow, a, b, c = _blocked_workflow(owner, workspace, api_settings)
+    # The optional task failed for good meanwhile: a failure is final history and stays.
+    sql(api_settings, "UPDATE workflow_tasks SET status = 'FAILED' WHERE id = :id", id=c)
+
+    version = _draft_replan(owner, workspace, workflow, worker_factory, api_settings)
+
+    preview = owner.get(wf_url(workspace, f"/{workflow}/plan-drafts/{version}")).json()
+    assert preview["kind"] == "replan" and preview["prompt_version"] == "replan/v1"
+    assert preview["basis"] == [{"key": "done-1", "task_id": a, "title": "Collect facts"}]
+    assert [i for i in preview["issues"] if i["severity"] == "error"] == []
+    planned = preview["plan"]["tasks"]
+    assert [t["title"] for t in planned] == ["Redo: Write the report", "Redo: Optional appendix"]
+    assert all(t["depends_on_completed"] == ["done-1"] for t in planned)
+    assert get_workflow(owner, workspace, workflow)["status"] == "BLOCKED"  # nothing changed
+
+    confirmed = _confirm(owner, workspace, workflow, version)
+
+    assert confirmed.status_code == 200 and confirmed.json()["status"] == "BLOCKED"
+    tasks = {
+        t["id"]: t
+        for t in owner.get(wf_url(workspace, f"/{workflow}/tasks?limit=50")).json()["items"]
+    }
+    assert tasks[a]["status"] == "COMPLETED" and not tasks[a]["removed"]  # kept as it was
+    assert tasks[b]["removed"]  # replaced, kept as history
+    assert tasks[c]["status"] == "FAILED" and not tasks[c]["removed"]  # its work is replanned
+    new = [t for t in tasks.values() if t["title"].startswith("Redo: ")]
+    assert {t["status"] for t in new} == {"PENDING"}
+    assert all(t["depends_on"] == [a] for t in new)
+    plan_confirmed = next(
+        e
+        for e in reversed(events(owner, workspace, workflow))
+        if e["event_type"] == "PLAN_CONFIRMED"
+    )
+    assert plan_confirmed["payload"]["kind"] == "replan"
+    assert plan_confirmed["payload"]["tasks_removed"] == 1
+    assert plan_confirmed["payload"]["tasks_kept"] == 1
+
+    # Nothing blocks any more: an admin resumes it, and the new tasks are ready (A is done).
+    assert move(owner, workspace, workflow, "RUNNING").status_code == 200
+    statuses = {
+        t["status"]
+        for t in owner.get(wf_url(workspace, f"/{workflow}/tasks?limit=50")).json()["items"]
+        if t["title"].startswith("Redo: ")
+    }
+    assert statuses == {"READY"}
+
+
+def test_replanning_is_refused_while_running_or_with_work_in_flight(
+    owner: TestClient, workspace: str, api_settings: Settings, worker_factory: Any
+) -> None:
+    running = create_workflow(owner, workspace, autonomy_policy="autonomous").json()["id"]
+    add_task(owner, workspace, running, "Only task")
+    for status in ("PLANNING", "READY", "RUNNING"):
+        move(owner, workspace, running, status)
+    refused = owner.post(wf_url(workspace, f"/{running}/replan"), headers=csrf(owner))
+    assert refused.status_code == 409 and refused.json()["error"]["code"] == "REPLAN_NOT_ALLOWED"
+
+    workflow, _, _, c = _blocked_workflow(owner, workspace, api_settings)
+    version = _draft_replan(owner, workspace, workflow, worker_factory, api_settings)
+    sql(api_settings, "UPDATE workflow_tasks SET status = 'IN_PROGRESS' WHERE id = :id", id=c)
+
+    in_flight = _confirm(owner, workspace, workflow, version)
+
+    assert in_flight.status_code == 409 and in_flight.json()["error"]["code"] == "TASKS_IN_FLIGHT"
+    again = owner.post(wf_url(workspace, f"/{workflow}/replan"), headers=csrf(owner))
+    assert again.status_code == 200  # a new draft may still be requested meanwhile
+
+
+def test_a_replan_of_an_approval_workflow_needs_an_admin_to_confirm(
+    new_client: ClientFactory,
+    owner: TestClient,
+    workspace: str,
+    api_settings: Settings,
+    worker_factory: Any,
+) -> None:
+    workflow, *_ = _blocked_workflow(owner, workspace, api_settings, "approval_required")
+    teammate = member(new_client, owner, "MEMBER")
+    version = _draft_replan(
+        teammate, workspace, workflow, worker_factory, api_settings
+    )  # members may request
+
+    by_member = _confirm(teammate, workspace, workflow, version)
+    by_owner = _confirm(owner, workspace, workflow, version)
+
+    assert by_member.status_code == 403
+    assert by_member.json()["error"]["code"] == "INSUFFICIENT_ROLE"
+    assert by_owner.status_code == 200
+
+
+def test_a_replan_whose_completed_work_changed_is_refused(
+    owner: TestClient, workspace: str, api_settings: Settings, worker_factory: Any
+) -> None:
+    workflow, a, *_ = _blocked_workflow(owner, workspace, api_settings)
+    version = _draft_replan(owner, workspace, workflow, worker_factory, api_settings)
+    # The kept task was removed meanwhile (setup outside the API).
+    sql(
+        api_settings,
+        "UPDATE workflow_tasks SET status = 'CANCELLED', removed_at = now() WHERE id = :id",
+        id=a,
+    )
+
+    stale = _confirm(owner, workspace, workflow, version)
+
+    assert stale.status_code == 409 and stale.json()["error"]["code"] == "PLAN_DRAFT_STALE"

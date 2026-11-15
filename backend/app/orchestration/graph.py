@@ -22,7 +22,8 @@ from langgraph.graph.state import CompiledStateGraph
 
 # v2 (ADR-0028): assigned tasks waiting for a free slot are counted apart from running ones.
 # v3 (ADR-0030): submitted tasks are verified by the platform, no longer "in Phase 5".
-GRAPH_VERSION = "orchestration/v3"
+# v4 (ADR-0033): a blocked workflow names its blocking tasks and suggests replanning.
+GRAPH_VERSION = "orchestration/v4"
 
 # LangGraph depends on LangSmith, which can send traces to an external service when tracing
 # environment variables are set. Disabled here for the whole process, whatever the environment.
@@ -38,6 +39,7 @@ NextStepKind = Literal[
     "running",
     "awaiting_verification",
     "blocked",
+    "unblock",
     "finished",
 ]
 
@@ -69,6 +71,8 @@ class OrchestrationState(TypedDict):
 _NEEDS_ASSIGNMENT = {"READY", "REWORK_REQUIRED", "ESCALATED"}
 _IN_FLIGHT = {"ASSIGNED", "QUEUED", "IN_PROGRESS"}
 _AWAITING_VERIFICATION = {"SUBMITTED", "VERIFYING"}
+# Required tasks in these statuses block a workflow (ADR-0009).
+_BLOCKING = {"ESCALATED", "BLOCKED", "CANCELLED"}
 _WORKFLOW_STEPS: dict[str, NextStep] = {
     "PENDING": {
         "kind": "start_planning",
@@ -97,7 +101,7 @@ _WORKFLOW_STEPS: dict[str, NextStep] = {
     "PAUSED": {
         "kind": "resume_workflow",
         "actor": "people",
-        "summary": "Resume the workflow to continue work.",
+        "summary": "Resume the workflow to continue work, or replan its remaining work.",
         "task_ids": [],
     },
 }
@@ -142,6 +146,8 @@ def route(state: OrchestrationState) -> str:
         return "finished"
     if status in _WORKFLOW_STEPS:
         return "workflow_step"
+    if status == "BLOCKED":
+        return "unblock"
     counts = state["counts"]
     if counts["assign"]:
         return "assign_agents"
@@ -242,6 +248,25 @@ def blocked(state: OrchestrationState) -> dict[str, Any]:
     }
 
 
+def unblock(state: OrchestrationState) -> dict[str, Any]:
+    blocking = [t for t in state["tasks"] if t["required"] and t["status"] in _BLOCKING]
+    if blocking:
+        summary = (
+            f"The workflow is blocked by {_plural(len(blocking), 'required task')}: reassign or "
+            "retry them, or replan the remaining work."
+        )
+    else:
+        summary = "The workflow is blocked: resume it, or replan the remaining work."
+    return {
+        "next_step": NextStep(
+            kind="unblock",
+            actor="people",
+            summary=summary,
+            task_ids=[t["id"] for t in blocking][:50],
+        )
+    }
+
+
 _TERMINALS = {
     "finished": finished,
     "workflow_step": workflow_step,
@@ -249,6 +274,7 @@ _TERMINALS = {
     "running": running,
     "awaiting_verification": awaiting_verification,
     "blocked": blocked,
+    "unblock": unblock,
 }
 
 
