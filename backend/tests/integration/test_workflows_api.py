@@ -608,7 +608,7 @@ def test_execution_history_lists_attempts_with_agent_versions(
     assert attempt["verifications"] == []
 
     # Step 5.1 (ADR-0030): the platform verifies the submission and completes the task.
-    from app.verification import job
+    from app.verification import job, semantic
 
     with session_scope(worker_factory) as s:
         request = s.execute(
@@ -625,9 +625,27 @@ def test_execution_history_lists_attempts_with_agent_versions(
             )
             == "passed"
         )
+    # Step 5.2 (ADR-0031): the checks passed, so the semantic evaluation decides.
+    assert task_of(owner, workspace, workflow, task["id"])["status"] == "VERIFYING"
+    with session_scope(worker_factory) as s:
+        evaluate = s.execute(
+            select(OutboxEvent).where(OutboxEvent.event_type == outbox.TASK_EVALUATE)
+        ).scalar_one()
+    with session_scope(worker_factory) as s:
+        claimed = semantic.claim(
+            s,
+            event_id=evaluate.id,
+            workspace_id=evaluate.workspace_id,
+            workflow_id=uuid.UUID(workflow),
+            task_id=uuid.UUID(task["id"]),
+        )
+    assert isinstance(claimed, semantic.EvaluationJob)
+    outcome = semantic.evaluate(models, claimed, sleep=lambda _: None)
+    with session_scope(worker_factory) as s:
+        assert semantic.finish(s, claimed, outcome) == "passed"
     assert task_of(owner, workspace, workflow, task["id"])["status"] == "COMPLETED"
     (attempt,) = owner.get(url).json()["items"]
-    (verification,) = attempt["verifications"]
+    verification, evaluation = attempt["verifications"]
     assert verification["execution_id"] == attempt["id"]
     assert verification["verifier"] == "deterministic/v1"
     assert verification["outcome"] == "PASSED" and verification["issues"] == []
@@ -640,8 +658,12 @@ def test_execution_history_lists_attempts_with_agent_versions(
         "runtime_outputs": "skipped",
         "platform_note": "skipped",
     }
+    assert verification["findings"] is None
+    assert evaluation["verifier"] == "semantic/v1" and evaluation["outcome"] == "PASSED"
+    assert evaluation["findings"]["objective"] == "met"
+    assert [f["criterion_id"] for f in evaluation["findings"]["criteria"]] == ["c1"]
     listed = owner.get(wf_url(workspace, f"/{workflow}/tasks/{task['id']}/verification"))
-    assert listed.status_code == 200 and listed.json()["items"] == [verification]
+    assert listed.status_code == 200 and listed.json()["items"] == [evaluation, verification]
 
 
 def test_execution_history_is_workspace_scoped(

@@ -2,8 +2,8 @@
 
 ## Current position
 - Phase: 5 — Verification and recovery (Phases 2–4 complete; Phase 1 released as `v0.1.0`, pushed with its tag)
-- Last completed step: 5.1 — Deterministic verification layer
-- Next step: 5.2 — Semantic evaluation with structured evidence, which needs a short plan and the owner's go-ahead
+- Last completed step: 5.2 — Semantic evaluation with structured evidence
+- Next step: 5.3 — Rework instructions, bounded retries and reassignment, which needs a short plan and the owner's go-ahead
 
 ## Completed steps
 | Step | Commit message | Hash |
@@ -40,16 +40,17 @@
 | 4.4 | `feat(scheduling): dispatch by priority within slot limits and allow pre-assignment` | `77b61c4` (pushed, CI ✔) |
 | 4.5 | `feat(execution): stop cancelled agents and recover work stranded by lost workers` | `a737bec` (pushed, CI ✔) |
 | 4.6 | `test(execution): cover parallel and sequential execution across whole graphs` | `cd50ba2` (pushed, CI ✔) |
-| 5.1 | `feat(verification): verify submissions deterministically and accept passing tasks` | latest commit touching `docs/ADR/0030-deterministic-verification.md` |
+| 5.1 | `feat(verification): verify submissions deterministically and accept passing tasks` | `fdda86b` (pushed, CI ✔) |
+| 5.2 | `feat(verification): add semantic evaluation with structured findings` | latest commit touching `docs/ADR/0031-semantic-evaluation.md` |
 
 ## Environment snapshot (2026-11-14)
 | Item | Value |
 |---|---|
-| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `cd50ba2` plus tag `v0.1.0` (owner-authorized) |
+| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `fdda86b` plus tag `v0.1.0` (owner-authorized) |
 | Python / uv / Node / npm | 3.12.14 via uv 0.12.9 / Node 24.13.0 / npm 11.6.2 |
 | Celery / kombu | 5.7.0 / 5.7.0 |
 | Docker | 29.9.3 — `agentflow` stack healthy (Docker Desktop must be started first; it had stopped and was restarted in Steps 3.1 and 3.4) |
-| Dev database | `agentflow` at `0019 (head)`; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
+| Dev database | `agentflow` at `0020 (head)`; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
 | Local `.env` | holds generated `WORKER_DB_PASSWORD` and (new) `API_DB_PASSWORD` (gitignored) |
 | Port 8000 | Used by another local project (`easa`); smoke tests used 8010 |
 | E2E | API :8011 (as `agentflow_api`), frontend :3100, database `agentflow_e2e` (reset each run), Redis DBs 2/3, installed Google Chrome |
@@ -57,6 +58,41 @@
 | Test HTTP client | `httpx2` 2.16.0 (replaces `httpx`, OD-10); `httpx` is back only as a LiteLLM dependency |
 | LiteLLM | 1.109.1, imported by workers only when `MODEL_PROVIDER=litellm`; `.env` keeps the mock |
 | LangGraph | 1.2.22 (with langchain-core 1.8.0 and langsmith 0.14.17), imported by workers only; LangSmith tracing disabled; checkpoints via `langgraph-checkpoint-postgres` 3.2.1 |
+
+## Step 5.2 — semantic evaluation (ADR-0031)
+- **Owner decisions (2026-11-15):**
+  - every passing submission is evaluated;
+  - not met or a conflict fails, partly met, incomplete and unstated assumptions are warnings;
+  - retry, then escalate without counting against the agent.
+- **Flow:**
+  - passing deterministic checks now request `task.evaluate`, and the task stays VERIFYING;
+  - `app/verification/semantic.py` (Celery `agentflow.evaluate_task`, 300/330 s limits) runs claim → up to 3 model calls (`semantic_evaluation` purpose, recorded in `llm_usage` against the attempt) → finish under the workflow lock: COMPLETED, REWORK_REQUIRED/FAILED, or ESCALATED (`EVALUATION_UNAVAILABLE`).
+- **Evaluator `semantic/v1`:**
+  - the strict `Evaluation` model: an objective verdict and reason; per-criterion verdict, evidence and reason; complete, consistent, assumptions_explicit and conflicts_with_requirements; a summary;
+  - findings must cover each criterion once, or the reply is retried with issue codes;
+  - contract and submission are delimited (every `</` escaped), with no platform ids;
+  - a mock default finds everything met.
+- **Decision (`decide`):**
+  - errors: OBJECTIVE_NOT_MET, CRITERION_JUDGED_NOT_MET, CONFLICTS_WITH_REQUIREMENTS;
+  - warnings: OBJECTIVE_PARTIAL, CRITERION_JUDGED_PARTIAL, INCOMPLETE, INCONSISTENT, ASSUMPTIONS_NOT_EXPLICIT.
+- **Migration `0020`:** `verification_results.findings` (JSONB, NULL for checks); the findings are untrusted model text, shown as plain text only.
+- **Recovery:** interrupted evaluations (claimed more than 450 s ago, still pending) are escalated with `EVALUATION_INTERRUPTED`; lost `task.evaluate` messages are resent (`reevaluated`, `interrupted_evaluations`).
+- **State machine fix found by a test:** VERIFYING now lasts through a model call, but had no edge to CANCELLED. A person couldn't cancel such a task, and cancelling its workflow failed. VERIFYING → CANCELLED (people or system) was added, and the state machine test's VERIFYING exemption removed (stricter).
+- **Frontend:** one section per verifier ("Platform verification: deterministic checks" / "…: semantic evaluation"); the evaluator's objective and per-criterion findings shown as plain text; issue labels for the new codes.
+- **Tests changed (intended behaviour changes):**
+  - the deterministic pass now leaves the task VERIFYING (the 5.1 pass test now runs the evaluation too);
+  - the scenario helper also runs the evaluation;
+  - real-worker tests patch the worker module's gateway, and the single-task one filters `llm_usage` by purpose;
+  - the API test expects both results;
+  - E2E journey 9 names both verification sections.
+
+## Checks last executed (Step 5.2)
+- **Full gate (`check.ps1 -E2E`) ✔, exit 0:**
+  - backend: ruff format, ruff check, mypy (182 files), alembic check;
+  - pytest **1074 passed** (1056 plus 18 new: 12 unit tests of the evaluator's rules, prompt, mock and bounded attempts; 6 integration tests of not met → rework, warnings passing, escalation, duplicate and stale requests, cancellation during evaluation, and recovery);
+  - frontend: eslint, typecheck, Vitest **111** (1 new: evaluator findings), Playwright **15 passed**, build.
+- **Deliberate-bug check** (restored byte-for-byte): making the evaluator's "criterion not met" only a warning fails one unit test and one integration test.
+- **Environment:** the dev DB is at `0020`; no servers were left running after E2E.
 
 ## Step 5.1 — deterministic verification (ADR-0030)
 - **Owner decisions (2026-11-15):**
@@ -83,7 +119,7 @@
   - the graph version pins moved to v3, and the awaiting-verification summary test asserts the new text exactly;
   - E2E journey 9 now ends Completed, with the banner gone and the verification shown; journey 12 now runs the dependent task too (its timeout is raised to 240 s, and it took 50 s).
 
-## Checks last executed (Step 5.1)
+## Checks (Step 5.1)
 - **Full gate (`check.ps1 -E2E`) ✔, exit 0:**
   - backend: ruff format, ruff check, mypy (179 files), alembic check;
   - pytest **1056 passed** (1026 plus 30 new: 21 unit tests of the checks, 9 integration tests of the job, recovery and grants; plus the API assertions added to the execution-history tests);
@@ -712,6 +748,6 @@
 None.
 
 ## Next exact action
-1. **Push Step 5.1** on the owner's go-ahead, and confirm CI on GitHub.
-2. **Step 5.2 (semantic evaluation with structured evidence):** present a short plan and get the owner's go-ahead.
+1. **Push Step 5.2** on the owner's go-ahead, and confirm CI on GitHub.
+2. **Step 5.3 (rework instructions, bounded retries and reassignment):** present a short plan and get the owner's go-ahead.
 3. **Before any hosted deployment:** settle OD-14, OD-19 and OD-20.

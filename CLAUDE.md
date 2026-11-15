@@ -124,6 +124,11 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   whenever a task reaches SUBMITTED. Checks are pure and versioned in `app/verification/deterministic.py`
   (`VERIFIER`; change rules = new version) and never store agent text (codes, criterion ids from the task,
   deliverable names, schema locations only). `verification_results` is append-only.
+- Semantic evaluation (ADR-0031, `app/verification/semantic.py`): passing checks request `task.evaluate`; the job
+  is claim -> model call outside any transaction -> finish, and only `decide` (platform rules) turns findings into
+  an outcome. Contract and submission reach the model only inside delimiters, without platform ids. Findings are
+  untrusted model text: stored in `verification_results.findings`, shown as plain text, never logged or put in
+  issues/events. An evaluation that cannot complete escalates the task (EVALUATION_UNAVAILABLE).
 - Workflow events are append-only.
 
 ## Security

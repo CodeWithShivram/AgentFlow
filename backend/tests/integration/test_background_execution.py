@@ -810,6 +810,7 @@ def test_dispatch_reaches_a_real_worker_through_redis(
         api_settings, MockModelAdapter(), partial(record_model_call, worker_factory)
     )
     monkeypatch.setattr(runner, "get_model_gateway", lambda: models)
+    monkeypatch.setattr(tasks, "get_model_gateway", lambda: models)  # the semantic evaluator
     world = _world(admin_factory)
     _assign_version(
         admin_factory, world, {**CONFIG, "system_instruction_ref": "builtin://writer/v1"}
@@ -849,11 +850,13 @@ def test_dispatch_reaches_a_real_worker_through_redis(
     assert execution.status == ExecutionStatus.SUCCEEDED
     assert execution.dispatch_event_id == event.id
     assert event.status == OutboxStatus.PUBLISHED
-    usage = _scalar(admin_factory, select(LlmUsage))
-    assert usage.execution_id == execution.id and usage.purpose == "agent_writing"
-    verification = _scalar(admin_factory, select(VerificationResult))
-    assert verification.execution_id == execution.id
-    assert verification.outcome == VerificationOutcome.PASSED
+    usage = _scalar(admin_factory, select(LlmUsage).where(LlmUsage.purpose == "agent_writing"))
+    assert usage.execution_id == execution.id
+    with session_scope(admin_factory) as s:
+        results = {r.verifier: r for r in s.execute(select(VerificationResult)).scalars()}
+    assert set(results) == {"deterministic/v1", "semantic/v1"}
+    assert all(r.execution_id == execution.id for r in results.values())
+    assert all(r.outcome == VerificationOutcome.PASSED for r in results.values())
 
 
 # --- task contract and submissions (Step 3.1, ADR-0018) ------------------------------------------

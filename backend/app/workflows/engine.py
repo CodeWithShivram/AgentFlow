@@ -190,6 +190,23 @@ def request_verification(session: _AddsRows, workflow: Workflow, task: WorkflowT
     )
 
 
+def request_evaluation(session: _AddsRows, workflow: Workflow, task: WorkflowTask) -> uuid.UUID:
+    """Writes a `task.evaluate` outbox row (identifiers only): the semantic evaluation of a
+    submission that passed its deterministic checks (ADR-0031)."""
+    return outbox.enqueue(
+        session,
+        outbox.TASK_EVALUATE,
+        workspace_id=workflow.workspace_id,
+        workflow_id=workflow.id,
+        task_id=task.id,
+        payload={
+            "workspace_id": str(workflow.workspace_id),
+            "workflow_id": str(workflow.id),
+            "task_id": str(task.id),
+        },
+    )
+
+
 def request_analysis(session: Session, workflow: Workflow, *, actor: Actor) -> uuid.UUID:
     """Asks a worker to analyse the workflow's prompt (Step 2.2): writes a `workflow.analyze`
     outbox row and marks the analysis PENDING, in the caller's transaction. A newer request

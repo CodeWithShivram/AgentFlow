@@ -285,6 +285,8 @@ class VerificationResponse(BaseModel):
     outcome: VerificationOutcome
     checks: list[VerificationCheck]
     issues: list[VerificationIssue]
+    # The semantic evaluator's findings (ADR-0031): untrusted model text; NULL for checks.
+    findings: dict[str, Any] | None = None
     created_at: datetime
 
 

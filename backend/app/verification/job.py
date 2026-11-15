@@ -3,10 +3,12 @@
 The engine writes `task.verify` in the transaction that moves a task to SUBMITTED. The job is
 one short transaction with no model call: consume the event (a duplicate stops here), lock the
 workflow, check the task is still SUBMITTED, run the deterministic checks on its latest
-successful attempt and store the result, then move the task SUBMITTED -> VERIFYING -> COMPLETED
-when they pass, or -> REWORK_REQUIRED (FAILED after the last allowed attempt) when they do not.
-Only this job, as the VERIFIER actor, accepts tasks (handoff 5.3). The inbox row and the outcome
-commit together, so a worker lost mid-way leaves nothing behind: the redelivery runs again.
+successful attempt and store the result, then move the task SUBMITTED -> VERIFYING. When the
+checks pass, it requests the semantic evaluation (`task.evaluate`, ADR-0031), which decides; when
+they do not, the task goes -> REWORK_REQUIRED (FAILED after the last allowed attempt). Only the
+verification jobs, as the VERIFIER actor, accept tasks (handoff 5.3). The inbox row and the
+outcome commit together, so a worker lost mid-way leaves nothing behind: the redelivery runs
+again.
 """
 
 import logging
@@ -126,9 +128,8 @@ def run(
         reconcile=False,
     )
     if report.passed:
-        engine.transition_task(
-            session, workflow, task, TaskStatus.COMPLETED, actor=Actor.VERIFIER, extra=context
-        )
+        # The task stays VERIFYING until the semantic evaluation decides (ADR-0031).
+        engine.request_evaluation(session, workflow, task)
         outcome = "passed"
     else:
         target = (

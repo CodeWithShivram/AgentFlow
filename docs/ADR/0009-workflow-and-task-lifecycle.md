@@ -119,3 +119,6 @@ Status payloads are `{from, to, actor, reason?}`. **Prompts are never copied int
 - Each change costs a few queries under a row lock. That's fine for plans of up to 200 tasks.
 - **Recovery is limited until Phase 5:** a required task blocked by a cancelled dependency can only be resolved by cancelling the workflow, or by replanning once that exists.
 - Downgrading migration 0004 deletes events of the new types, since UPDATE is forbidden on events, and maps new statuses to the nearest old ones.
+
+## Amendment (Step 5.2, 2026-11-15)
+VERIFYING → CANCELLED is allowed for people and the system (ADR-0031): VERIFYING now lasts while the semantic evaluation's model call runs, so it must be cancellable like SUBMITTED.

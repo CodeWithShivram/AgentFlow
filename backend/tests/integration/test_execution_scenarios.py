@@ -45,6 +45,7 @@ from app.models import (
 )
 from app.services.usage import record_model_call
 from app.verification import job as verification_job
+from app.verification import semantic
 from app.workflows import engine
 from app.workflows.state_machine import Actor
 from tests.conftest import make_settings
@@ -63,6 +64,8 @@ MOCK_CONFIG = {
     "tools": [],
 }
 WRITER_CONFIG = {**MOCK_CONFIG, "system_instruction_ref": "builtin://writer/v1"}
+# The semantic evaluator with the mock provider's default reply (every criterion met).
+_EVALUATOR = ModelGateway(make_settings(), MockModelAdapter(), lambda record: uuid.uuid4())
 
 
 @dataclass(frozen=True)
@@ -186,8 +189,8 @@ def _submit(worker: Factory, claim: runner.Claim) -> None:
 
 
 def _verify(admin: Factory, worker: Factory, graph: Graph, task_id: uuid.UUID) -> None:
-    """Runs the platform's verification job (ADR-0030) on the task's verification request, as a
-    worker would: SUBMITTED -> VERIFYING -> COMPLETED."""
+    """Runs the platform's verification jobs on the task's requests, as a worker would: the
+    deterministic checks (ADR-0030), then the semantic evaluation (ADR-0031)."""
     with session_scope(admin) as s:
         event = s.execute(
             select(OutboxEvent)
@@ -204,6 +207,25 @@ def _verify(admin: Factory, worker: Factory, graph: Graph, task_id: uuid.UUID) -
             task_id=task_id,
         )
     assert outcome == "passed"
+    with session_scope(admin) as s:
+        evaluate = s.execute(
+            select(OutboxEvent)
+            .where(OutboxEvent.task_id == task_id, OutboxEvent.event_type == outbox.TASK_EVALUATE)
+            .order_by(OutboxEvent.created_at.desc())
+            .limit(1)
+        ).scalar_one()
+    with session_scope(worker) as s:
+        claimed = semantic.claim(
+            s,
+            event_id=evaluate.id,
+            workspace_id=graph.workspace_id,
+            workflow_id=graph.workflow_id,
+            task_id=task_id,
+        )
+    assert isinstance(claimed, semantic.EvaluationJob)
+    evaluation = semantic.evaluate(_EVALUATOR, claimed, sleep=lambda _: None)
+    with session_scope(worker) as s:
+        assert semantic.finish(s, claimed, evaluation) == "passed"
     with session_scope(admin) as s:
         _drop_side_requests(s, graph.workflow_id)
         s.commit()
@@ -473,6 +495,7 @@ def test_a_real_worker_runs_a_diamond_with_parallel_middle_tasks(
     monkeypatch.setattr(runner, "get_worker_session_factory", lambda: worker_factory)
     models = ModelGateway(api_settings, _SlowAdapter(), partial(record_model_call, worker_factory))
     monkeypatch.setattr(runner, "get_model_gateway", lambda: models)
+    monkeypatch.setattr(tasks, "get_model_gateway", lambda: models)  # the semantic evaluator
     graph = _start_graph(
         admin_factory,
         tasks=4,

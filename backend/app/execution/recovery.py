@@ -14,7 +14,10 @@ engine, so every status change writes its event:
   `LOST_DISPATCH_AFTER` ago and never claimed (the broker lost the message) is dispatched again,
   within the slot limit. A late original delivery finds the task moved on and does nothing.
 - Lost verifications: a SUBMITTED task whose latest `task.verify` was published
-  `LOST_DISPATCH_AFTER` ago and never consumed is sent for verification again (ADR-0030).
+  `LOST_DISPATCH_AFTER` ago and never consumed is sent for verification again (ADR-0030); likewise
+  a VERIFYING task's lost `task.evaluate` (ADR-0031).
+- Interrupted evaluations: a semantic evaluation still pending `INTERRUPTED_EVALUATION_AFTER`
+  after its job claimed it escalates the task (EVALUATION_INTERRUPTED) for people to decide.
 - Interrupted planning jobs: an analysis or plan request still PENDING `INTERRUPTED_JOB_AFTER`
   after its job claimed it is marked FAILED, so the user can retry it.
 
@@ -47,6 +50,7 @@ from app.models import (
 )
 from app.planning import analysis, plan
 from app.verification import job as verification_job
+from app.verification import semantic
 from app.workflows import engine
 from app.workflows.state_machine import WORKFLOW_EXECUTING, Actor
 
@@ -60,6 +64,8 @@ GRACE = timedelta(seconds=120)
 LOST_ATTEMPT_AFTER = timedelta(seconds=runner.AGENT_HARD_TIME_LIMIT_SECONDS) + GRACE
 LOST_DISPATCH_AFTER = timedelta(minutes=15)
 INTERRUPTED_JOB_AFTER = timedelta(seconds=analysis.JOB_TIME_LIMIT_SECONDS) + GRACE
+INTERRUPTED_EVALUATION_AFTER = timedelta(seconds=semantic.JOB_TIME_LIMIT_SECONDS) + GRACE
+EVALUATION_INTERRUPTED = "EVALUATION_INTERRUPTED"
 BATCH_SIZE = 100
 
 
@@ -69,6 +75,8 @@ class RecoveryReport:
     retried: int = 0
     redispatched: int = 0
     reverified: int = 0
+    reevaluated: int = 0
+    interrupted_evaluations: int = 0
     interrupted_jobs: int = 0
 
 
@@ -97,6 +105,22 @@ def recover_once(
     for (workspace_id, workflow_id), task_ids in unverified.items():
         with session_scope(factory) as session:
             report.reverified += reverify(session, workspace_id, workflow_id, task_ids)
+
+    with session_scope(factory) as session:
+        unevaluated = _stalled_evaluations(session, now - LOST_DISPATCH_AFTER, batch_size)
+    for (workspace_id, workflow_id), task_ids in unevaluated.items():
+        with session_scope(factory) as session:
+            report.reevaluated += reevaluate(session, workspace_id, workflow_id, task_ids)
+
+    with session_scope(factory) as session:
+        interrupted_evaluations = _interrupted_evaluations(
+            session, now - INTERRUPTED_EVALUATION_AFTER, batch_size
+        )
+    for workspace_id, workflow_id, task_id in interrupted_evaluations:
+        with session_scope(factory) as session:
+            report.interrupted_evaluations += escalate_interrupted_evaluation(
+                session, workspace_id, workflow_id, task_id
+            )
 
     with session_scope(factory) as session:
         interrupted = _interrupted_jobs(session, now - INTERRUPTED_JOB_AFTER, batch_size)
@@ -359,6 +383,99 @@ def reverify(
             extra={"workflow_id": str(workflow_id), "count": len(chosen)},
         )
     return len(chosen)
+
+
+# --- semantic evaluations ----------------------------------------------------------------------
+
+
+def _stalled_evaluations(
+    session: Session, published_before: datetime, limit: int
+) -> dict[tuple[uuid.UUID, uuid.UUID], list[uuid.UUID]]:
+    """VERIFYING tasks whose latest evaluation request was never consumed."""
+    return _stalled(
+        session,
+        event_type=outbox.TASK_EVALUATE,
+        consumer=semantic.CONSUMER,
+        task_status=TaskStatus.VERIFYING,
+        workflow_statuses=WORKFLOW_EXECUTING,
+        published_before=published_before,
+        limit=limit,
+    )
+
+
+def reevaluate(
+    session: Session, workspace_id: uuid.UUID, workflow_id: uuid.UUID, task_ids: list[uuid.UUID]
+) -> int:
+    """Requests the evaluation again for tasks whose attempt still awaits it."""
+    workflow = _lock_workflow(session, workspace_id, workflow_id)
+    if workflow is None or workflow.status not in WORKFLOW_EXECUTING:
+        session.rollback()
+        return 0
+    chosen = []
+    for task_id in task_ids:
+        pending = semantic.pending_attempt(session, workflow, task_id)
+        if pending is not None:
+            engine.request_evaluation(session, workflow, pending[0])
+            chosen.append(task_id)
+    session.commit()
+    if chosen:
+        logger.warning(
+            "stalled evaluations resent",
+            extra={"workflow_id": str(workflow_id), "count": len(chosen)},
+        )
+    return len(chosen)
+
+
+def _interrupted_evaluations(
+    session: Session, claimed_before: datetime, limit: int
+) -> list[tuple[uuid.UUID, uuid.UUID, uuid.UUID]]:
+    """VERIFYING tasks whose latest evaluation request was claimed long ago."""
+    newer = aliased(OutboxEvent)
+    rows = session.execute(
+        select(WorkflowTask.workspace_id, WorkflowTask.workflow_id, WorkflowTask.id)
+        .join(
+            OutboxEvent,
+            and_(
+                OutboxEvent.task_id == WorkflowTask.id,
+                OutboxEvent.workflow_id == WorkflowTask.workflow_id,
+                OutboxEvent.event_type == outbox.TASK_EVALUATE,
+            ),
+        )
+        .join(
+            InboxMessage,
+            and_(
+                InboxMessage.event_id == OutboxEvent.id,
+                InboxMessage.consumer == semantic.CONSUMER,
+            ),
+        )
+        .where(
+            WorkflowTask.status == TaskStatus.VERIFYING,
+            InboxMessage.processed_at < claimed_before,
+            ~exists().where(
+                newer.task_id == OutboxEvent.task_id,
+                newer.event_type == outbox.TASK_EVALUATE,
+                newer.created_at > OutboxEvent.created_at,
+            ),
+        )
+        .limit(limit)
+    )
+    return [(row[0], row[1], row[2]) for row in rows]
+
+
+def escalate_interrupted_evaluation(
+    session: Session, workspace_id: uuid.UUID, workflow_id: uuid.UUID, task_id: uuid.UUID
+) -> int:
+    workflow = _lock_workflow(session, workspace_id, workflow_id)
+    pending = semantic.pending_attempt(session, workflow, task_id) if workflow else None
+    if workflow is None or pending is None:
+        session.rollback()
+        return 0
+    semantic.escalate_unavailable(
+        session, workflow, pending[0], code=EVALUATION_INTERRUPTED, attempts=0
+    )
+    session.commit()
+    logger.warning("interrupted evaluation escalated", extra={"task_id": str(task_id)})
+    return 1
 
 
 # --- interrupted planning jobs -----------------------------------------------------------------

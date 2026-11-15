@@ -60,6 +60,7 @@ function verification(overrides: Partial<Verification> = {}): Verification {
     outcome: "PASSED",
     checks: [{ name: "submission", outcome: "passed" }],
     issues: [],
+    findings: null,
     created_at: new Date().toISOString(),
     ...overrides,
   };
@@ -168,7 +169,7 @@ describe("ExecutionsPanel verification (Step 5.1)", () => {
   it("shows a passed verification with its verifier version", async () => {
     renderPanel([execution({ verifications: [verification()] })]);
 
-    const section = await screen.findByRole("region", { name: "Platform verification" });
+    const section = await screen.findByRole("region", { name: "Platform verification: deterministic checks" });
     expect(within(section).getByText("Passed")).toBeInTheDocument();
     expect(within(section).getByText("deterministic/v1")).toBeInTheDocument();
     expect(within(section).queryByRole("listitem")).not.toBeInTheDocument();
@@ -187,7 +188,7 @@ describe("ExecutionsPanel verification (Step 5.1)", () => {
     });
     renderPanel([execution({ verifications: [failed] })]);
 
-    const section = await screen.findByRole("region", { name: "Platform verification" });
+    const section = await screen.findByRole("region", { name: "Platform verification: deterministic checks" });
     expect(within(section).getByText("Failed")).toBeInTheDocument();
     expect(within(section).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
       "Error: The agent says this criterion is not met · Covers all vendors.",
@@ -196,5 +197,41 @@ describe("ExecutionsPanel verification (Step 5.1)", () => {
       "Error: Outputs do not match the task's output schema · at properties/score/type",
       "Error: SOMETHING_NEW",
     ]);
+  });
+
+  it("shows the semantic evaluator's findings per criterion as plain text (Step 5.2)", async () => {
+    const semantic = verification({
+      id: "vr-2",
+      verifier: "semantic/v1",
+      outcome: "FAILED",
+      issues: [{ code: "CRITERION_JUDGED_NOT_MET", severity: "error", criterion_id: "c2" }],
+      findings: {
+        schema_version: 1,
+        objective: "partially_met",
+        objective_reason: "Two of three vendors.",
+        criteria: [
+          { criterion_id: "c1", verdict: "met", evidence: "Rows 1-3.", reason: "All listed." },
+          { criterion_id: "c2", verdict: "not_met", evidence: "<b>No links</b>", reason: "No sources cited." },
+        ],
+        complete: true,
+        consistent: true,
+        assumptions_explicit: true,
+        conflicts_with_requirements: false,
+        summary: "Sources are missing.",
+      },
+    });
+    renderPanel([execution({ verifications: [verification(), semantic] })]);
+
+    const section = await screen.findByRole("region", { name: "Platform verification: semantic evaluation" });
+    expect(within(section).getByText("semantic/v1")).toBeInTheDocument();
+    expect(within(section).getByText("Error:").parentElement).toHaveTextContent(
+      "Error: The evaluator judged this criterion not met · Cites sources.",
+    );
+    const findings = within(section).getByRole("group", { name: "Evaluator findings" });
+    expect(findings).toHaveTextContent("Objective: Partly metTwo of three vendors.");
+    const items = within(findings).getAllByRole("listitem");
+    expect(items[1]).toHaveTextContent("Not metCites sources.Evidence: <b>No links</b>Reason: No sources cited.");
+    expect(within(findings).getByText("Sources are missing.")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Platform verification: deterministic checks" })).toBeInTheDocument();
   });
 });

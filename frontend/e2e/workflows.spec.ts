@@ -151,9 +151,14 @@ test("journeys 8 and 9: approve, start, assign an agent and monitor execution", 
   const claims = attempts.getByRole("region", { name: "Agent's criterion claims" });
   await expect(claims.getByRole("listitem")).toContainText("MetLists every change");
   await expect(attempts.getByText("Mock model provider: no real model was used.")).toBeVisible();
-  const verification = attempts.getByRole("region", { name: "Platform verification" });
-  await expect(verification.getByText("Passed", { exact: true })).toBeVisible();
-  await expect(verification.getByText("deterministic/v1")).toBeVisible();
+  const checks = attempts.getByRole("region", { name: "Platform verification: deterministic checks" });
+  await expect(checks.getByText("Passed", { exact: true })).toBeVisible();
+  await expect(checks.getByText("deterministic/v1")).toBeVisible();
+  // Step 5.2: then the semantic evaluation (mock evaluator) judged each criterion.
+  const evaluation = attempts.getByRole("region", { name: "Platform verification: semantic evaluation" });
+  await expect(evaluation.getByText("Passed", { exact: true })).toBeVisible();
+  const findings = evaluation.getByRole("group", { name: "Evaluator findings" });
+  await expect(findings.getByRole("listitem")).toContainText("MetLists every change");
 
   await page.getByRole("tab", { name: "Timeline" }).click();
   const timeline = page.getByRole("list", { name: "Workflow events, newest first" });

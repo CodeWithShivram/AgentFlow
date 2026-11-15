@@ -28,6 +28,8 @@ from app.models import InboxMessage, OutboxEvent, OutboxStatus
 TASK_DISPATCH = "task.dispatch"
 # Asks a worker to verify a submitted task (ADR-0030).
 TASK_VERIFY = "task.verify"
+# Asks a worker for the semantic evaluation of a submission that passed its checks (ADR-0031).
+TASK_EVALUATE = "task.evaluate"
 WORKFLOW_ANALYZE = "workflow.analyze"
 WORKFLOW_PLAN = "workflow.plan"
 # Asks the orchestration graph to reassess a workflow (ADR-0025).

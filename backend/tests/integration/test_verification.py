@@ -1,4 +1,5 @@
-"""Platform verification of submitted tasks against real PostgreSQL (Step 5.1, ADR-0030).
+"""Platform verification of submitted tasks against real PostgreSQL: deterministic checks
+(Step 5.1, ADR-0030) and semantic evaluation (Step 5.2, ADR-0031), with the mock model provider.
 
 Worker-side code runs as the restricted worker role (`worker_factory`), as Celery workers do.
 """
@@ -6,6 +7,8 @@ Worker-side code runs as the restricted worker role (`worker_factory`), as Celer
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from functools import partial
+from typing import Any
 
 import pytest
 from sqlalchemy import delete, select, text, update
@@ -24,6 +27,8 @@ from app.models import (
     AgentStatus,
     AgentVersion,
     AutonomyPolicy,
+    InboxMessage,
+    LlmUsage,
     OutboxEvent,
     OutboxStatus,
     TaskDependency,
@@ -38,7 +43,8 @@ from app.models import (
     WorkflowTask,
     Workspace,
 )
-from app.verification import job
+from app.services.usage import record_model_call
+from app.verification import job, semantic
 from app.workflows import engine
 from app.workflows.state_machine import Actor
 from tests.conftest import make_settings
@@ -182,6 +188,47 @@ def _verify(worker: Factory, world: World, event: OutboxEvent) -> str:
         )
 
 
+def _evaluate(
+    admin: Factory, worker: Factory, world: World, adapter: MockModelAdapter | None = None
+) -> str:
+    """Runs the semantic evaluation job on the task's latest evaluation request, as a worker
+    would: claim, model call outside any transaction (mock provider), finish."""
+    event = _events(admin, outbox.TASK_EVALUATE, world.task_id)[-1]
+    with session_scope(worker) as s:
+        claimed = semantic.claim(
+            s,
+            event_id=event.id,
+            workspace_id=world.workspace_id,
+            workflow_id=world.workflow_id,
+            task_id=world.task_id,
+        )
+    if isinstance(claimed, semantic.Skipped):
+        return claimed.value
+    gateway = ModelGateway(
+        make_settings(), adapter or MockModelAdapter(), partial(record_model_call, worker)
+    )
+    outcome = semantic.evaluate(gateway, claimed, sleep=lambda _: None)
+    with session_scope(worker) as s:
+        return semantic.finish(s, claimed, outcome)
+
+
+def _evaluation(**changes: Any) -> str:
+    values: dict[str, Any] = {
+        "objective": "met",
+        "objective_reason": "Done.",
+        "criteria": [
+            {"criterion_id": "c1", "verdict": "met", "evidence": "Report.", "reason": "Covered."}
+        ],
+        "complete": True,
+        "consistent": True,
+        "assumptions_explicit": True,
+        "conflicts_with_requirements": False,
+        "summary": "Fine.",
+        **changes,
+    }
+    return semantic.Evaluation.model_validate(values).model_dump_json()
+
+
 def _status(admin: Factory, task_id: uuid.UUID) -> TaskStatus:
     with session_scope(admin) as s:
         return s.execute(select(WorkflowTask.status).where(WorkflowTask.id == task_id)).scalar_one()
@@ -219,7 +266,7 @@ def test_a_submission_requests_verification_in_the_same_transaction(
     assert _status(admin_factory, world.task_id) == TaskStatus.SUBMITTED
 
 
-def test_a_passing_submission_completes_the_task_and_starts_its_dependents(
+def test_a_passing_submission_is_evaluated_then_completes_and_starts_its_dependents(
     admin_factory: Factory, worker_factory: Factory
 ) -> None:
     world = _world(admin_factory)
@@ -228,18 +275,39 @@ def test_a_passing_submission_completes_the_task_and_starts_its_dependents(
 
     assert _verify(worker_factory, world, event) == "passed"
 
+    # Step 5.2 (ADR-0031): passing the checks hands the task to the semantic evaluation.
+    assert _status(admin_factory, world.task_id) == TaskStatus.VERIFYING
+    (evaluate,) = _events(admin_factory, outbox.TASK_EVALUATE, world.task_id)
+    assert evaluate.payload == {
+        "workspace_id": str(world.workspace_id),
+        "workflow_id": str(world.workflow_id),
+        "task_id": str(world.task_id),
+    }
+    (checks,) = _results(admin_factory)
+    assert (checks.execution_id, checks.verifier) == (claim.execution_id, "deterministic/v1")
+    assert checks.outcome == VerificationOutcome.PASSED and checks.issues == []
+    assert checks.findings is None
+    assert {c["name"]: c["outcome"] for c in checks.checks}["deliverables"] == "passed"
+    assert _status(admin_factory, world.dependent_id) == TaskStatus.PENDING
+
+    assert _evaluate(admin_factory, worker_factory, world) == "passed"
+
     assert _status(admin_factory, world.task_id) == TaskStatus.COMPLETED
-    (result,) = _results(admin_factory)
-    assert (result.execution_id, result.verifier) == (claim.execution_id, "deterministic/v1")
-    assert result.outcome == VerificationOutcome.PASSED and result.issues == []
-    assert {c["name"]: c["outcome"] for c in result.checks}["deliverables"] == "passed"
+    evaluation = next(r for r in _results(admin_factory) if r.verifier == "semantic/v1")
+    assert evaluation.execution_id == claim.execution_id
+    assert evaluation.outcome == VerificationOutcome.PASSED
+    assert evaluation.findings is not None and evaluation.findings["objective"] == "met"
     started, completed = [
         e for e in _task_events(admin_factory, world.task_id) if e.payload.get("verifier")
     ]
     assert started.event_type == WorkflowEventType.VERIFICATION_STARTED
     assert completed.event_type == WorkflowEventType.TASK_COMPLETED
     assert completed.payload["actor"] == "VERIFIER"
-    assert completed.payload["verification_id"] == str(result.id)
+    assert completed.payload["verifier"] == "semantic/v1"
+    assert completed.payload["verification_id"] == str(evaluation.id)
+    with session_scope(admin_factory) as s:  # the evaluator's call belongs to the attempt
+        usage = s.execute(select(LlmUsage)).scalar_one()
+    assert (usage.execution_id, usage.purpose) == (claim.execution_id, "semantic_evaluation")
     # Only now does the dependent task start, through the scheduler (ADR-0028).
     assert _status(admin_factory, world.dependent_id) == TaskStatus.ASSIGNED
     assert len(_events(admin_factory, outbox.TASK_DISPATCH, world.dependent_id)) == 1
@@ -378,3 +446,189 @@ def test_the_worker_role_can_record_but_not_change_results(worker_factory: Facto
             ).scalars()
         )
     assert privileges == {"SELECT", "INSERT"}
+
+
+# --- semantic evaluation (Step 5.2, ADR-0031) ---------------------------------------------------
+
+
+def _evaluating(admin: Factory, worker: Factory, world: World) -> None:
+    _submit(admin, worker, world)
+    (event,) = _events(admin, outbox.TASK_VERIFY, world.task_id)
+    assert _verify(worker, world, event) == "passed"
+
+
+def test_an_evaluation_judging_a_criterion_not_met_sends_the_task_back(
+    admin_factory: Factory, worker_factory: Factory
+) -> None:
+    world = _world(admin_factory)
+    _evaluating(admin_factory, worker_factory, world)
+    adapter = MockModelAdapter()
+    not_met = {"criterion_id": "c1", "verdict": "not_met", "evidence": "None.", "reason": "Absent."}
+    adapter.script("semantic_evaluation", _evaluation(criteria=[not_met]))
+
+    assert _evaluate(admin_factory, worker_factory, world, adapter) == "rework_required"
+
+    assert _status(admin_factory, world.task_id) == TaskStatus.REWORK_REQUIRED
+    evaluation = next(r for r in _results(admin_factory) if r.verifier == "semantic/v1")
+    assert evaluation.outcome == VerificationOutcome.FAILED
+    assert evaluation.issues == [
+        {"code": "CRITERION_JUDGED_NOT_MET", "severity": "error", "criterion_id": "c1"}
+    ]
+    assert evaluation.findings is not None
+    assert evaluation.findings["criteria"][0]["reason"] == "Absent."  # stored as findings only
+    failed = _task_events(admin_factory, world.task_id)[-1]
+    assert failed.event_type == WorkflowEventType.VERIFICATION_FAILED
+    assert failed.payload["issue_codes"] == ["CRITERION_JUDGED_NOT_MET"]
+
+
+def test_warnings_alone_do_not_fail_the_evaluation(
+    admin_factory: Factory, worker_factory: Factory
+) -> None:
+    world = _world(admin_factory)
+    _evaluating(admin_factory, worker_factory, world)
+    adapter = MockModelAdapter()
+    adapter.script("semantic_evaluation", _evaluation(objective="partially_met", complete=False))
+
+    assert _evaluate(admin_factory, worker_factory, world, adapter) == "passed"
+
+    evaluation = next(r for r in _results(admin_factory) if r.verifier == "semantic/v1")
+    assert [i["code"] for i in evaluation.issues] == ["OBJECTIVE_PARTIAL", "INCOMPLETE"]
+    assert _status(admin_factory, world.task_id) == TaskStatus.COMPLETED
+
+
+def test_an_evaluation_that_cannot_complete_escalates_without_costing_an_attempt(
+    admin_factory: Factory, worker_factory: Factory
+) -> None:
+    world = _world(admin_factory)
+    _evaluating(admin_factory, worker_factory, world)
+    adapter = MockModelAdapter()
+    adapter.script("semantic_evaluation", "not json", "still not json", "nor this")
+
+    assert _evaluate(admin_factory, worker_factory, world, adapter) == "escalated"
+
+    assert _status(admin_factory, world.task_id) == TaskStatus.ESCALATED
+    assert [r.verifier for r in _results(admin_factory)] == ["deterministic/v1"]
+    escalated = _task_events(admin_factory, world.task_id)[-1]
+    assert escalated.payload["reason"] == "EVALUATION_UNAVAILABLE"
+    assert escalated.payload["error_code"] == "MODEL_OUTPUT_INVALID"
+    with session_scope(admin_factory) as s:
+        task = s.get(WorkflowTask, world.task_id)
+        status = s.execute(
+            select(Workflow.status).where(Workflow.id == world.workflow_id)
+        ).scalar_one()
+        assert task is not None and task.attempt_count == 0
+    assert status == WorkflowStatus.BLOCKED  # a required task needs people (ADR-0009)
+
+
+def test_duplicate_and_stale_evaluation_requests_change_nothing(
+    admin_factory: Factory, worker_factory: Factory
+) -> None:
+    world = _world(admin_factory)
+    _evaluating(admin_factory, worker_factory, world)
+    (event,) = _events(admin_factory, outbox.TASK_EVALUATE, world.task_id)
+    assert _evaluate(admin_factory, worker_factory, world) == "passed"
+
+    with session_scope(worker_factory) as s:
+        duplicate = semantic.claim(
+            s,
+            event_id=event.id,
+            workspace_id=world.workspace_id,
+            workflow_id=world.workflow_id,
+            task_id=world.task_id,
+        )
+    assert duplicate == semantic.Skipped.DUPLICATE
+    with session_scope(admin_factory) as s:  # a late second request for an evaluated task
+        workflow = s.get(Workflow, world.workflow_id)
+        task = s.get(WorkflowTask, world.task_id)
+        assert workflow is not None and task is not None
+        engine.request_evaluation(s, workflow, task)
+        s.commit()
+    assert _evaluate(admin_factory, worker_factory, world) == semantic.Skipped.STALE
+    assert len(_results(admin_factory)) == 2
+
+
+def test_an_evaluation_finished_after_the_task_was_cancelled_changes_nothing(
+    admin_factory: Factory, worker_factory: Factory
+) -> None:
+    world = _world(admin_factory)
+    _evaluating(admin_factory, worker_factory, world)
+    event = _events(admin_factory, outbox.TASK_EVALUATE, world.task_id)[-1]
+    with session_scope(worker_factory) as s:
+        claimed = semantic.claim(
+            s,
+            event_id=event.id,
+            workspace_id=world.workspace_id,
+            workflow_id=world.workflow_id,
+            task_id=world.task_id,
+        )
+    assert isinstance(claimed, semantic.EvaluationJob)
+    with session_scope(admin_factory) as s:  # cancelled while the model was working
+        workflow = s.execute(
+            select(Workflow).where(Workflow.id == world.workflow_id).with_for_update()
+        ).scalar_one()
+        task = s.get(WorkflowTask, world.task_id)
+        assert task is not None
+        engine.transition_task(s, workflow, task, TaskStatus.CANCELLED, actor=Actor.USER)
+        s.commit()
+    gateway = ModelGateway(make_settings(), MockModelAdapter(), lambda record: uuid.uuid4())
+    outcome = semantic.evaluate(gateway, claimed, sleep=lambda _: None)
+    with session_scope(worker_factory) as s:
+        assert semantic.finish(s, claimed, outcome) == semantic.Skipped.STALE
+    assert _status(admin_factory, world.task_id) == TaskStatus.CANCELLED
+    assert [r.verifier for r in _results(admin_factory)] == ["deterministic/v1"]
+
+
+def test_recovery_resends_lost_evaluations_and_escalates_interrupted_ones(
+    admin_factory: Factory, worker_factory: Factory
+) -> None:
+    lost_world = _world(admin_factory)
+    _evaluating(admin_factory, worker_factory, lost_world)
+    (lost,) = _events(admin_factory, outbox.TASK_EVALUATE, lost_world.task_id)
+    with session_scope(admin_factory) as s:
+        s.execute(
+            update(OutboxEvent)
+            .where(OutboxEvent.id == lost.id)
+            .values(
+                status=OutboxStatus.PUBLISHED,
+                published_at=datetime.now(UTC) - recovery.LOST_DISPATCH_AFTER * 2,
+            )
+        )
+        s.commit()
+
+    interrupted_world = _world(admin_factory)
+    _evaluating(admin_factory, worker_factory, interrupted_world)
+    (claimed_event,) = _events(admin_factory, outbox.TASK_EVALUATE, interrupted_world.task_id)
+    with session_scope(worker_factory) as s:  # claimed, then the worker was lost
+        assert isinstance(
+            semantic.claim(
+                s,
+                event_id=claimed_event.id,
+                workspace_id=interrupted_world.workspace_id,
+                workflow_id=interrupted_world.workflow_id,
+                task_id=interrupted_world.task_id,
+            ),
+            semantic.EvaluationJob,
+        )
+    # The lost request is resent; the claimed one may still be running.
+    assert recovery.recover_once(worker_factory) == recovery.RecoveryReport(reevaluated=1)
+    with session_scope(admin_factory) as s:
+        s.execute(
+            update(InboxMessage)
+            .where(InboxMessage.event_id == claimed_event.id)
+            .values(
+                processed_at=datetime.now(UTC)
+                - recovery.INTERRUPTED_EVALUATION_AFTER
+                - timedelta(minutes=1)
+            )
+        )
+        s.commit()
+
+    report = recovery.recover_once(worker_factory)
+
+    assert report == recovery.RecoveryReport(interrupted_evaluations=1)
+    assert len(_events(admin_factory, outbox.TASK_EVALUATE, lost_world.task_id)) == 2
+    assert _evaluate(admin_factory, worker_factory, lost_world) == "passed"
+    assert _status(admin_factory, interrupted_world.task_id) == TaskStatus.ESCALATED
+    escalated = _task_events(admin_factory, interrupted_world.task_id)[-1]
+    assert escalated.payload["reason"] == "EVALUATION_UNAVAILABLE"
+    assert escalated.payload["error_code"] == "EVALUATION_INTERRUPTED"

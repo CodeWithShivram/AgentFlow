@@ -62,6 +62,8 @@ def test_recovery_waits_until_the_worker_has_certainly_given_up() -> None:
     # A live worker kills its attempt at the hard limit, so a later RUNNING attempt is lost.
     assert recovery.LOST_ATTEMPT_AFTER.total_seconds() > tasks.EXECUTION_TIME_LIMIT
     assert recovery.INTERRUPTED_JOB_AFTER.total_seconds() > tasks.ANALYSIS_TIME_LIMIT
+    evaluate = celery_app.tasks["agentflow.evaluate_task"]
+    assert recovery.INTERRUPTED_EVALUATION_AFTER.total_seconds() > evaluate.time_limit
 
 
 def test_execution_time_limits_follow_the_default_agent_timeout() -> None:

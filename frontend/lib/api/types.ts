@@ -455,7 +455,24 @@ export interface Verification {
   outcome: VerificationOutcome;
   checks: { name: string; outcome: "passed" | "failed" | "skipped" }[];
   issues: VerificationIssue[];
+  /** The semantic evaluator's findings (ADR-0031): untrusted model text; null for checks. */
+  findings: EvaluationFindings | null;
   created_at: IsoDateTime;
+}
+
+export type EvaluationVerdict = "met" | "partially_met" | "not_met";
+
+/** Mirrors Evaluation (backend/app/verification/semantic.py). Model output: plain text only. */
+export interface EvaluationFindings {
+  schema_version: 1;
+  objective: EvaluationVerdict;
+  objective_reason: string;
+  criteria: { criterion_id: string; verdict: EvaluationVerdict; evidence: string; reason: string }[];
+  complete: boolean;
+  consistent: boolean;
+  assumptions_explicit: boolean;
+  conflicts_with_requirements: boolean;
+  summary: string;
 }
 
 export interface VerificationIssue {

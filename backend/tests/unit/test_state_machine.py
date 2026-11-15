@@ -48,7 +48,14 @@ APPROVED_TASK_EDGES = {
         T.CANCELLED,
     },
     T.SUBMITTED: {T.VERIFYING, T.CANCELLED},
-    T.VERIFYING: {T.COMPLETED, T.REWORK_REQUIRED, T.WAITING_APPROVAL, T.ESCALATED, T.FAILED},
+    T.VERIFYING: {
+        T.COMPLETED,
+        T.REWORK_REQUIRED,
+        T.WAITING_APPROVAL,
+        T.ESCALATED,
+        T.FAILED,
+        T.CANCELLED,
+    },
     T.REWORK_REQUIRED: {T.ASSIGNED, T.ESCALATED, T.FAILED, T.CANCELLED},
     T.WAITING_APPROVAL: {T.QUEUED, T.FAILED, T.CANCELLED},
     T.BLOCKED: {T.READY, T.PENDING, T.FAILED, T.CANCELLED},
@@ -109,7 +116,7 @@ def test_users_cannot_complete_fail_or_block_workflows_directly() -> None:
 def test_users_can_cancel_every_unfinished_workflow_and_task() -> None:
     for status in set(W) - WORKFLOW_TERMINAL:
         assert workflow_transition_allowed(status, W.CANCELLED, Actor.USER), status
-    for task_status in set(T) - TASK_TERMINAL - {T.VERIFYING}:
+    for task_status in set(T) - TASK_TERMINAL:
         assert task_transition_allowed(task_status, T.CANCELLED, Actor.USER), task_status
 
 

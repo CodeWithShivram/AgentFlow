@@ -12,6 +12,8 @@ import type {
   Agent,
   AgentSubmission,
   CriterionStatus,
+  EvaluationFindings,
+  EvaluationVerdict,
   Task,
   Verification,
   VerificationIssue,
@@ -134,7 +136,33 @@ const ISSUE_LABELS: Record<string, string> = {
   OUTPUTS_INVALID: "Outputs do not fit the structure this agent must produce",
   TEST_CASE_UNKNOWN_CRITERION: "Test cases cover criteria the task does not have",
   PLATFORM_NOTE_MISSING: "The platform's limitation note is missing",
+  // Semantic evaluation (Step 5.2)
+  OBJECTIVE_NOT_MET: "The evaluator judged the objective not met",
+  OBJECTIVE_PARTIAL: "The evaluator judged the objective only partly met",
+  CRITERION_JUDGED_NOT_MET: "The evaluator judged this criterion not met",
+  CRITERION_JUDGED_PARTIAL: "The evaluator judged this criterion only partly met",
+  CONFLICTS_WITH_REQUIREMENTS: "The result conflicts with the requirements",
+  INCOMPLETE: "The evaluator found the work incomplete",
+  INCONSISTENT: "The evaluator found contradictions in the work",
+  ASSUMPTIONS_NOT_EXPLICIT: "The work relies on unstated assumptions",
 };
+
+const VERIFIER_LABELS: Record<string, string> = {
+  deterministic: "deterministic checks",
+  semantic: "semantic evaluation",
+};
+
+const VERDICT_LABELS: Record<EvaluationVerdict, string> = {
+  met: "Met",
+  partially_met: "Partly met",
+  not_met: "Not met",
+};
+
+/** "semantic/v1" -> "semantic evaluation"; unknown verifiers keep their name. */
+export function verifierLabel(verifier: string): string {
+  const kind = verifier.split("/")[0];
+  return VERIFIER_LABELS[kind] ?? kind;
+}
 
 /** The issue's subject, from task data only: a criterion, a deliverable or a schema location. */
 function issueSubject(issue: VerificationIssue, descriptions: Map<string, string>): string | null {
@@ -148,10 +176,11 @@ function issueSubject(issue: VerificationIssue, descriptions: Map<string, string
 function VerificationDetails({ verification, criteria }: { verification: Verification; criteria: AcceptanceCriterion[] }) {
   const descriptions = new Map(criteria.map((c) => [c.id, c.description]));
   const passed = verification.outcome === "PASSED";
+  const label = verifierLabel(verification.verifier);
   return (
-    <section aria-label="Platform verification" className="mt-2 rounded border px-2 py-1">
+    <section aria-label={`Platform verification: ${label}`} className="mt-2 rounded border px-2 py-1">
       <p className="flex flex-wrap items-center gap-2 text-xs">
-        <span className="font-medium">Platform verification</span>
+        <span className="font-medium">Platform verification: {label}</span>
         <Badge variant={passed ? "secondary" : "destructive"}>{passed ? "Passed" : "Failed"}</Badge>
         <span className="font-mono text-muted-foreground">{verification.verifier}</span>
       </p>
@@ -171,7 +200,37 @@ function VerificationDetails({ verification, criteria }: { verification: Verific
           })}
         </ul>
       ) : null}
+      {verification.findings ? <EvaluatorFindings findings={verification.findings} descriptions={descriptions} /> : null}
     </section>
+  );
+}
+
+/** The semantic evaluator's findings (Step 5.2): model output, rendered as plain text only. */
+function EvaluatorFindings({ findings, descriptions }: { findings: EvaluationFindings; descriptions: Map<string, string> }) {
+  return (
+    <div className="mt-1 space-y-1 text-xs" aria-label="Evaluator findings" role="group">
+      <p className="break-words">
+        <Badge variant="outline" className="mr-2">
+          Objective: {VERDICT_LABELS[findings.objective]}
+        </Badge>
+        {findings.objective_reason}
+      </p>
+      {findings.criteria.length > 0 ? (
+        <ul className="space-y-1">
+          {findings.criteria.map((finding) => (
+            <li key={finding.criterion_id} className="break-words">
+              <Badge variant="outline" className="mr-2">
+                {VERDICT_LABELS[finding.verdict]}
+              </Badge>
+              {descriptions.get(finding.criterion_id) ?? finding.criterion_id}
+              <span className="block text-muted-foreground">Evidence: {finding.evidence}</span>
+              <span className="block text-muted-foreground">Reason: {finding.reason}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      <p className="break-words text-muted-foreground">{findings.summary}</p>
+    </div>
   );
 }
 

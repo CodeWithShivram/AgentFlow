@@ -81,6 +81,9 @@ TASK_TRANSITIONS: dict[tuple[T, T], frozenset[Actor]] = {
     (T.VERIFYING, T.WAITING_APPROVAL): frozenset({_V, _Y}),
     (T.VERIFYING, T.ESCALATED): frozenset({_V, _Y}),
     (T.VERIFYING, T.FAILED): frozenset({_V, _Y}),
+    # VERIFYING lasts while the semantic evaluation's model call runs (ADR-0031), so people (and
+    # cancelling the workflow) can cancel it; a late evaluation then changes nothing.
+    (T.VERIFYING, T.CANCELLED): _PEOPLE_OR_SYSTEM,
     (T.REWORK_REQUIRED, T.ASSIGNED): frozenset({_U, _S}),
     (T.REWORK_REQUIRED, T.ESCALATED): frozenset({_Y}),
     (T.REWORK_REQUIRED, T.FAILED): frozenset({_Y}),
