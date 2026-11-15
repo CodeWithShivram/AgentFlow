@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 
 from app.agents.selection import RULES_VERSION
 from app.api.deps import DbSession, SettingsDep, workspace_role
-from app.models import WorkflowStatus, WorkflowTask, WorkspaceRole
+from app.models import VerificationResult, WorkflowStatus, WorkflowTask, WorkspaceRole
 from app.repositories import workflows as repository
 from app.schemas.workflows import (
     AgentSelectionList,
@@ -39,6 +39,8 @@ from app.schemas.workflows import (
     TaskResponse,
     TaskUpdateRequest,
     ToolInvocationResponse,
+    VerificationList,
+    VerificationResponse,
     WorkflowCreateRequest,
     WorkflowEventResponse,
     WorkflowResponse,
@@ -476,6 +478,9 @@ async def list_executions(
                 created_at=call.created_at,
             )
         )
+    verifications: dict[uuid.UUID, list[VerificationResponse]] = {}
+    for result in await repository.list_verifications(session, workflow, task_id):
+        verifications.setdefault(result.execution_id, []).append(_verification(result))
     items = [
         ExecutionResponse(
             id=e.id,
@@ -492,10 +497,26 @@ async def list_executions(
             result_summary=e.result_summary,
             submission=e.submission,
             tool_invocations=invocations.get(e.id, []),
+            verifications=verifications.get(e.id, []),
         )
         for e, version in rows
     ]
     return ExecutionList(items=items)
+
+
+@router.get("/{workflow_id}/tasks/{task_id}/verification")
+async def list_verifications(
+    workflow_id: uuid.UUID, task_id: uuid.UUID, access: Viewer, session: DbSession
+) -> VerificationList:
+    """Platform verification results of the task's attempts, newest first (ADR-0030)."""
+    workflow = await service.get_workflow(session, access, workflow_id)
+    await task_service.get_task(session, workflow, task_id)  # 404 for unknown/foreign tasks
+    rows = await repository.list_verifications(session, workflow, task_id)
+    return VerificationList(items=[_verification(r) for r in reversed(rows)])
+
+
+def _verification(row: VerificationResult) -> VerificationResponse:
+    return VerificationResponse.model_validate(row, from_attributes=True)
 
 
 @router.post("/{workflow_id}/tasks/{task_id}/cancel")

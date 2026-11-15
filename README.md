@@ -184,6 +184,7 @@ Routes live under `/api/v1/workspaces/{workspace_id}/workflows`. The lifecycle, 
 | `POST …/tasks/{task_id}/dependencies` · `DELETE …/dependencies/{depends_on_task_id}` | MEMBER | `{depends_on_task_id}` | 201 task · 204 | 422 `INVALID_DEPENDENCY` / `DEPENDENCY_CYCLE`, 409 `DEPENDENCY_EXISTS` |
 | `POST …/tasks/{task_id}/assign` | MEMBER | `{agent_id, revision}` | 200 task pinned to the agent's active version (a PENDING task is pre-assigned and stays PENDING) | 409 `AGENT_NOT_RUNNABLE` / `INVALID_TRANSITION`, 422 `AGENT_LACKS_SKILLS` |
 | `POST …/tasks/{task_id}/cancel` | MEMBER | `{revision, reason?}` | 200 task | 409 |
+| `GET …/tasks/{task_id}/verification` | VIEWER | — | 200 `{items}` verification results, newest first | 404 |
 
 A typical manual run looks like this:
 
@@ -270,6 +271,8 @@ Workflow tasks are executed by Celery workers, fed through a transactional outbo
 
 **Scheduling** ([ADR-0028](docs/ADR/0028-dependency-aware-scheduling.md)). Independent tasks run at the same time, up to the workflow's `max_parallel_tasks`. When more tasks are assigned than there are free slots, the rest wait, and each freed slot goes to the waiting task with the highest priority (then the oldest). A task that still waits for its dependencies can be pre-assigned ("Pre-assign agent…"): it starts by itself once its dependencies complete. Changing its required skills clears the pre-assignment.
 
+**Verification** ([ADR-0030](docs/ADR/0030-deterministic-verification.md)). The platform verifies every submission automatically. It checks that the submission still parses, that it claims each acceptance criterion once, that every deliverable has content, that outputs match the task's JSON Schema, and that Developer and QA outputs keep their required structure and notes. A criterion the agent itself marks NOT_MET fails verification; PARTIAL is a warning. Passing completes the task and starts the tasks that depend on it. Failing sends it back for rework (people retry), or fails it after the third attempt. Each attempt's details show the result; `GET …/tasks/{task_id}/verification` lists them. These checks prove structure, not quality: semantic evaluation is Step 5.2.
+
 **Cancellation and recovery** ([ADR-0029](docs/ADR/0029-cancellation-and-restart-recovery.md)). Cancelling a task or workflow stops a running agent at its next model or tool call; pausing lets running attempts finish. Every minute, a recovery sweep picks up work a lost worker or message left behind:
 - an attempt still running about 13 minutes after it started (past the hard time limit) is recorded as `WORKER_LOST`, and the task is retried automatically with the same agent version; the lost attempt counts toward the three, so a lost third attempt fails the task;
 - a dispatch that was published but not picked up within 15 minutes is sent again;
@@ -304,7 +307,7 @@ Task time limits (600 s soft, 660 s hard) are enforced only by prefork workers, 
 
 How delivery behaves:
 - Delivery is **at-least-once**, and workers deduplicate on the stable event ID.
-- A task attempt ends `SUBMITTED`; verification arrives in Phase 5.
+- A task attempt ends `SUBMITTED`; platform verification then completes the task or sends it back for rework (ADR-0030).
 - On failure, a task becomes `REWORK_REQUIRED`, or `FAILED` after the 3rd attempt.
 - Each attempt is kept in `agent_executions`.
 

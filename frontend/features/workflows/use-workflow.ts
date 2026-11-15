@@ -36,6 +36,27 @@ export function assessmentIsStale(workflow: Workflow | undefined, events: Workfl
   return !assessed || Date.parse(assessed) < Date.parse(latest);
 }
 
+/**
+ * Whether the page keeps polling: while the workflow is active, its analysis or plan draft is
+ * pending, or a task is in flight; and, after it stops (e.g. it just completed), for the few
+ * checks the reassessment needs, since the worker stores it without writing an event.
+ */
+export function isLive(
+  workflow: Workflow | undefined,
+  tasks: Task[],
+  events: WorkflowEvent[],
+  assessmentChecksLeft: number,
+): boolean {
+  if (workflow === undefined) return false;
+  return (
+    WORKFLOW_ACTIVE.has(workflow.status) ||
+    workflow.analysis_status === "PENDING" ||
+    workflow.plan_status === "PENDING" ||
+    tasks.some((t) => TASK_IN_FLIGHT.has(t.status)) ||
+    (assessmentChecksLeft > 0 && assessmentIsStale(workflow, events))
+  );
+}
+
 /** Polling interval: fast after a change, slowing down while nothing happens. */
 export function pollDelay(unchangedPolls: number, failed: boolean): number {
   if (failed) return 15_000;
@@ -87,11 +108,7 @@ export function useWorkflow(workspaceId: Uuid, workflowId: Uuid) {
     enabled: workflow.isSuccess,
   });
 
-  const live =
-    (workflow.data !== undefined && WORKFLOW_ACTIVE.has(workflow.data.status)) ||
-    workflow.data?.analysis_status === "PENDING" ||
-    workflow.data?.plan_status === "PENDING" ||
-    (tasks.data ?? []).some((t) => TASK_IN_FLIGHT.has(t.status));
+  const live = isLive(workflow.data, tasks.data ?? [], [], 0);
 
   const eventsKey = workflowKeys.events(workspaceId, workflowId);
   const events = useQuery({
@@ -125,8 +142,16 @@ export function useWorkflow(workspaceId: Uuid, workflowId: Uuid) {
       }
       return next;
     },
+    // Evaluated after each poll, outside render: it may also wait for a reassessment.
     refetchInterval: (query) =>
-      live ? pollDelay(unchangedPolls.current, query.state.fetchFailureCount > 0) : false,
+      isLive(
+        queryClient.getQueryData<Workflow>(workflowKeys.detail(workspaceId, workflowId)),
+        queryClient.getQueryData<Task[]>(workflowKeys.tasks(workspaceId, workflowId)) ?? [],
+        query.state.data ?? [],
+        assessmentChecks.current,
+      )
+        ? pollDelay(unchangedPolls.current, query.state.fetchFailureCount > 0)
+        : false,
   });
 
   return { workflow, tasks, events, live };

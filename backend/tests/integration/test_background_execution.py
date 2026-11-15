@@ -49,6 +49,8 @@ from app.models import (
     ToolInvocation,
     ToolInvocationStatus,
     User,
+    VerificationOutcome,
+    VerificationResult,
     Workflow,
     WorkflowEvent,
     WorkflowEventType,
@@ -821,13 +823,20 @@ def test_dispatch_reaches_a_real_worker_through_redis(
             shutdown_timeout=10,
             queues=[EXECUTION_QUEUE],
         ):
-            report = relay.relay_once(
-                worker_factory, tasks.publish_event, batch_size=10, lease_seconds=60, max_attempts=3
-            )
-            assert report.published == 1
             deadline = time.monotonic() + 30
-            while _status(admin_factory, world.task_ids[0]) != TaskStatus.SUBMITTED:
-                assert time.monotonic() < deadline, "worker did not process the dispatch"
+            # The relay publishes the dispatch, then the verification request (ADR-0030).
+            while _status(admin_factory, world.task_ids[0]) != TaskStatus.COMPLETED:
+                assert time.monotonic() < deadline, "worker did not run and verify the task"
+                with session_scope(admin_factory) as s:
+                    _drop_orchestration_requests(s)
+                    s.commit()
+                relay.relay_once(
+                    worker_factory,
+                    tasks.publish_event,
+                    batch_size=10,
+                    lease_seconds=60,
+                    max_attempts=3,
+                )
                 time.sleep(0.2)
     finally:
         with celery_app.connection_for_write() as connection:
@@ -842,6 +851,9 @@ def test_dispatch_reaches_a_real_worker_through_redis(
     assert event.status == OutboxStatus.PUBLISHED
     usage = _scalar(admin_factory, select(LlmUsage))
     assert usage.execution_id == execution.id and usage.purpose == "agent_writing"
+    verification = _scalar(admin_factory, select(VerificationResult))
+    assert verification.execution_id == execution.id
+    assert verification.outcome == VerificationOutcome.PASSED
 
 
 # --- task contract and submissions (Step 3.1, ADR-0018) ------------------------------------------

@@ -14,6 +14,8 @@ After a task changes, `reconcile_workflow` keeps the workflow consistent with it
 - otherwise, PENDING tasks whose dependencies all COMPLETED become READY, and PENDING tasks
   depending on a FAILED/CANCELLED task become BLOCKED.
 
+A task reaching SUBMITTED requests its verification (outbox `task.verify`, ADR-0030).
+
 Dispatch (outbox `task.dispatch`) is requested when a task becomes ASSIGNED in a RUNNING
 workflow, for every ASSIGNED task when the workflow (re)enters RUNNING, and for waiting ASSIGNED
 tasks when a running task frees an execution slot. Duplicates are harmless: the worker only acts
@@ -167,6 +169,23 @@ def request_dispatch(session: _AddsRows, workflow: Workflow, task: WorkflowTask)
             "task_id": str(task.id),
             "agent_version_id": str(task.assigned_agent_version_id),
             "attempt_count": task.attempt_count,
+        },
+    )
+
+
+def request_verification(session: _AddsRows, workflow: Workflow, task: WorkflowTask) -> uuid.UUID:
+    """Writes a `task.verify` outbox row (identifiers only) in the transaction that moves the
+    task to SUBMITTED, so every submission is verified by the platform (ADR-0030)."""
+    return outbox.enqueue(
+        session,
+        outbox.TASK_VERIFY,
+        workspace_id=workflow.workspace_id,
+        workflow_id=workflow.id,
+        task_id=task.id,
+        payload={
+            "workspace_id": str(workflow.workspace_id),
+            "workflow_id": str(workflow.id),
+            "task_id": str(task.id),
         },
     )
 
@@ -424,6 +443,8 @@ def transition_task(
         payload=payload,
     )
     request_orchestration(session, workflow)
+    if target == T.SUBMITTED:
+        request_verification(session, workflow, task)
     # Flush so later queries in this transaction (and DB constraints) see the change; app
     # sessions do not autoflush.
     session.flush()

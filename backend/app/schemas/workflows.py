@@ -23,6 +23,7 @@ from app.models import (
     PlanStatus,
     TaskStatus,
     ToolInvocationStatus,
+    VerificationOutcome,
     WorkflowEventType,
     WorkflowStatus,
 )
@@ -259,6 +260,38 @@ class ToolInvocationResponse(BaseModel):
     created_at: datetime
 
 
+class VerificationCheck(BaseModel):
+    name: str
+    outcome: Literal["passed", "failed", "skipped"]
+
+
+class VerificationIssue(BaseModel):
+    """A code and the criterion, deliverable or schema location it concerns; never agent text."""
+
+    code: str
+    severity: Literal["error", "warning"]
+    criterion_id: str | None = None
+    deliverable: str | None = None
+    location: str | None = None
+
+
+class VerificationResponse(BaseModel):
+    """One verifier's result for one attempt (ADR-0030)."""
+
+    id: uuid.UUID
+    task_id: uuid.UUID
+    execution_id: uuid.UUID
+    verifier: str
+    outcome: VerificationOutcome
+    checks: list[VerificationCheck]
+    issues: list[VerificationIssue]
+    created_at: datetime
+
+
+class VerificationList(BaseModel):
+    items: list[VerificationResponse]
+
+
 class ExecutionResponse(BaseModel):
     """One attempt of a task. Error and result text are short, safe summaries."""
 
@@ -278,6 +311,8 @@ class ExecutionResponse(BaseModel):
     submission: dict[str, Any] | None
     # Tool calls of this attempt, oldest first (ADR-0019).
     tool_invocations: list[ToolInvocationResponse]
+    # Platform verification of this attempt's submission, oldest first (ADR-0030).
+    verifications: list[VerificationResponse] = []
 
 
 class ExecutionList(BaseModel):

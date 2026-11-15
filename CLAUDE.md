@@ -120,6 +120,10 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   (`is_current` check before each call; tests pass `is_current=` like `models=`). `app/execution/recovery.py`
   (Beat, every 60 s) is the only code that closes lost attempts (WORKER_LOST, automatic bounded retry), resends
   unclaimed dispatches and fails interrupted planning jobs; keep its thresholds above the worker time limits.
+- Verification (ADR-0030): only `app/verification/job.py` (VERIFIER) accepts tasks; the engine writes `task.verify`
+  whenever a task reaches SUBMITTED. Checks are pure and versioned in `app/verification/deterministic.py`
+  (`VERIFIER`; change rules = new version) and never store agent text (codes, criterion ids from the task,
+  deliverable names, schema locations only). `verification_results` is append-only.
 - Workflow events are append-only.
 
 ## Security

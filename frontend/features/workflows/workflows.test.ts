@@ -7,7 +7,7 @@ import { dependencyStages } from "./graph";
 import { workflowActions } from "./status";
 import { toCriteria } from "./task-form-dialog";
 import { availableTaskActions } from "./task-list";
-import { fetchNewEvents, pollDelay } from "./use-workflow";
+import { fetchNewEvents, isLive, pollDelay } from "./use-workflow";
 import { toWorkflowInput, workflowSchema } from "./workflow-create-view";
 
 function task(id: string, depends_on: string[] = [], extra: Partial<Task> = {}): Task {
@@ -119,6 +119,18 @@ describe("event polling", () => {
     expect(pollDelay(2, false)).toBe(4500);
     expect(pollDelay(20, false)).toBe(15000);
     expect(pollDelay(0, true)).toBe(15000);
+  });
+
+  it("keeps polling after a workflow finishes until its reassessment arrives", () => {
+    const done = { status: "COMPLETED", analysis_status: "READY", plan_status: "READY" } as Workflow;
+    const latest = { ...event(9), created_at: "2026-11-15T10:00:05Z" };
+    const stale = { ...done, next_step: { assessed_at: "2026-11-15T10:00:01Z" } } as Workflow;
+    const fresh = { ...done, next_step: { assessed_at: "2026-11-15T10:00:07Z" } } as Workflow;
+
+    expect(isLive(stale, [], [latest], 5)).toBe(true);
+    expect(isLive(fresh, [], [latest], 5)).toBe(false);
+    expect(isLive(stale, [], [latest], 0)).toBe(false); // bounded: never polls forever
+    expect(isLive({ ...fresh, status: "RUNNING" } as Workflow, [], [latest], 0)).toBe(true);
   });
 
   it("describes events as plain text", () => {

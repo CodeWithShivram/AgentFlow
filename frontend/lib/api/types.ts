@@ -440,6 +440,30 @@ export interface Execution {
   result_summary: string | null;
   submission: AgentSubmission | null;
   tool_invocations: ToolInvocation[];
+  /** Platform verification of this attempt's submission, oldest first (ADR-0030). */
+  verifications: Verification[];
+}
+
+export type VerificationOutcome = "PASSED" | "FAILED";
+
+/** One verifier's result for one attempt. Issues carry codes and locations, never agent text. */
+export interface Verification {
+  id: Uuid;
+  task_id: Uuid;
+  execution_id: Uuid;
+  verifier: string;
+  outcome: VerificationOutcome;
+  checks: { name: string; outcome: "passed" | "failed" | "skipped" }[];
+  issues: VerificationIssue[];
+  created_at: IsoDateTime;
+}
+
+export interface VerificationIssue {
+  code: string;
+  severity: "error" | "warning";
+  criterion_id?: string | null;
+  deliverable?: string | null;
+  location?: string | null;
 }
 
 export type ToolInvocationStatus = "SUCCEEDED" | "DENIED" | "FAILED";

@@ -26,6 +26,8 @@ from sqlalchemy.orm import Session
 from app.models import InboxMessage, OutboxEvent, OutboxStatus
 
 TASK_DISPATCH = "task.dispatch"
+# Asks a worker to verify a submitted task (ADR-0030).
+TASK_VERIFY = "task.verify"
 WORKFLOW_ANALYZE = "workflow.analyze"
 WORKFLOW_PLAN = "workflow.plan"
 # Asks the orchestration graph to reassess a workflow (ADR-0025).

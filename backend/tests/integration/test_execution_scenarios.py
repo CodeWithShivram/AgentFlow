@@ -2,7 +2,7 @@
 
 Each scenario drives a workflow from start to completion against real PostgreSQL: the scheduler
 dispatches, a worker claims as the restricted worker role, the agent runs (MockAgent, no model),
-and a stand-in for platform verification (Phase 5) completes each submitted task. Together they
+and the platform's verification job (Step 5.1) completes each submitted task. Together they
 check the two scheduling promises (handoff sections 6 and 15): independent tasks run at the same
 time up to `max_parallel_tasks`, and a task never starts before its dependencies complete.
 """
@@ -44,6 +44,7 @@ from app.models import (
     Workspace,
 )
 from app.services.usage import record_model_call
+from app.verification import job as verification_job
 from app.workflows import engine
 from app.workflows.state_machine import Actor
 from tests.conftest import make_settings
@@ -184,15 +185,26 @@ def _submit(worker: Factory, claim: runner.Claim) -> None:
         assert runner.finish(s, claim, outcome) == "submitted"
 
 
-def _verify(admin: Factory, graph: Graph, task_id: uuid.UUID) -> None:
-    """Stands in for platform verification (Phase 5): SUBMITTED -> VERIFYING -> COMPLETED."""
+def _verify(admin: Factory, worker: Factory, graph: Graph, task_id: uuid.UUID) -> None:
+    """Runs the platform's verification job (ADR-0030) on the task's verification request, as a
+    worker would: SUBMITTED -> VERIFYING -> COMPLETED."""
     with session_scope(admin) as s:
-        workflow = s.execute(
-            select(Workflow).where(Workflow.id == graph.workflow_id).with_for_update()
+        event = s.execute(
+            select(OutboxEvent)
+            .where(OutboxEvent.task_id == task_id, OutboxEvent.event_type == outbox.TASK_VERIFY)
+            .order_by(OutboxEvent.created_at.desc())
+            .limit(1)
         ).scalar_one()
-        task = s.execute(select(WorkflowTask).where(WorkflowTask.id == task_id)).scalar_one()
-        engine.transition_task(s, workflow, task, TaskStatus.VERIFYING, actor=Actor.VERIFIER)
-        engine.transition_task(s, workflow, task, TaskStatus.COMPLETED, actor=Actor.VERIFIER)
+    with session_scope(worker) as s:
+        outcome = verification_job.run(
+            s,
+            event_id=event.id,
+            workspace_id=graph.workspace_id,
+            workflow_id=graph.workflow_id,
+            task_id=task_id,
+        )
+    assert outcome == "passed"
+    with session_scope(admin) as s:
         _drop_side_requests(s, graph.workflow_id)
         s.commit()
 
@@ -249,7 +261,7 @@ def _run_in_rounds(admin: Factory, worker: Factory, graph: Graph) -> list[set[uu
         rounds.append({c.task_id for c in claims})
         for claim in claims:
             _submit(worker, claim)
-            _verify(admin, graph, claim.task_id)
+            _verify(admin, worker, graph, claim.task_id)
     return rounds
 
 
@@ -316,7 +328,7 @@ def test_resuming_dispatches_the_highest_priority_tasks_within_the_limit(
         engine.transition_workflow(s, workflow, WorkflowStatus.PAUSED, actor=Actor.USER)
         s.commit()
     assert _claim(worker_factory, first_d) == runner.Skipped.NOT_RUNNING
-    _verify(admin_factory, graph, a)  # completed while paused: B and C wait for the resume
+    _verify(admin_factory, worker_factory, graph, a)  # completed while paused: B and C wait
     seen = {e.id for e in _undelivered(admin_factory, graph, set())}
 
     with session_scope(admin_factory) as s:
@@ -419,7 +431,7 @@ def test_random_graphs_respect_the_limit_and_dependency_order(
         for claim in rng.sample(running, rng.randint(0, len(running))):
             running.remove(claim)
             _submit(worker_factory, claim)
-            _verify(admin_factory, graph, claim.task_id)
+            _verify(admin_factory, worker_factory, graph, claim.task_id)
     else:
         pytest.fail(f"seed {seed}: the workflow did not finish")
     assert not running
@@ -492,10 +504,7 @@ def test_a_real_worker_runs_a_diamond_with_parallel_middle_tasks(
                 with session_scope(admin_factory) as s:
                     _drop_side_requests(s, graph.workflow_id)
                     s.commit()
-                publish()
-                for task_id, status in _statuses(admin_factory, graph).items():
-                    if status == TaskStatus.SUBMITTED:
-                        _verify(admin_factory, graph, task_id)
+                publish()  # dispatches, and verification requests: the worker verifies too
                 time.sleep(0.2)
     finally:
         with celery_app.connection_for_write() as connection:

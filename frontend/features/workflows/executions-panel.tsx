@@ -7,7 +7,15 @@ import { StatusBadge } from "@/components/common/status-badge";
 import { Badge } from "@/components/ui/badge";
 import { api } from "@/lib/api";
 import { describeError } from "@/lib/api/errors";
-import type { AcceptanceCriterion, Agent, AgentSubmission, CriterionStatus, Task } from "@/lib/api/types";
+import type {
+  AcceptanceCriterion,
+  Agent,
+  AgentSubmission,
+  CriterionStatus,
+  Task,
+  Verification,
+  VerificationIssue,
+} from "@/lib/api/types";
 import { useWorkspace } from "@/lib/workspace";
 
 import { TASK_IN_FLIGHT } from "./status";
@@ -61,6 +69,9 @@ export function ExecutionsPanel({ task, agentsById }: ExecutionsPanelProps) {
           </p>
           {e.result_summary ? <p className="mt-2 whitespace-pre-wrap break-words">{e.result_summary}</p> : null}
           {e.submission ? <SubmissionDetails submission={e.submission} criteria={task.acceptance_criteria} /> : null}
+          {e.verifications.map((v) => (
+            <VerificationDetails key={v.id} verification={v} criteria={task.acceptance_criteria} />
+          ))}
           {e.error_summary ? (
             <p className="mt-2 text-destructive">
               {e.error_code ? <span className="font-mono text-xs">{e.error_code}: </span> : null}
@@ -104,6 +115,63 @@ function SubmissionDetails({ submission, criteria }: { submission: AgentSubmissi
       <Notes title="Assumptions" items={submission.assumptions} />
       <Notes title="Limitations" items={submission.limitations} />
     </div>
+  );
+}
+
+const ISSUE_LABELS: Record<string, string> = {
+  SUBMISSION_MISSING: "No submission was stored",
+  SUBMISSION_INVALID: "The submission could not be read",
+  DUPLICATE_CRITERION_CLAIM: "More than one claim for a criterion",
+  MISSING_CRITERION_CLAIM: "No claim for a criterion",
+  UNKNOWN_CRITERION: "Claims for criteria the task does not have",
+  CRITERION_NOT_MET: "The agent says this criterion is not met",
+  CRITERION_PARTIAL: "The agent says this criterion is only partly met",
+  DELIVERABLE_MISSING: "Deliverable missing or empty",
+  OUTPUT_SCHEMA_INVALID: "The task's output schema is not valid JSON Schema",
+  OUTPUT_SCHEMA_UNUSABLE: "The task's output schema could not be applied",
+  OUTPUT_SCHEMA_MISMATCH: "Outputs do not match the task's output schema",
+  OUTPUT_SCHEMA_MORE_MISMATCHES: "Further schema mismatches are not listed",
+  OUTPUTS_INVALID: "Outputs do not fit the structure this agent must produce",
+  TEST_CASE_UNKNOWN_CRITERION: "Test cases cover criteria the task does not have",
+  PLATFORM_NOTE_MISSING: "The platform's limitation note is missing",
+};
+
+/** The issue's subject, from task data only: a criterion, a deliverable or a schema location. */
+function issueSubject(issue: VerificationIssue, descriptions: Map<string, string>): string | null {
+  if (issue.criterion_id) return descriptions.get(issue.criterion_id) ?? issue.criterion_id;
+  if (issue.deliverable) return issue.deliverable;
+  if (issue.location) return `at ${issue.location}`;
+  return null;
+}
+
+/** Platform verification of one attempt (Step 5.1): deterministic checks, not a content review. */
+function VerificationDetails({ verification, criteria }: { verification: Verification; criteria: AcceptanceCriterion[] }) {
+  const descriptions = new Map(criteria.map((c) => [c.id, c.description]));
+  const passed = verification.outcome === "PASSED";
+  return (
+    <section aria-label="Platform verification" className="mt-2 rounded border px-2 py-1">
+      <p className="flex flex-wrap items-center gap-2 text-xs">
+        <span className="font-medium">Platform verification</span>
+        <Badge variant={passed ? "secondary" : "destructive"}>{passed ? "Passed" : "Failed"}</Badge>
+        <span className="font-mono text-muted-foreground">{verification.verifier}</span>
+      </p>
+      {verification.issues.length > 0 ? (
+        <ul className="mt-1 space-y-1">
+          {verification.issues.map((issue, i) => {
+            const subject = issueSubject(issue, descriptions);
+            return (
+              <li key={i} className="break-words text-xs">
+                <span className={issue.severity === "error" ? "text-destructive" : "text-muted-foreground"}>
+                  {issue.severity === "error" ? "Error" : "Warning"}:
+                </span>{" "}
+                {ISSUE_LABELS[issue.code] ?? issue.code}
+                {subject ? <span className="text-muted-foreground"> · {subject}</span> : null}
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+    </section>
   );
 }
 

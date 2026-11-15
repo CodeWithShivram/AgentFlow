@@ -136,12 +136,11 @@ test("journeys 8 and 9: approve, start, assign an agent and monitor execution", 
   await dialog.getByRole("button", { name: "Assign" }).click();
   await expect(dialog).toBeHidden();
 
-  // Journey 9: the outbox relay, Celery worker and Writer runtime (mock model) run the task.
-  await expect(visibleText(page, "Submitted")).toBeVisible({ timeout: 60_000 });
-  // Step 4.1: a worker reassesses the workflow with the orchestration graph after each change.
-  await expect(page.getByRole("region", { name: "Next step" })).toContainText("awaiting verification", {
-    timeout: 30_000,
-  });
+  // Journey 9: the outbox relay, Celery worker and Writer runtime (mock model) run the task;
+  // Step 5.1: platform verification then accepts it, which completes the one-task workflow.
+  await expect(visibleText(page, "Completed")).toBeVisible({ timeout: 60_000 });
+  // Step 4.1: the orchestration graph's Next step banner is gone once the workflow is finished.
+  await expect(page.getByRole("region", { name: "Next step" })).toBeHidden({ timeout: 30_000 });
   await page.getByRole("button", { name: "Details" }).click();
   const attempts = page.getByRole("list", { name: "Execution attempts for Draft the notes" });
   await expect(attempts.getByText("Attempt 1", { exact: true })).toBeVisible();
@@ -152,9 +151,13 @@ test("journeys 8 and 9: approve, start, assign an agent and monitor execution", 
   const claims = attempts.getByRole("region", { name: "Agent's criterion claims" });
   await expect(claims.getByRole("listitem")).toContainText("MetLists every change");
   await expect(attempts.getByText("Mock model provider: no real model was used.")).toBeVisible();
+  const verification = attempts.getByRole("region", { name: "Platform verification" });
+  await expect(verification.getByText("Passed", { exact: true })).toBeVisible();
+  await expect(verification.getByText("deterministic/v1")).toBeVisible();
 
   await page.getByRole("tab", { name: "Timeline" }).click();
   const timeline = page.getByRole("list", { name: "Workflow events, newest first" });
+  await expect(timeline.getByText("Task completed", { exact: true }).first()).toBeVisible();
   await expect(timeline.getByText("Task started", { exact: true }).first()).toBeVisible();
   await expect(timeline.getByText("Task assigned", { exact: true }).first()).toBeVisible();
   await expect(timeline.getByText("Workflow created", { exact: true })).toBeVisible();
@@ -164,9 +167,12 @@ test("journeys 8 and 9: approve, start, assign an agent and monitor execution", 
   await user.context.close();
 });
 
-test("journey 12: independent pre-assigned tasks run by themselves while a dependent task waits", async ({
+test("journey 12: pre-assigned tasks run by themselves, the dependent one after both are verified", async ({
   browser,
 }) => {
+  // Three tasks run and are verified one after another on the E2E stack's single worker, each
+  // waiting for the 5-second outbox relay twice (dispatch, then verification).
+  test.setTimeout(240_000);
   const user = await newUser(browser, "wf-parallel");
   const { page } = user;
   await createWorkflow(page, user.workspaceId, "Prepare a launch brief");
@@ -199,15 +205,12 @@ test("journey 12: independent pre-assigned tasks run by themselves while a depen
   await page.getByRole("button", { name: "Start workflow" }).click();
   await expect(visibleText(page, "Running")).toBeVisible();
 
-  // Step 4.6: the scheduler dispatches both independent tasks without anyone assigning them;
-  // the task that needs both stays Pending, because they still await verification (Phase 5).
-  for (const title of ["Gather facts", "Check figures"]) {
-    await expect(card(title).getByText("Submitted", { exact: true })).toBeVisible({ timeout: 60_000 });
+  // Step 4.6: the scheduler dispatches both independent tasks without anyone assigning them.
+  // Step 5.1: platform verification completes each one; only then does the task that needs both
+  // become ready, run by itself and complete the workflow.
+  for (const title of ["Gather facts", "Check figures", "Write the brief"]) {
+    await expect(card(title).getByText("Completed", { exact: true })).toBeVisible({ timeout: 120_000 });
   }
-  await expect(card("Write the brief").getByText("Pending", { exact: true })).toBeVisible();
-  await expect(page.getByRole("region", { name: "Next step" })).toContainText(
-    "2 tasks submitted and awaiting verification",
-    { timeout: 30_000 },
-  );
+  await expect(page.getByRole("region", { name: "Next step" })).toBeHidden({ timeout: 30_000 });
   await user.context.close();
 });

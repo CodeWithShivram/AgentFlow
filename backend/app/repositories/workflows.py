@@ -14,6 +14,7 @@ from app.models import (
     TaskDependency,
     TaskStatus,
     ToolInvocation,
+    VerificationResult,
     Workflow,
     WorkflowEvent,
     WorkflowPlan,
@@ -185,6 +186,22 @@ async def list_executions(
         .order_by(AgentExecution.attempt_number)
     )
     return [(row[0], row[1]) for row in rows]
+
+
+async def list_verifications(
+    session: AsyncSession, workflow: Workflow, task_id: uuid.UUID
+) -> list[VerificationResult]:
+    """Verification results of every attempt of one task, oldest first (ADR-0030)."""
+    rows = await session.execute(
+        select(VerificationResult)
+        .where(
+            VerificationResult.task_id == task_id,
+            VerificationResult.workflow_id == workflow.id,
+            VerificationResult.workspace_id == workflow.workspace_id,
+        )
+        .order_by(VerificationResult.created_at, VerificationResult.id)
+    )
+    return list(rows.scalars())
 
 
 async def list_tool_invocations(

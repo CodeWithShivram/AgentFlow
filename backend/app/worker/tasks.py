@@ -19,6 +19,7 @@ from app.llm.gateway import ModelGatewayError, get_model_gateway
 from app.orchestration import job as orchestration_job
 from app.planning import analysis, plan
 from app.tools.gateway import ToolError
+from app.verification import job as verification_job
 from app.worker.celery_app import EXECUTION_QUEUE, celery_app, settings
 
 logger = logging.getLogger("agentflow.worker")
@@ -26,6 +27,7 @@ logger = logging.getLogger("agentflow.worker")
 # Outbox event type -> (Celery task name, queue).
 EVENT_ROUTES = {
     outbox.TASK_DISPATCH: ("agentflow.execute_task", EXECUTION_QUEUE),
+    outbox.TASK_VERIFY: ("agentflow.verify_task", EXECUTION_QUEUE),
     outbox.WORKFLOW_ANALYZE: ("agentflow.analyze_workflow", EXECUTION_QUEUE),
     outbox.WORKFLOW_PLAN: ("agentflow.plan_workflow", EXECUTION_QUEUE),
     outbox.WORKFLOW_ORCHESTRATE: ("agentflow.orchestrate_workflow", EXECUTION_QUEUE),
@@ -34,6 +36,7 @@ EVENT_ROUTES = {
 _WORKFLOW_IDS = frozenset({"workspace_id", "workflow_id"})
 REQUIRED_PAYLOAD = {
     outbox.TASK_DISPATCH: _WORKFLOW_IDS | {"task_id", "agent_version_id"},
+    outbox.TASK_VERIFY: _WORKFLOW_IDS | {"task_id"},
     outbox.WORKFLOW_ANALYZE: _WORKFLOW_IDS,
     outbox.WORKFLOW_PLAN: _WORKFLOW_IDS,
     outbox.WORKFLOW_ORCHESTRATE: _WORKFLOW_IDS,
@@ -176,6 +179,22 @@ def execute_task(
         "task attempt finished",
         extra={"event_id": event_id, "execution_id": str(claimed.execution_id), "outcome": outcome},
     )
+    return outcome
+
+
+@celery_app.task(name="agentflow.verify_task", soft_time_limit=30, time_limit=60)
+def verify_task(event_id: str, workspace_id: str, workflow_id: str, task_id: str) -> str:
+    """Verifies a submitted task (ADR-0030). Idempotent on `event_id`; no model call, one short
+    transaction."""
+    with session_scope(get_worker_session_factory()) as session:
+        outcome = verification_job.run(
+            session,
+            event_id=uuid.UUID(event_id),
+            workspace_id=uuid.UUID(workspace_id),
+            workflow_id=uuid.UUID(workflow_id),
+            task_id=uuid.UUID(task_id),
+        )
+    logger.info("task verification", extra={"event_id": event_id, "outcome": outcome})
     return outcome
 
 

@@ -1,9 +1,9 @@
 # AgentFlow Progress
 
 ## Current position
-- Phase: 4 — Orchestration and scheduling, complete with Step 4.6 (Phases 2 and 3 complete; Phase 1 released as `v0.1.0`, pushed with its tag)
-- Last completed step: 4.6 — Parallel and sequential execution tests
-- Next step: 5.1 — Deterministic verification layer (Phase 5), which needs a short plan and the owner's go-ahead
+- Phase: 5 — Verification and recovery (Phases 2–4 complete; Phase 1 released as `v0.1.0`, pushed with its tag)
+- Last completed step: 5.1 — Deterministic verification layer
+- Next step: 5.2 — Semantic evaluation with structured evidence, which needs a short plan and the owner's go-ahead
 
 ## Completed steps
 | Step | Commit message | Hash |
@@ -39,16 +39,17 @@
 | 4.3 | `feat(execution): surface and retry failed jobs and report worker health` | `c23c846` (pushed, CI ✔) |
 | 4.4 | `feat(scheduling): dispatch by priority within slot limits and allow pre-assignment` | `77b61c4` (pushed, CI ✔) |
 | 4.5 | `feat(execution): stop cancelled agents and recover work stranded by lost workers` | `a737bec` (pushed, CI ✔) |
-| 4.6 | `test(execution): cover parallel and sequential execution across whole graphs` | latest commit touching `docs/TESTING.md` |
+| 4.6 | `test(execution): cover parallel and sequential execution across whole graphs` | `cd50ba2` (pushed, CI ✔) |
+| 5.1 | `feat(verification): verify submissions deterministically and accept passing tasks` | latest commit touching `docs/ADR/0030-deterministic-verification.md` |
 
 ## Environment snapshot (2026-11-14)
 | Item | Value |
 |---|---|
-| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `a737bec` plus tag `v0.1.0` (owner-authorized) |
+| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `cd50ba2` plus tag `v0.1.0` (owner-authorized) |
 | Python / uv / Node / npm | 3.12.14 via uv 0.12.9 / Node 24.13.0 / npm 11.6.2 |
 | Celery / kombu | 5.7.0 / 5.7.0 |
 | Docker | 29.9.3 — `agentflow` stack healthy (Docker Desktop must be started first; it had stopped and was restarted in Steps 3.1 and 3.4) |
-| Dev database | `agentflow` at `0018 (head)`; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
+| Dev database | `agentflow` at `0019 (head)`; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
 | Local `.env` | holds generated `WORKER_DB_PASSWORD` and (new) `API_DB_PASSWORD` (gitignored) |
 | Port 8000 | Used by another local project (`easa`); smoke tests used 8010 |
 | E2E | API :8011 (as `agentflow_api`), frontend :3100, database `agentflow_e2e` (reset each run), Redis DBs 2/3, installed Google Chrome |
@@ -56,6 +57,42 @@
 | Test HTTP client | `httpx2` 2.16.0 (replaces `httpx`, OD-10); `httpx` is back only as a LiteLLM dependency |
 | LiteLLM | 1.109.1, imported by workers only when `MODEL_PROVIDER=litellm`; `.env` keeps the mock |
 | LangGraph | 1.2.22 (with langchain-core 1.8.0 and langsmith 0.14.17), imported by workers only; LangSmith tracing disabled; checkpoints via `langgraph-checkpoint-postgres` 3.2.1 |
+
+## Step 5.1 — deterministic verification (ADR-0030)
+- **Owner decisions (2026-11-15):**
+  - failures go to rework and people retry; a failure on the third attempt fails the task;
+  - NOT_MET fails, PARTIAL is a warning;
+  - `jsonschema` is a direct dependency;
+  - results show in the attempts panel.
+- **Dependency:** `jsonschema` 4.26.0 is now direct. It was already locked through LiteLLM, so nothing new was downloaded; it is added to the existing mypy `ignore_missing_imports` override, as for Celery.
+- **Flow:**
+  - the engine writes `task.verify` whenever a task reaches SUBMITTED;
+  - `app/verification/job.py` (Celery `agentflow.verify_task`, execution queue) runs as one transaction: inbox, workflow lock, still SUBMITTED, checks on the latest successful attempt, a stored result, then VERIFYING → COMPLETED / REWORK_REQUIRED / FAILED (VERIFIER).
+- **Checks (`deterministic/v1`):** submission, criteria_coverage, criteria_claims, deliverables, output_schema (capped at 20 mismatches, remote `$ref` never fetched), runtime_outputs (Developer/QA), platform_note. Issues are codes, severities and task-data locations only.
+- **Migration `0019`:** `verification_results` (append-only trigger, RLS tenant and platform policies, unique `execution_id` + `verifier`); worker grants SELECT and INSERT.
+- **API:** `GET …/tasks/{task_id}/verification`, and `verifications` on each attempt in `…/executions`.
+- **Recovery:** the sweep also resends `task.verify` messages published 15 minutes ago and never consumed (`reverified`).
+- **Orchestration:** `orchestration/v3`; the awaiting-verification summary no longer says "arrives in Phase 5".
+- **Frontend:**
+  - a Platform verification section per attempt: Passed or Failed, the verifier, and each issue in plain words with its criterion, deliverable or schema location;
+  - a polling fix: the workflow page used to stop polling before the post-completion reassessment arrived, leaving a stale Next-step banner. `isLive` now keeps polling for up to the five existing reassessment checks.
+- **Tests changed (intended behaviour changes):**
+  - the scenario tests' verification helper now runs the real verification job;
+  - both real-worker tests now wait for COMPLETED, since the worker also verifies;
+  - the RLS and fresh-schema table lists include `verification_results`;
+  - the graph version pins moved to v3, and the awaiting-verification summary test asserts the new text exactly;
+  - E2E journey 9 now ends Completed, with the banner gone and the verification shown; journey 12 now runs the dependent task too (its timeout is raised to 240 s, and it took 50 s).
+
+## Checks last executed (Step 5.1)
+- **Full gate (`check.ps1 -E2E`) ✔, exit 0:**
+  - backend: ruff format, ruff check, mypy (179 files), alembic check;
+  - pytest **1056 passed** (1026 plus 30 new: 21 unit tests of the checks, 9 integration tests of the job, recovery and grants; plus the API assertions added to the execution-history tests);
+  - frontend: eslint, typecheck, Vitest **110** (3 new: two for the verification section, one for polling after completion), Playwright **15 passed**, build.
+- **Deliberate-bug check** (restored byte-for-byte): downgrading the agent's NOT_MET claim to a warning fails one unit test and two integration tests (rework, and failing the last attempt).
+- **Found on the way:**
+  - the first E2E run of journey 12 failed on a stale Next-step banner. The worker log showed the post-completion assessment was stored after the page had stopped polling: a Step 4.1 polling gap, fixed by `isLive`;
+  - a test variable named `secret` tripped the secret scan; it was renamed `agent_text`. That file's ruff, mypy and tests were rerun after the gate.
+- **Environment:** the dev DB is at `0019`, and roles were re-provisioned; no servers were left running after E2E.
 
 ## Step 4.6 — parallel and sequential execution tests
 - **Owner decisions (2026-11-15):**
@@ -76,7 +113,7 @@
 - **Docs:** `docs/TESTING.md` (suites, how to run them, rules for new tests, the execution scenario matrix, known Windows noise); linked from the README and CLAUDE.md.
 - **No ADR of its own:** the step adds tests and fixes a bug against ADR-0028's decisions, so ADR-0028 is amended instead.
 
-## Checks last executed (Step 4.6)
+## Checks (Step 4.6)
 - **Full gate (`check.ps1 -E2E`) ✔, exit 0:**
   - backend: ruff format, ruff check, mypy (172 files), alembic check;
   - pytest **1026 passed** (1000 plus 26 new scenario tests: 6 named scenarios, 20 seeded random graphs and the real-worker diamond);
@@ -675,6 +712,6 @@
 None.
 
 ## Next exact action
-1. **Push Step 4.6** on the owner's go-ahead, and confirm CI on GitHub.
-2. **Step 5.1 (deterministic verification layer):** present a short plan and get the owner's go-ahead.
+1. **Push Step 5.1** on the owner's go-ahead, and confirm CI on GitHub.
+2. **Step 5.2 (semantic evaluation with structured evidence):** present a short plan and get the owner's go-ahead.
 3. **Before any hosted deployment:** settle OD-14, OD-19 and OD-20.

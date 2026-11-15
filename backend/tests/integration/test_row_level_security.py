@@ -46,6 +46,7 @@ ROW_LEVEL_SECURED = {
     "workflow_plans",
     "tool_invocations",
     "agent_selections",
+    "verification_results",
     "checkpoints",
     "checkpoint_blobs",
     "checkpoint_writes",

@@ -157,13 +157,13 @@ Acceptance (phase): deterministic tests with mock model responses; invalid plans
 | 4.3 | Celery dispatch and worker lifecycle (outbox hardening, idempotent claims) | DONE (ADR-0027) — `c23c846` |
 | 4.4 | Dependency-aware scheduling and concurrency limits | DONE (ADR-0028) — `77b61c4` |
 | 4.5 | Cancellation and restart recovery | DONE (ADR-0029) — `a737bec` |
-| 4.6 | Parallel and sequential execution tests | DONE (`docs/TESTING.md`; ADR-0028 amended) — see `progress.md` |
+| 4.6 | Parallel and sequential execution tests | DONE (`docs/TESTING.md`; ADR-0028 amended) — `cd50ba2` |
 
 ## Phase 5 — Verification and recovery
 
 | Step | Title | Status |
 |---|---|---|
-| 5.1 | Deterministic verification layer | NOT_STARTED |
+| 5.1 | Deterministic verification layer | DONE (ADR-0030) — see `progress.md` |
 | 5.2 | Semantic evaluation with structured evidence | NOT_STARTED |
 | 5.3 | Rework instructions, bounded retries and reassignment | NOT_STARTED |
 | 5.4 | Replan with DAG validation | NOT_STARTED |

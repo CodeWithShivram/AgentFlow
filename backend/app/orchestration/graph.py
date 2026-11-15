@@ -21,7 +21,8 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 # v2 (ADR-0028): assigned tasks waiting for a free slot are counted apart from running ones.
-GRAPH_VERSION = "orchestration/v2"
+# v3 (ADR-0030): submitted tasks are verified by the platform, no longer "in Phase 5".
+GRAPH_VERSION = "orchestration/v3"
 
 # LangGraph depends on LangSmith, which can send traces to an external service when tracing
 # environment variables are set. Disabled here for the whole process, whatever the environment.
@@ -215,8 +216,8 @@ def awaiting_verification(state: OrchestrationState) -> dict[str, Any]:
             kind="awaiting_verification",
             actor="platform",
             summary=(
-                f"{_plural(count, 'task')} submitted and awaiting verification, which arrives in "
-                "Phase 5."
+                f"{_plural(count, 'task')} submitted and awaiting verification; the platform "
+                "verifies submissions automatically."
             ),
             task_ids=_ids(state, _AWAITING_VERIFICATION),
         )

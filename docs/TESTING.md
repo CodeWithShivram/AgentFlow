@@ -40,7 +40,7 @@ CI (GitHub Actions) runs everything except Playwright. Run the journeys locally 
 - **Pass worker-side dependencies explicitly.** Calls to `runner.run_agent` whose agent reaches a model or tool also pass `is_current=` (unit: `lambda: True`; integration: `runner.attempt_is_current` against the test database). The same goes for `record_tool_call=`. The defaults read the worker database from `.env`.
 - **Isolate real-worker tests.** A test that starts a Celery worker uses its own Redis database and resets Celery's cached broker pools (`celery_app._pool`, `celery_app.amqp._producer_pool`) with `monkeypatch`. Otherwise it publishes through an earlier test's broker, and its worker waits forever.
 - **Count outbox rows by type.** Every status change also writes a `workflow.orchestrate` row, so filter outbox counts by event type.
-- **Verification is a stand-in until Phase 5.** Tasks reach COMPLETED only through the VERIFIER actor. Tests that need completed tasks move them SUBMITTED → VERIFYING → COMPLETED as VERIFIER, under the workflow lock.
+- **Complete tasks through verification.** Tasks reach COMPLETED only through the VERIFIER actor. Tests that need completed tasks run the verification job (`app/verification/job.run`) on the task's `task.verify` outbox event, as a worker would. Engine-level tests may still move a task SUBMITTED → VERIFYING → COMPLETED as VERIFIER, under the workflow lock.
 - **Never weaken a test to make it pass.** If a test is wrong, explain why and get a review first. When a change alters behaviour on purpose, update the test and say so in `progress.md`.
 - **Prove the test can fail.** Every step ends with a deliberate-bug check: break the behaviour, show the test failing, restore it byte-for-byte.
 
@@ -56,14 +56,14 @@ CI (GitHub Actions) runs everything except Playwright. Run the journeys locally 
 | Resume with ready and waiting tasks | One decision for the free slots, by priority; never more dispatches than slots |
 | Five simultaneous claims, limit 2 | Exactly two claims succeed; three are deferred |
 | 20 seeded random graphs (3–8 tasks, limit 1–3) | Late, shuffled deliveries and random finishing order. At every claim: never more than the limit running, and no task starting before its dependencies completed. Every task completes exactly once |
-| Diamond through a real Celery worker (2 threads, Redis) | B's and C's attempts overlap in time; A finishes before them and D starts after both |
+| Diamond through a real Celery worker (2 threads, Redis), which also verifies | B's and C's attempts overlap in time; A finishes before them and D starts after both |
 
 Related tests:
 - **Scheduling, slots and priority:** `test_background_execution.py` (Steps 1.8, 4.4).
 - **Recovery and cooperative cancellation:** same file (Step 4.5).
 - **Duplicate delivery:** same file.
 
-End to end, journey 12 (`frontend/e2e/workflows.spec.ts`) pre-assigns three tasks. After the start, the two independent ones run without anyone assigning them, and the task that needs both stays Pending. The sequential half of that journey needs Phase 5 verification, so it stays in backend tests for now.
+End to end, journey 12 (`frontend/e2e/workflows.spec.ts`) pre-assigns three tasks. After the start, the two independent ones run without anyone assigning them, platform verification completes them, and only then does the task that needs both run and complete the workflow (Step 5.1).
 
 A failing random-graph case prints its seed. Rerun it alone:
 

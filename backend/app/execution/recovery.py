@@ -13,6 +13,8 @@ engine, so every status change writes its event:
 - Lost dispatches: an ASSIGNED task in a RUNNING workflow whose latest dispatch was published
   `LOST_DISPATCH_AFTER` ago and never claimed (the broker lost the message) is dispatched again,
   within the slot limit. A late original delivery finds the task moved on and does nothing.
+- Lost verifications: a SUBMITTED task whose latest `task.verify` was published
+  `LOST_DISPATCH_AFTER` ago and never consumed is sent for verification again (ADR-0030).
 - Interrupted planning jobs: an analysis or plan request still PENDING `INTERRUPTED_JOB_AFTER`
   after its job claimed it is marked FAILED, so the user can retry it.
 
@@ -44,8 +46,9 @@ from app.models import (
     WorkflowTask,
 )
 from app.planning import analysis, plan
+from app.verification import job as verification_job
 from app.workflows import engine
-from app.workflows.state_machine import Actor
+from app.workflows.state_machine import WORKFLOW_EXECUTING, Actor
 
 logger = logging.getLogger("agentflow.recovery")
 
@@ -65,6 +68,7 @@ class RecoveryReport:
     lost_attempts: int = 0
     retried: int = 0
     redispatched: int = 0
+    reverified: int = 0
     interrupted_jobs: int = 0
 
 
@@ -87,6 +91,12 @@ def recover_once(
     for (workspace_id, workflow_id), task_ids in stalled.items():
         with session_scope(factory) as session:
             report.redispatched += redispatch(session, workspace_id, workflow_id, task_ids)
+
+    with session_scope(factory) as session:
+        unverified = _stalled_verifications(session, now - LOST_DISPATCH_AFTER, batch_size)
+    for (workspace_id, workflow_id), task_ids in unverified.items():
+        with session_scope(factory) as session:
+            report.reverified += reverify(session, workspace_id, workflow_id, task_ids)
 
     with session_scope(factory) as session:
         interrupted = _interrupted_jobs(session, now - INTERRUPTED_JOB_AFTER, batch_size)
@@ -210,11 +220,18 @@ def recover_attempt(
 # --- lost dispatches ---------------------------------------------------------------------------
 
 
-def _stalled_dispatches(
-    session: Session, published_before: datetime, limit: int
+def _stalled(
+    session: Session,
+    *,
+    event_type: str,
+    consumer: str,
+    task_status: TaskStatus,
+    workflow_statuses: frozenset[WorkflowStatus],
+    published_before: datetime,
+    limit: int,
 ) -> dict[tuple[uuid.UUID, uuid.UUID], list[uuid.UUID]]:
-    """ASSIGNED tasks in RUNNING workflows whose latest dispatch was published long ago and
-    never claimed, grouped by workflow."""
+    """Tasks in `task_status` whose latest `event_type` event was published long ago and never
+    consumed by `consumer`, grouped by workflow."""
     newer = aliased(OutboxEvent)
     rows = session.execute(
         select(WorkflowTask.workspace_id, WorkflowTask.workflow_id, WorkflowTask.id)
@@ -223,7 +240,7 @@ def _stalled_dispatches(
             and_(
                 OutboxEvent.task_id == WorkflowTask.id,
                 OutboxEvent.workflow_id == WorkflowTask.workflow_id,
-                OutboxEvent.event_type == outbox.TASK_DISPATCH,
+                OutboxEvent.event_type == event_type,
             ),
         )
         .join(
@@ -234,18 +251,18 @@ def _stalled_dispatches(
             ),
         )
         .where(
-            Workflow.status == WorkflowStatus.RUNNING,
-            WorkflowTask.status == TaskStatus.ASSIGNED,
+            Workflow.status.in_(workflow_statuses),
+            WorkflowTask.status == task_status,
             WorkflowTask.removed_at.is_(None),
             OutboxEvent.status == OutboxStatus.PUBLISHED,
             OutboxEvent.published_at < published_before,
             ~exists().where(
                 InboxMessage.event_id == OutboxEvent.id,
-                InboxMessage.consumer == runner.CONSUMER,
+                InboxMessage.consumer == consumer,
             ),
             ~exists().where(
                 newer.task_id == OutboxEvent.task_id,
-                newer.event_type == outbox.TASK_DISPATCH,
+                newer.event_type == event_type,
                 newer.created_at > OutboxEvent.created_at,
             ),
         )
@@ -256,6 +273,21 @@ def _stalled_dispatches(
     for workspace_id, workflow_id, task_id in rows:
         stalled.setdefault((workspace_id, workflow_id), []).append(task_id)
     return stalled
+
+
+def _stalled_dispatches(
+    session: Session, published_before: datetime, limit: int
+) -> dict[tuple[uuid.UUID, uuid.UUID], list[uuid.UUID]]:
+    """ASSIGNED tasks in RUNNING workflows whose latest dispatch was never claimed."""
+    return _stalled(
+        session,
+        event_type=outbox.TASK_DISPATCH,
+        consumer=runner.CONSUMER,
+        task_status=TaskStatus.ASSIGNED,
+        workflow_statuses=frozenset({WorkflowStatus.RUNNING}),
+        published_before=published_before,
+        limit=limit,
+    )
 
 
 def redispatch(
@@ -280,6 +312,50 @@ def redispatch(
     if chosen:
         logger.warning(
             "stalled dispatches resent",
+            extra={"workflow_id": str(workflow_id), "count": len(chosen)},
+        )
+    return len(chosen)
+
+
+# --- lost verifications ------------------------------------------------------------------------
+
+
+def _stalled_verifications(
+    session: Session, published_before: datetime, limit: int
+) -> dict[tuple[uuid.UUID, uuid.UUID], list[uuid.UUID]]:
+    """SUBMITTED tasks whose latest verification request was never consumed. Verification runs
+    whether the workflow is running, paused or blocked."""
+    return _stalled(
+        session,
+        event_type=outbox.TASK_VERIFY,
+        consumer=verification_job.CONSUMER,
+        task_status=TaskStatus.SUBMITTED,
+        workflow_statuses=WORKFLOW_EXECUTING,
+        published_before=published_before,
+        limit=limit,
+    )
+
+
+def reverify(
+    session: Session, workspace_id: uuid.UUID, workflow_id: uuid.UUID, task_ids: list[uuid.UUID]
+) -> int:
+    """Requests verification again for tasks that are still SUBMITTED."""
+    workflow = _lock_workflow(session, workspace_id, workflow_id)
+    if workflow is None or workflow.status not in WORKFLOW_EXECUTING:
+        session.rollback()
+        return 0
+    wanted = set(task_ids)
+    chosen = [
+        t
+        for t in engine.list_tasks(session, workflow)
+        if t.id in wanted and t.status == TaskStatus.SUBMITTED
+    ]
+    for task in chosen:
+        engine.request_verification(session, workflow, task)
+    session.commit()
+    if chosen:
+        logger.warning(
+            "stalled verifications resent",
             extra={"workflow_id": str(workflow_id), "count": len(chosen)},
         )
     return len(chosen)

@@ -2,7 +2,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { Execution, Task } from "@/lib/api/types";
+import type { Execution, Task, Verification } from "@/lib/api/types";
 import { createQueryClient } from "@/lib/query-client";
 import { WorkspaceProvider } from "@/lib/workspace";
 
@@ -46,6 +46,21 @@ function execution(overrides: Partial<Execution> = {}): Execution {
       open_questions: ["Which region?"],
     },
     tool_invocations: [],
+    verifications: [],
+    ...overrides,
+  };
+}
+
+function verification(overrides: Partial<Verification> = {}): Verification {
+  return {
+    id: "vr-1",
+    task_id: "t-1",
+    execution_id: "e-1",
+    verifier: "deterministic/v1",
+    outcome: "PASSED",
+    checks: [{ name: "submission", outcome: "passed" }],
+    issues: [],
+    created_at: new Date().toISOString(),
     ...overrides,
   };
 }
@@ -146,5 +161,40 @@ describe("ExecutionsPanel developer and QA outputs", () => {
     expect(within(cases).getByText("Open the table.")).toBeInTheDocument();
     expect(within(cases).getByText("Expected: Three rows.")).toBeInTheDocument();
     expect(within(cases).queryByText("Malformed")).not.toBeInTheDocument();
+  });
+});
+
+describe("ExecutionsPanel verification (Step 5.1)", () => {
+  it("shows a passed verification with its verifier version", async () => {
+    renderPanel([execution({ verifications: [verification()] })]);
+
+    const section = await screen.findByRole("region", { name: "Platform verification" });
+    expect(within(section).getByText("Passed")).toBeInTheDocument();
+    expect(within(section).getByText("deterministic/v1")).toBeInTheDocument();
+    expect(within(section).queryByRole("listitem")).not.toBeInTheDocument();
+  });
+
+  it("explains each issue with the criterion, deliverable or schema location it concerns", async () => {
+    const failed = verification({
+      outcome: "FAILED",
+      issues: [
+        { code: "CRITERION_NOT_MET", severity: "error", criterion_id: "c1" },
+        { code: "CRITERION_PARTIAL", severity: "warning", criterion_id: "c2" },
+        { code: "DELIVERABLE_MISSING", severity: "error", deliverable: "Comparison table" },
+        { code: "OUTPUT_SCHEMA_MISMATCH", severity: "error", location: "properties/score/type" },
+        { code: "SOMETHING_NEW", severity: "error" },
+      ],
+    });
+    renderPanel([execution({ verifications: [failed] })]);
+
+    const section = await screen.findByRole("region", { name: "Platform verification" });
+    expect(within(section).getByText("Failed")).toBeInTheDocument();
+    expect(within(section).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+      "Error: The agent says this criterion is not met · Covers all vendors.",
+      "Warning: The agent says this criterion is only partly met · Cites sources.",
+      "Error: Deliverable missing or empty · Comparison table",
+      "Error: Outputs do not match the task's output schema · at properties/score/type",
+      "Error: SOMETHING_NEW",
+    ]);
   });
 });

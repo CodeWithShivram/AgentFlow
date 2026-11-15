@@ -605,6 +605,43 @@ def test_execution_history_lists_attempts_with_agent_versions(
         "created_at",
     }
     assert task_of(owner, workspace, workflow, task["id"])["status"] == "SUBMITTED"
+    assert attempt["verifications"] == []
+
+    # Step 5.1 (ADR-0030): the platform verifies the submission and completes the task.
+    from app.verification import job
+
+    with session_scope(worker_factory) as s:
+        request = s.execute(
+            select(OutboxEvent).where(OutboxEvent.event_type == outbox.TASK_VERIFY)
+        ).scalar_one()
+    with session_scope(worker_factory) as s:
+        assert (
+            job.run(
+                s,
+                event_id=request.id,
+                workspace_id=request.workspace_id,
+                workflow_id=uuid.UUID(workflow),
+                task_id=uuid.UUID(task["id"]),
+            )
+            == "passed"
+        )
+    assert task_of(owner, workspace, workflow, task["id"])["status"] == "COMPLETED"
+    (attempt,) = owner.get(url).json()["items"]
+    (verification,) = attempt["verifications"]
+    assert verification["execution_id"] == attempt["id"]
+    assert verification["verifier"] == "deterministic/v1"
+    assert verification["outcome"] == "PASSED" and verification["issues"] == []
+    assert {c["name"]: c["outcome"] for c in verification["checks"]} == {
+        "submission": "passed",
+        "criteria_coverage": "passed",
+        "criteria_claims": "passed",
+        "deliverables": "passed",
+        "output_schema": "skipped",
+        "runtime_outputs": "skipped",
+        "platform_note": "skipped",
+    }
+    listed = owner.get(wf_url(workspace, f"/{workflow}/tasks/{task['id']}/verification"))
+    assert listed.status_code == 200 and listed.json()["items"] == [verification]
 
 
 def test_execution_history_is_workspace_scoped(
@@ -621,6 +658,9 @@ def test_execution_history_is_workspace_scoped(
 
     assert via_own.status_code == 404 and via_own.json()["error"]["code"] == "WORKFLOW_NOT_FOUND"
     assert via_victim.status_code == 404
+    for base in (my_workspace(mallory), workspace):
+        verification = mallory.get(wf_url(base, f"/{workflow}/tasks/{task['id']}/verification"))
+        assert verification.status_code == 404
 
 
 def test_task_deliverables_are_created_updated_and_validated(

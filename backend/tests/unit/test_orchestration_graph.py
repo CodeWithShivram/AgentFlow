@@ -27,7 +27,7 @@ def test_the_graph_is_a_compiled_langgraph_with_one_node_per_outcome() -> None:
         "awaiting_verification",
         "blocked",
     }
-    assert GRAPH_VERSION == "orchestration/v2"
+    assert GRAPH_VERSION == "orchestration/v3"
 
 
 @pytest.mark.parametrize(
@@ -85,7 +85,11 @@ def test_work_in_progress_belongs_to_agents() -> None:
 def test_submitted_work_waits_for_verification() -> None:
     step = _assess("RUNNING", [_task(1, "SUBMITTED", assigned=True), _task(2, "COMPLETED")])
     assert step["kind"] == "awaiting_verification" and step["actor"] == "platform"
-    assert "Phase 5" in step["summary"] and step["task_ids"] == ["t1"]
+    assert step["summary"] == (
+        "1 task submitted and awaiting verification; the platform verifies submissions "
+        "automatically."
+    )
+    assert step["task_ids"] == ["t1"]
 
 
 @pytest.mark.parametrize(
