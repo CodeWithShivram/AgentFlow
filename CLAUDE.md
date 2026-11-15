@@ -112,9 +112,10 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   `background_jobs.retry` (ADMIN, workflow lock, `BACKGROUND_JOB_RETRIED` event); clients see `error_type`, never
   `last_error`. Readiness includes the relay heartbeat in Redis; tests hitting `/health/ready` must write one.
 - Scheduling (ADR-0028): only `engine._dispatch_waiting` writes task dispatches, for at most the workflow's free
-  slots (`max_parallel_tasks` minus QUEUED/IN_PROGRESS) in `dispatch_order` (priority, then age); the worker claim
-  still enforces the limit. Pre-assigned PENDING tasks keep their status; `reconcile_workflow` assigns them
-  (SCHEDULER) when ready. No workspace-wide cap.
+  slots (`max_parallel_tasks` minus QUEUED/IN_PROGRESS and tasks already dispatched in the transaction) in
+  `dispatch_order` (priority, then age); the worker claim still enforces the limit. Pre-assigned PENDING tasks keep
+  their status; `reconcile_workflow` assigns them (SCHEDULER, `dispatch=False`) when ready, then decides once.
+  No workspace-wide cap. Execution scenarios and test rules: `docs/TESTING.md`.
 - Cancellation and recovery (ADR-0029): agents reach models and tools only through the runner's `AttemptGuard`
   (`is_current` check before each call; tests pass `is_current=` like `models=`). `app/execution/recovery.py`
   (Beat, every 60 s) is the only code that closes lost attempts (WORKER_LOST, automatic bounded retry), resends

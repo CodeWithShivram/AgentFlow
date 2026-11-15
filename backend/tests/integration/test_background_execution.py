@@ -796,6 +796,10 @@ def test_dispatch_reaches_a_real_worker_through_redis(
     # A separate Redis database for this test's broker traffic; the worker uses the test DB.
     broker_url = api_settings.model_copy(update={"celery_broker_redis_db": 14}).celery_broker_url
     monkeypatch.setattr(celery_app.conf, "broker_url", broker_url)
+    # Celery caches its broker pools on first use; without this, publishing would reuse the
+    # pools of an earlier test's broker URL, which this worker does not listen on.
+    monkeypatch.setattr(celery_app, "_pool", None)
+    monkeypatch.setattr(celery_app.amqp, "_producer_pool", None)
     monkeypatch.setattr(tasks, "get_worker_session_factory", lambda: worker_factory)
     monkeypatch.setattr(runner, "get_worker_session_factory", lambda: worker_factory)
     # The worker runs the built-in Writer runtime (Step 3.4) with the mock model provider; its

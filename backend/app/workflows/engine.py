@@ -254,22 +254,25 @@ def dispatch_order(task: WorkflowTask) -> tuple[int, datetime, str]:
 
 def _dispatch_waiting(session: Session, workflow: Workflow) -> None:
     """Dispatches as many ASSIGNED tasks as the workflow has free execution slots, in
-    `dispatch_order`. The others wait; a slot freeing up calls this again. The worker's claim
-    still enforces the limit, because dispatched tasks only take a slot once claimed."""
+    `dispatch_order`. The others wait; a slot freeing up calls this again. Tasks dispatched
+    earlier in the same transaction count as taking a slot, so one transaction never writes
+    more dispatches than there are free slots. The worker's claim still enforces the limit,
+    because dispatched tasks only take a slot once claimed."""
     if workflow.status != W.RUNNING:
         return
     tasks = _active(list_tasks(session, workflow))
-    free = workflow.max_parallel_tasks - sum(
-        1 for t in tasks if t.status in EXECUTION_SLOT_STATUSES
-    )
-    if free <= 0:
-        return
-    waiting = sorted((t for t in tasks if t.status == T.ASSIGNED), key=dispatch_order)
     marker = _transaction_marker(session, _DISPATCH_MARKER)
-    for task in waiting[:free]:
-        if task.id not in marker:  # one dispatch per task per transaction
-            marker.add(task.id)
-            request_dispatch(session, workflow, task)
+    waiting = sorted(
+        (t for t in tasks if t.status == T.ASSIGNED and t.id not in marker), key=dispatch_order
+    )
+    taken = sum(
+        1
+        for t in tasks
+        if t.status in EXECUTION_SLOT_STATUSES or (t.status == T.ASSIGNED and t.id in marker)
+    )
+    for task in waiting[: max(workflow.max_parallel_tasks - taken, 0)]:
+        marker.add(task.id)
+        request_dispatch(session, workflow, task)
 
 
 def transition_workflow(
@@ -332,8 +335,9 @@ def transition_workflow(
                     reconcile=False,
                 )
     elif target == W.RUNNING:
-        _dispatch_waiting(session, workflow)
+        # Readiness first, so tasks that became ready while paused compete for the free slots.
         reconcile_workflow(session, workflow)
+        _dispatch_waiting(session, workflow)
 
 
 def _check_workflow_guards(
@@ -377,9 +381,11 @@ def transition_task(
     extra: dict[str, Any] | None = None,
     reconcile: bool = True,
     closing_workflow: bool = False,
+    dispatch: bool = True,
 ) -> None:
     """`closing_workflow` is set only by transition_workflow when it cancels the leftover tasks
-    of a workflow it has just moved to a terminal status."""
+    of a workflow it has just moved to a terminal status. `dispatch=False` leaves the dispatch
+    decision to the caller, which makes one decision for several tasks (reconcile_workflow)."""
     source = task.status
     if not task_transition_allowed(source, target, actor):
         raise InvalidTransitionError(
@@ -421,8 +427,9 @@ def transition_task(
     # Flush so later queries in this transaction (and DB constraints) see the change; app
     # sessions do not autoflush.
     session.flush()
-    if target == T.ASSIGNED or (
-        source in EXECUTION_SLOT_STATUSES and target not in EXECUTION_SLOT_STATUSES
+    if dispatch and (
+        target == T.ASSIGNED
+        or (source in EXECUTION_SLOT_STATUSES and target not in EXECUTION_SLOT_STATUSES)
     ):
         _dispatch_waiting(session, workflow)
     if reconcile:
@@ -461,6 +468,7 @@ def reconcile_workflow(session: Session, workflow: Workflow) -> None:
 
     edges = _list_dependencies(session, workflow.id)
     by_id = {t.id: t for t in tasks}
+    pre_assigned = False
     for task in tasks:
         if task.status != T.PENDING:
             continue
@@ -487,6 +495,8 @@ def reconcile_workflow(session: Session, workflow: Workflow) -> None:
             )
             if task.assigned_agent_version_id is not None:
                 # Pre-assigned while waiting (ADR-0028): schedule it now, within the slot limit.
+                # Dispatch is decided once below, so several ready tasks compete by priority.
+                pre_assigned = True
                 transition_task(
                     session,
                     workflow,
@@ -500,7 +510,10 @@ def reconcile_workflow(session: Session, workflow: Workflow) -> None:
                         "pre_assigned": True,
                     },
                     reconcile=False,
+                    dispatch=False,
                 )
+    if pre_assigned:
+        _dispatch_waiting(session, workflow)
 
     if any(t.required and t.status in _BLOCKING_REQUIRED for t in tasks):
         transition_workflow(

@@ -163,3 +163,51 @@ test("journeys 8 and 9: approve, start, assign an agent and monitor execution", 
   await expect(visibleText(page, "Task started")).toBeVisible();
   await user.context.close();
 });
+
+test("journey 12: independent pre-assigned tasks run by themselves while a dependent task waits", async ({
+  browser,
+}) => {
+  const user = await newUser(browser, "wf-parallel");
+  const { page } = user;
+  await createWorkflow(page, user.workspaceId, "Prepare a launch brief");
+  await page.getByRole("button", { name: "Start planning" }).click();
+  await addTask(page, "Gather facts");
+  await addTask(page, "Check figures");
+  await addTask(page, "Write the brief", ["Gather facts", "Check figures"]);
+
+  const card = (title: string) =>
+    page
+      .getByRole("list", { name: "Tasks" })
+      .getByRole("listitem")
+      .filter({ has: page.getByRole("heading", { level: 3, name: title }) })
+      .filter({ visible: true });
+
+  // Step 4.4: tasks still waiting for the workflow to start can be pre-assigned.
+  for (const title of ["Gather facts", "Check figures", "Write the brief"]) {
+    await page.getByRole("button", { name: `Actions for ${title}` }).click();
+    await page.getByRole("menuitem", { name: "Pre-assign agent…" }).click();
+    const dialog = page.getByRole("dialog", { name: "Assign an agent" });
+    await dialog.getByRole("radio", { name: /Writer/ }).click();
+    await dialog.getByRole("button", { name: "Assign" }).click();
+    await expect(dialog).toBeHidden();
+    await expect(card(title).getByText("Pending", { exact: true })).toBeVisible();
+  }
+
+  await page.getByRole("button", { name: "Submit plan for approval" }).click();
+  await page.getByRole("button", { name: "Approve plan" }).click();
+  await expect(visibleText(page, "Ready")).toBeVisible();
+  await page.getByRole("button", { name: "Start workflow" }).click();
+  await expect(visibleText(page, "Running")).toBeVisible();
+
+  // Step 4.6: the scheduler dispatches both independent tasks without anyone assigning them;
+  // the task that needs both stays Pending, because they still await verification (Phase 5).
+  for (const title of ["Gather facts", "Check figures"]) {
+    await expect(card(title).getByText("Submitted", { exact: true })).toBeVisible({ timeout: 60_000 });
+  }
+  await expect(card("Write the brief").getByText("Pending", { exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Next step" })).toContainText(
+    "2 tasks submitted and awaiting verification",
+    { timeout: 30_000 },
+  );
+  await user.context.close();
+});

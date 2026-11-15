@@ -44,3 +44,11 @@
 - **No workspace cap.** Many running workflows can still use many workers at once; a workspace or global cap would be a later decision.
 - **Priority is not preemptive.** A higher-priority task waits for a free slot; running tasks are never stopped for it.
 - **Stranded executions (OD-17)** still hold their slot until Step 4.5's recovery.
+
+## Amendment (Step 4.6, 2026-11-15)
+The Step 4.6 scenario tests found that when several pre-assigned tasks became ready in one transaction (at workflow start, on resume, or when a dependency completed), each was dispatched as it became ASSIGNED. So the first-created tasks took the free slots instead of the highest-priority ones, and extra dispatches were written for the claim to defer. The engine now:
+- assigns all newly ready pre-assigned tasks in `reconcile_workflow` first (`transition_task(..., dispatch=False)`), then makes one dispatch decision;
+- reconciles before dispatching when a workflow resumes;
+- counts tasks already dispatched in the same transaction as taking a slot, so one transaction never writes more dispatches than there are free slots.
+
+The decisions above are unchanged; this makes the priority order hold in those cases too.

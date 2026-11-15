@@ -351,6 +351,8 @@ What the run does:
 
 ## All checks
 
+How the suites are organised, the rules for new tests and the parallel and sequential execution scenarios are in [docs/TESTING.md](docs/TESTING.md).
+
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/check.ps1        # add -E2E to include Playwright
 ```

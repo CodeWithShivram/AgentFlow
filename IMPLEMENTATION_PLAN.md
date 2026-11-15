@@ -156,8 +156,8 @@ Acceptance (phase): deterministic tests with mock model responses; invalid plans
 | 4.2 | PostgreSQL checkpoint persistence | DONE (ADR-0026) — `c7657ef` |
 | 4.3 | Celery dispatch and worker lifecycle (outbox hardening, idempotent claims) | DONE (ADR-0027) — `c23c846` |
 | 4.4 | Dependency-aware scheduling and concurrency limits | DONE (ADR-0028) — `77b61c4` |
-| 4.5 | Cancellation and restart recovery | DONE (ADR-0029) — see `progress.md` |
-| 4.6 | Parallel and sequential execution tests | NOT_STARTED |
+| 4.5 | Cancellation and restart recovery | DONE (ADR-0029) — `a737bec` |
+| 4.6 | Parallel and sequential execution tests | DONE (`docs/TESTING.md`; ADR-0028 amended) — see `progress.md` |
 
 ## Phase 5 — Verification and recovery
 

@@ -1,9 +1,9 @@
 # AgentFlow Progress
 
 ## Current position
-- Phase: 4 — Orchestration and scheduling (Phases 2 and 3 complete; Phase 1 released as `v0.1.0`, pushed with its tag)
-- Last completed step: 4.5 — Cancellation and restart recovery
-- Next step: 4.6 — Parallel and sequential execution tests, which needs a short plan and the owner's go-ahead
+- Phase: 4 — Orchestration and scheduling, complete with Step 4.6 (Phases 2 and 3 complete; Phase 1 released as `v0.1.0`, pushed with its tag)
+- Last completed step: 4.6 — Parallel and sequential execution tests
+- Next step: 5.1 — Deterministic verification layer (Phase 5), which needs a short plan and the owner's go-ahead
 
 ## Completed steps
 | Step | Commit message | Hash |
@@ -38,12 +38,13 @@
 | 4.2 | `feat(orchestration): persist graph checkpoints in PostgreSQL` | `c7657ef` (pushed, CI ✔) |
 | 4.3 | `feat(execution): surface and retry failed jobs and report worker health` | `c23c846` (pushed, CI ✔) |
 | 4.4 | `feat(scheduling): dispatch by priority within slot limits and allow pre-assignment` | `77b61c4` (pushed, CI ✔) |
-| 4.5 | `feat(execution): stop cancelled agents and recover work stranded by lost workers` | latest commit touching `docs/ADR/0029-cancellation-and-restart-recovery.md` |
+| 4.5 | `feat(execution): stop cancelled agents and recover work stranded by lost workers` | `a737bec` (pushed, CI ✔) |
+| 4.6 | `test(execution): cover parallel and sequential execution across whole graphs` | latest commit touching `docs/TESTING.md` |
 
 ## Environment snapshot (2026-11-14)
 | Item | Value |
 |---|---|
-| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `77b61c4` plus tag `v0.1.0` (owner-authorized) |
+| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `a737bec` plus tag `v0.1.0` (owner-authorized) |
 | Python / uv / Node / npm | 3.12.14 via uv 0.12.9 / Node 24.13.0 / npm 11.6.2 |
 | Celery / kombu | 5.7.0 / 5.7.0 |
 | Docker | 29.9.3 — `agentflow` stack healthy (Docker Desktop must be started first; it had stopped and was restarted in Steps 3.1 and 3.4) |
@@ -55,6 +56,37 @@
 | Test HTTP client | `httpx2` 2.16.0 (replaces `httpx`, OD-10); `httpx` is back only as a LiteLLM dependency |
 | LiteLLM | 1.109.1, imported by workers only when `MODEL_PROVIDER=litellm`; `.env` keeps the mock |
 | LangGraph | 1.2.22 (with langchain-core 1.8.0 and langsmith 0.14.17), imported by workers only; LangSmith tracing disabled; checkpoints via `langgraph-checkpoint-postgres` 3.2.1 |
+
+## Step 4.6 — parallel and sequential execution tests
+- **Owner decisions (2026-11-15):**
+  - also run a graph through a real two-thread Celery worker;
+  - seeded random graphs with fixed seeds;
+  - an E2E journey for the parallel half;
+  - write `docs/TESTING.md`.
+- **`backend/tests/integration/test_execution_scenarios.py`:** workflows with pre-assigned tasks, driven to completion with a verification stand-in:
+  - a chain, a diamond, a fan-out wider than the limit by priority, a resume with ready and waiting tasks, and five simultaneous claims against a limit of 2;
+  - 20 seeded random graphs with invariant checks at every claim;
+  - a diamond through a real Celery worker (threads pool, concurrency 2, Redis DB 13), checking that B's and C's attempts overlap and that A and D are ordered.
+- **Bug found and fixed (`app/workflows/engine.py`, ADR-0028 amended):** when several pre-assigned tasks became ready in one transaction, each was dispatched as it became ASSIGNED, so creation order beat priority and extra dispatches were written. The engine now:
+  - assigns the newly ready tasks first, then decides once (`transition_task(..., dispatch=False)`);
+  - reconciles before dispatching on resume;
+  - counts tasks already dispatched in the transaction as taking a slot.
+- **Test isolation fix:** a second real-worker test in one pytest process published through the first test's cached Celery broker pools (a different Redis database), so its worker never received the messages. Both real-worker tests now reset `celery_app._pool` and `celery_app.amqp._producer_pool` with `monkeypatch`, and pass in either order.
+- **E2E journey 12:** three pre-assigned tasks; after the start, the two independent ones reach Submitted by themselves, and the dependent one stays Pending (the banner reads "2 tasks submitted and awaiting verification"). With the E2E stack's single solo worker, they run one after the other; the overlap is shown by the threaded real-worker test.
+- **Docs:** `docs/TESTING.md` (suites, how to run them, rules for new tests, the execution scenario matrix, known Windows noise); linked from the README and CLAUDE.md.
+- **No ADR of its own:** the step adds tests and fixes a bug against ADR-0028's decisions, so ADR-0028 is amended instead.
+
+## Checks last executed (Step 4.6)
+- **Full gate (`check.ps1 -E2E`) ✔, exit 0:**
+  - backend: ruff format, ruff check, mypy (172 files), alembic check;
+  - pytest **1026 passed** (1000 plus 26 new scenario tests: 6 named scenarios, 20 seeded random graphs and the real-worker diamond);
+  - frontend: eslint, typecheck, Vitest **107**, Playwright **15 passed** (journey 12 added), build.
+- **An earlier gate run failed** on the real-worker diamond, which timed out. That led to the test isolation fix above: the failure reproduced deterministically whenever two real-worker tests ran in one process, and both orders pass after the fix.
+- **Deliberate-bug check** (restored byte-for-byte): putting back the per-task dispatch in `reconcile_workflow` (`dispatch=True`) fails the resume test.
+  - The fan-out test passed under that mutation: with the bug, its outcome depends on the order of random task ids (tasks created in one transaction share a timestamp), so it catches the regression only sometimes. The resume test catches it every time.
+- **Environment:**
+  - Docker Desktop had stopped at the start of the session and was restarted;
+  - the dev DB is still at `0018`; no servers were left running after E2E.
 
 ## Step 4.5 — cancellation and restart recovery (ADR-0029)
 - **Owner decisions (2026-11-14):**
@@ -76,7 +108,7 @@
 - **Frontend:** no change; attempt error codes and event reasons already show as text.
 - **Tests changed:** run_agent calls whose agents reach models or tools now pass `is_current` (unit: always current; integration: the real check against the test database), because the default check reads the worker database; the Celery route test includes `agentflow.recover`.
 
-## Checks last executed (Step 4.5)
+## Checks (Step 4.5)
 - **Full gate (`check.ps1 -E2E`) ✔, exit 0:**
   - backend: ruff format, ruff check, mypy (171 files), alembic check;
   - pytest **1000 passed** (988 plus 12 new):
@@ -643,6 +675,6 @@
 None.
 
 ## Next exact action
-1. **Push Step 4.5** on the owner's go-ahead, and confirm CI on GitHub.
-2. **Step 4.6 (parallel and sequential execution tests):** present a short plan and get the owner's go-ahead.
+1. **Push Step 4.6** on the owner's go-ahead, and confirm CI on GitHub.
+2. **Step 5.1 (deterministic verification layer):** present a short plan and get the owner's go-ahead.
 3. **Before any hosted deployment:** settle OD-14, OD-19 and OD-20.
