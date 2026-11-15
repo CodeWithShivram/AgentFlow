@@ -449,15 +449,9 @@ def test_failed_attempts_are_kept_and_bounded(
     task_id = world.task_ids[0]
     failure = runner.Failure("EXECUTION_FAILED", "RuntimeError")
 
+    _assign(admin_factory, world, task_id)
     for attempt in range(1, 4):
-        if attempt == 1:
-            _assign(admin_factory, world, task_id)
-        else:  # retry: REWORK_REQUIRED -> ASSIGNED counts an attempt
-            with session_scope(admin_factory) as s:
-                workflow, task = _locked(s, world), _task(s, task_id)
-                task.attempt_count += 1
-                engine.transition_task(s, workflow, task, TaskStatus.ASSIGNED, actor=Actor.USER)
-                s.commit()
+        # Step 5.3 (ADR-0032): the scheduler starts each next attempt itself.
         event = _dispatch_events(admin_factory, task_id)[-1]
         claim = _claim(worker_factory, event)
         assert isinstance(claim, runner.Claim) and claim.attempt_number == attempt

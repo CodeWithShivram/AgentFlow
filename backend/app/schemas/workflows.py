@@ -315,6 +315,8 @@ class ExecutionResponse(BaseModel):
     tool_invocations: list[ToolInvocationResponse]
     # Platform verification of this attempt's submission, oldest first (ADR-0030).
     verifications: list[VerificationResponse] = []
+    # Corrective instructions this attempt was given (ADR-0032): fixed platform sentences.
+    rework_instructions: list[str] = []
 
 
 class ExecutionList(BaseModel):

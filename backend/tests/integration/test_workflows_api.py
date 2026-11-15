@@ -580,6 +580,7 @@ def test_execution_history_lists_attempts_with_agent_versions(
     (attempt,) = owner.get(url).json()["items"]
 
     assert attempt["attempt_number"] == 1 and attempt["status"] == "SUCCEEDED"
+    assert attempt["rework_instructions"] == []  # a first attempt (ADR-0032)
     assert attempt["agent_version"] == 1 and attempt["error_code"] is None
     assert attempt["result_summary"] == "Mock writing result for task 'task'."
     with session_scope(worker_factory) as s:

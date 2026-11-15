@@ -2,8 +2,8 @@
 
 ## Current position
 - Phase: 5 — Verification and recovery (Phases 2–4 complete; Phase 1 released as `v0.1.0`, pushed with its tag)
-- Last completed step: 5.2 — Semantic evaluation with structured evidence
-- Next step: 5.3 — Rework instructions, bounded retries and reassignment, which needs a short plan and the owner's go-ahead
+- Last completed step: 5.3 — Rework instructions, bounded retries and reassignment
+- Next step: 5.4 — Replan with DAG validation, which needs a short plan and the owner's go-ahead
 
 ## Completed steps
 | Step | Commit message | Hash |
@@ -41,16 +41,17 @@
 | 4.5 | `feat(execution): stop cancelled agents and recover work stranded by lost workers` | `a737bec` (pushed, CI ✔) |
 | 4.6 | `test(execution): cover parallel and sequential execution across whole graphs` | `cd50ba2` (pushed, CI ✔) |
 | 5.1 | `feat(verification): verify submissions deterministically and accept passing tasks` | `fdda86b` (pushed, CI ✔) |
-| 5.2 | `feat(verification): add semantic evaluation with structured findings` | latest commit touching `docs/ADR/0031-semantic-evaluation.md` |
+| 5.2 | `feat(verification): add semantic evaluation with structured findings` | `7f7805a` (pushed, CI ✔) |
+| 5.3 | `feat(verification): retry failed attempts with corrective instructions and reassign once` | latest commit touching `docs/ADR/0032-rework-retries-and-reassignment.md` |
 
 ## Environment snapshot (2026-11-14)
 | Item | Value |
 |---|---|
-| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `fdda86b` plus tag `v0.1.0` (owner-authorized) |
+| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `7f7805a` plus tag `v0.1.0` (owner-authorized) |
 | Python / uv / Node / npm | 3.12.14 via uv 0.12.9 / Node 24.13.0 / npm 11.6.2 |
 | Celery / kombu | 5.7.0 / 5.7.0 |
 | Docker | 29.9.3 — `agentflow` stack healthy (Docker Desktop must be started first; it had stopped and was restarted in Steps 3.1 and 3.4) |
-| Dev database | `agentflow` at `0020 (head)`; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
+| Dev database | `agentflow` at `0021 (head)`; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
 | Local `.env` | holds generated `WORKER_DB_PASSWORD` and (new) `API_DB_PASSWORD` (gitignored) |
 | Port 8000 | Used by another local project (`easa`); smoke tests used 8010 |
 | E2E | API :8011 (as `agentflow_api`), frontend :3100, database `agentflow_e2e` (reset each run), Redis DBs 2/3, installed Google Chrome |
@@ -58,6 +59,44 @@
 | Test HTTP client | `httpx2` 2.16.0 (replaces `httpx`, OD-10); `httpx` is back only as a LiteLLM dependency |
 | LiteLLM | 1.109.1, imported by workers only when `MODEL_PROVIDER=litellm`; `.env` keeps the mock |
 | LangGraph | 1.2.22 (with langchain-core 1.8.0 and langsmith 0.14.17), imported by workers only; LangSmith tracing disabled; checkpoints via `langgraph-checkpoint-postgres` 3.2.1 |
+
+## Step 5.3 — rework, retries and reassignment (ADR-0032)
+- **Owner decisions (2026-11-15):**
+  - automatic bounded retries;
+  - the platform reassigns once (amends ADR-0023);
+  - everything is retried except policy failures;
+  - instructions are platform text only.
+- **Policy (`app/verification/rework.py`, `retry/v1`):** `schedule_rework` runs in the failure's transaction (runner, deterministic checks, semantic evaluation, recovery). It:
+  - waits for people on `NOT_RETRIED` codes (TOOL_PERMISSION_DENIED, TOOL_CALL_LIMIT_EXCEEDED, AGENT_RUNTIME_UNAVAILABLE, OUTPUT_SCHEMA_INVALID, OUTPUT_SCHEMA_UNUSABLE);
+  - reassigns once after two agent failures (not WORKER_LOST) by the current agent, when another eligible agent exists. It stores an `agent_selections` row with `decided_by_user_id` NULL and writes `TASK_REASSIGNED` (SCHEDULER);
+  - otherwise retries the same version (`TASK_ASSIGNED`, `automatic_retry`, `policy`);
+  - always increments `attempt_count`.
+- **Instructions:**
+  - `instructions_for` maps the previous attempt's error code and verification errors to fixed sentences (criteria by id, deliverables by position, max 20);
+  - the runner computes them at claim and stores them in `agent_executions.rework_instructions` (migration `0021`);
+  - they go on the contract (`contract_version` 2) and, for model agents, in a platform message after the delimited contract.
+- **Worker grants:** `agent_selections` SELECT and INSERT (re-provisioned).
+- **API and UI:** `rework_instructions` on each attempt; "Corrective instructions given" in the attempts panel.
+- **Recovery:** a lost worker now goes through `schedule_rework` (same behaviour: same agent, never a reassignment).
+- **Found on the way:** the selection rules count only agents with a runtime as eligible, so the reassignment tests give their agents the built-in General runtime reference. They use a skill pair no built-in agent has, so the outcome doesn't depend on test order.
+- **Tests changed (intended behaviour changes):**
+  - the bounded-attempts test no longer retries by hand;
+  - the two verification-failure tests now expect the automatic retry (the VERIFICATION_FAILED event is second to last);
+  - the verification test world can create several agents with given skills.
+- **Follow-up:** the selection rules' history factor is still `not_scored`; scoring it from verification outcomes needs a new rules version.
+
+## Checks last executed (Step 5.3)
+- **Full gate (`check.ps1 -E2E`) ✔, exit 0:**
+  - backend: ruff format, ruff check, mypy (185 files), alembic check;
+  - pytest **1084 passed** (1074 plus 10 new):
+    - 5 unit tests: instruction mapping, transient failures, cap, policy codes, the platform message after the contract;
+    - 5 integration tests: retried with instructions, reassigned once, same agent when no other is eligible, and policy failures waiting for people (2 cases);
+  - frontend: eslint, typecheck, Vitest **112** (1 new: corrective instructions), Playwright **15 passed**, build.
+- **Deliberate-bug check** (restored byte-for-byte): `MAX_REASSIGNMENTS = 0` fails the reassignment test.
+- **Environment:**
+  - Docker Desktop had stopped and was restarted;
+  - the dev DB is at `0021`, and roles were re-provisioned;
+  - no servers were left running after E2E.
 
 ## Step 5.2 — semantic evaluation (ADR-0031)
 - **Owner decisions (2026-11-15):**
@@ -86,7 +125,7 @@
   - the API test expects both results;
   - E2E journey 9 names both verification sections.
 
-## Checks last executed (Step 5.2)
+## Checks (Step 5.2)
 - **Full gate (`check.ps1 -E2E`) ✔, exit 0:**
   - backend: ruff format, ruff check, mypy (182 files), alembic check;
   - pytest **1074 passed** (1056 plus 18 new: 12 unit tests of the evaluator's rules, prompt, mock and bounded attempts; 6 integration tests of not met → rework, warnings passing, escalation, duplicate and stale requests, cancellation during evaluation, and recovery);
@@ -748,6 +787,6 @@
 None.
 
 ## Next exact action
-1. **Push Step 5.2** on the owner's go-ahead, and confirm CI on GitHub.
-2. **Step 5.3 (rework instructions, bounded retries and reassignment):** present a short plan and get the owner's go-ahead.
+1. **Push Step 5.3** on the owner's go-ahead, and confirm CI on GitHub.
+2. **Step 5.4 (replan with DAG validation):** present a short plan and get the owner's go-ahead.
 3. **Before any hosted deployment:** settle OD-14, OD-19 and OD-20.

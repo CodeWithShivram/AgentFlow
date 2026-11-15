@@ -442,6 +442,8 @@ export interface Execution {
   tool_invocations: ToolInvocation[];
   /** Platform verification of this attempt's submission, oldest first (ADR-0030). */
   verifications: Verification[];
+  /** Corrective instructions this attempt was given (ADR-0032): fixed platform sentences. */
+  rework_instructions: string[];
 }
 
 export type VerificationOutcome = "PASSED" | "FAILED";

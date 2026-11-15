@@ -51,7 +51,8 @@ class TaskContract(BaseModel):
 
     model_config = _STRICT
 
-    contract_version: Literal[1] = 1
+    # v2 (ADR-0032): adds `rework_instructions`.
+    contract_version: Literal[2] = 2
     workspace_id: uuid.UUID
     workflow_id: uuid.UUID
     task_id: uuid.UUID
@@ -71,6 +72,9 @@ class TaskContract(BaseModel):
     token_budget: int | None
     retry_policy: RetryPolicy
     security_classification: SecurityClassification = SecurityClassification.INTERNAL
+    # Corrective instructions from the previous attempt's failure: fixed platform sentences that
+    # name criteria by id and deliverables by position (ADR-0032). Empty on a first attempt.
+    rework_instructions: list[str] = []
 
 
 class CriterionStatus(StrEnum):

@@ -498,6 +498,7 @@ async def list_executions(
             submission=e.submission,
             tool_invocations=invocations.get(e.id, []),
             verifications=verifications.get(e.id, []),
+            rework_instructions=list(e.rework_instructions),
         )
         for e, version in rows
     ]

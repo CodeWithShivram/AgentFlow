@@ -177,6 +177,11 @@ class AgentExecution(Base):
     result_summary: Mapped[str | None] = mapped_column(Text)
     # The validated AgentSubmission of this attempt (ADR-0018); kept if verification fails.
     submission: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    # Corrective instructions this attempt was given, from the previous attempt's failure
+    # (ADR-0032): fixed platform sentences only.
+    rework_instructions: Mapped[list[str]] = mapped_column(
+        JSONB, server_default=text("'[]'::jsonb"), default=list
+    )
     created_at: Mapped[datetime] = created_at_column()
     updated_at: Mapped[datetime] = updated_at_column()
 

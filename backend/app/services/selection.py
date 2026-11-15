@@ -5,6 +5,7 @@ from the database, always scoped to the caller's workspace."""
 import uuid
 from dataclasses import asdict
 from decimal import Decimal
+from typing import Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,6 +14,10 @@ from app.models import AgentSelection, Workflow, WorkflowTask
 from app.repositories import agents as agents_repository
 from app.repositories import workflows as repository
 from app.schemas.agents import AgentConfiguration
+
+
+class _AddsRows(Protocol):
+    def add(self, instance: object, /) -> None: ...
 
 
 async def rank_for_task(
@@ -38,17 +43,18 @@ async def rank_for_task(
 
 
 def record_selection(
-    session: AsyncSession,
+    session: _AddsRows,
     workflow: Workflow,
     task: WorkflowTask,
     ranked: list[Candidate],
     *,
     agent_id: uuid.UUID,
     agent_version_id: uuid.UUID,
-    user_id: uuid.UUID,
+    user_id: uuid.UUID | None,
 ) -> AgentSelection:
     """Adds the rationale of an assignment, in the caller's transaction. The chosen agent's
-    candidate is recomputed by the server, never taken from the client."""
+    candidate is recomputed by the server, never taken from the client. `user_id` is None for a
+    platform decision (automatic reassignment, ADR-0032)."""
     chosen = next(c for c in ranked if c.agent_id == agent_id)
     top = next((c for c in ranked if c.rank == 1), None)
     selection = AgentSelection(

@@ -30,7 +30,7 @@ from app.models import (
     Workflow,
     WorkflowTask,
 )
-from app.verification import deterministic
+from app.verification import deterministic, rework
 from app.workflows import engine
 from app.workflows.state_machine import Actor
 
@@ -147,6 +147,8 @@ def run(
             extra={**context, "issue_codes": report.error_codes()},
         )
         outcome = target.value.lower()
+        if target == TaskStatus.REWORK_REQUIRED:
+            rework.schedule_rework(session, workflow, task, failure_codes=report.error_codes())
     session.commit()
     logger.info(
         "task verified",

@@ -54,7 +54,7 @@ from app.models import (
     WorkflowTask,
 )
 from app.schemas.agents import SafeText, Slug
-from app.verification import deterministic
+from app.verification import deterministic, rework
 from app.verification.deterministic import Issue, Report, Severity
 from app.workflows import engine
 from app.workflows.state_machine import Actor
@@ -474,6 +474,8 @@ def finish(session: Session, job: EvaluationJob, outcome: Evaluation | Evaluatio
             extra={**context, "issue_codes": report.error_codes()},
         )
         result_name = target.value.lower()
+        if target == TaskStatus.REWORK_REQUIRED:
+            rework.schedule_rework(session, workflow, task, failure_codes=report.error_codes())
     session.commit()
     logger.info(
         "task evaluated",

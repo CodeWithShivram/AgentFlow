@@ -71,7 +71,8 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
 - Agent selection (ADR-0023): ranking is pure and versioned (`app/agents/selection.py`, `RULES_VERSION`); change
   weights or factors only with a new version. Unmeasured factors are `not_scored`, never guessed. Assignments always
   store a server-computed `agent_selections` row (append-only, RLS) in the same transaction; never trust a client
-  rationale. People decide; the platform only suggests.
+  rationale. People decide; the platform only suggests, except the bounded automatic reassignment of ADR-0032
+  (`decided_by_user_id` NULL).
 - Platform proposals (ADR-0024): only `agents.propose_specialists`, from plan confirmation when the workflow allows
   proposals and a task has no eligible agent. The template is fixed (task skills, `builtin://general/v1`, no tools);
   the platform never proposes tools or instructions. `requested_by` is NULL; approval stays ADMIN-only and creates an
@@ -129,6 +130,11 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   an outcome. Contract and submission reach the model only inside delimiters, without platform ids. Findings are
   untrusted model text: stored in `verification_results.findings`, shown as plain text, never logged or put in
   issues/events. An evaluation that cannot complete escalates the task (EVALUATION_UNAVAILABLE).
+- Rework (ADR-0032, `app/verification/rework.py`, policy `retry/v1`): every failure that leaves a task
+  REWORK_REQUIRED calls `schedule_rework` in the same transaction; it retries the same agent, reassigns once
+  (two agent failures, another eligible agent), or waits for people (`NOT_RETRIED` policy codes). Corrective
+  instructions are fixed platform sentences (criteria by id, deliverables by position, never user/agent/model
+  text), stored on the attempt and sent to models after the delimited contract (contract v2).
 - Workflow events are append-only.
 
 ## Security

@@ -51,6 +51,8 @@ WORKER_GRANTS: dict[str, tuple[str, ...]] = {
     "tool_invocations": ("SELECT", "INSERT"),
     # Verification results (ADR-0030), written by the verification job; append-only.
     "verification_results": ("SELECT", "INSERT"),
+    # Automatic reassignment stores its selection rationale (ADR-0032); append-only.
+    "agent_selections": ("SELECT", "INSERT"),
     # LangGraph checkpoints (ADR-0026): the library upserts; the hourly cleanup deletes.
     "checkpoints": ("SELECT", "INSERT", "UPDATE", "DELETE"),
     "checkpoint_blobs": ("SELECT", "INSERT", "UPDATE", "DELETE"),

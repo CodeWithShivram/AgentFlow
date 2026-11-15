@@ -24,6 +24,8 @@ from app.llm.gateway import ModelGateway
 from app.llm.mock import MockModelAdapter
 from app.models import (
     Agent,
+    AgentExecution,
+    AgentSelection,
     AgentStatus,
     AgentVersion,
     AutonomyPolicy,
@@ -43,6 +45,7 @@ from app.models import (
     WorkflowTask,
     Workspace,
 )
+from app.schemas.agents import AgentConfiguration
 from app.services.usage import record_model_call
 from app.verification import job, semantic
 from app.workflows import engine
@@ -70,6 +73,7 @@ class World:
     workflow_id: uuid.UUID
     task_id: uuid.UUID
     dependent_id: uuid.UUID
+    agent_ids: tuple[uuid.UUID, ...]
 
 
 class _HonestAgent(MockAgent):
@@ -91,9 +95,15 @@ def _side_requests(s: Session) -> None:
     )
 
 
-def _world(admin: Factory, *, attempt_count: int = 0) -> World:
-    """A RUNNING workflow: task A (pre-assigned, with a deliverable and a criterion) is dispatched;
-    task B (pre-assigned) waits for A."""
+def _world(
+    admin: Factory,
+    *,
+    attempt_count: int = 0,
+    skills: tuple[str, ...] = ("report_writing",),
+    agents: int = 1,
+) -> World:
+    """A RUNNING workflow: task A (pre-assigned to the first of `agents` workspace agents, with a
+    deliverable and a criterion) is dispatched; task B (pre-assigned) waits for A."""
     with session_scope(admin) as s:
         user = User(email=f"{uuid.uuid4().hex[:8]}@example.com", password_hash="h")
         s.add(user)
@@ -101,13 +111,23 @@ def _world(admin: Factory, *, attempt_count: int = 0) -> World:
         workspace = Workspace(owner_id=user.id, name="W")
         s.add(workspace)
         s.flush()
-        agent = Agent(workspace_id=workspace.id, name="Writer X", category="writing")
-        s.add(agent)
-        s.flush()
-        version = AgentVersion(agent_id=agent.id, version=1, configuration=CONFIG)
-        s.add(version)
-        s.flush()
-        agent.active_version_id, agent.status = version.id, AgentStatus.ACTIVE
+        created = []
+        for name in ("Writer X", "Writer Y", "Writer Z")[:agents]:
+            agent = Agent(workspace_id=workspace.id, name=name, category="writing")
+            s.add(agent)
+            s.flush()
+            # A runtime reference, so the selection rules can find these agents eligible.
+            configuration = {
+                **CONFIG,
+                "system_instruction_ref": "builtin://general/v1",
+                "capabilities": list(skills),
+            }
+            version = AgentVersion(agent_id=agent.id, version=1, configuration=configuration)
+            s.add(version)
+            s.flush()
+            agent.active_version_id, agent.status = version.id, AgentStatus.ACTIVE
+            created.append((agent, version))
+        agent, version = created[0]
         workflow = Workflow(
             workspace_id=workspace.id,
             created_by_user_id=user.id,
@@ -122,7 +142,7 @@ def _world(admin: Factory, *, attempt_count: int = 0) -> World:
                 workflow_id=workflow.id,
                 title=title,
                 description="d",
-                required_skills=["report_writing"],
+                required_skills=list(skills),
                 deliverables=["Report"],
                 acceptance_criteria=CRITERIA,
                 attempt_count=attempt_count,
@@ -143,7 +163,9 @@ def _world(admin: Factory, *, attempt_count: int = 0) -> World:
             engine.transition_workflow(s, workflow, target, actor=Actor.USER)
         _side_requests(s)
         s.commit()
-        return World(workspace.id, workflow.id, tasks[0].id, tasks[1].id)
+        return World(
+            workspace.id, workflow.id, tasks[0].id, tasks[1].id, tuple(a.id for a, _ in created)
+        )
 
 
 def _events(admin: Factory, event_type: str, task_id: uuid.UUID) -> list[OutboxEvent]:
@@ -322,13 +344,14 @@ def test_a_failing_submission_goes_back_for_rework_with_its_issues(
 
     assert _verify(worker_factory, world, event) == "rework_required"
 
-    assert _status(admin_factory, world.task_id) == TaskStatus.REWORK_REQUIRED
+    # Step 5.3 (ADR-0032): the scheduler retries at once; see the rework tests below.
+    assert _status(admin_factory, world.task_id) == TaskStatus.ASSIGNED
     (result,) = _results(admin_factory)
     assert result.outcome == VerificationOutcome.FAILED
     assert result.issues == [
         {"code": "CRITERION_NOT_MET", "severity": "error", "criterion_id": "c1"}
     ]
-    failed = _task_events(admin_factory, world.task_id)[-1]
+    failed = _task_events(admin_factory, world.task_id)[-2]
     assert failed.event_type == WorkflowEventType.VERIFICATION_FAILED
     assert failed.payload["reason"] == "VERIFICATION_FAILED"
     assert failed.payload["issue_codes"] == ["CRITERION_NOT_MET"]
@@ -468,7 +491,7 @@ def test_an_evaluation_judging_a_criterion_not_met_sends_the_task_back(
 
     assert _evaluate(admin_factory, worker_factory, world, adapter) == "rework_required"
 
-    assert _status(admin_factory, world.task_id) == TaskStatus.REWORK_REQUIRED
+    assert _status(admin_factory, world.task_id) == TaskStatus.ASSIGNED  # retried (ADR-0032)
     evaluation = next(r for r in _results(admin_factory) if r.verifier == "semantic/v1")
     assert evaluation.outcome == VerificationOutcome.FAILED
     assert evaluation.issues == [
@@ -476,7 +499,7 @@ def test_an_evaluation_judging_a_criterion_not_met_sends_the_task_back(
     ]
     assert evaluation.findings is not None
     assert evaluation.findings["criteria"][0]["reason"] == "Absent."  # stored as findings only
-    failed = _task_events(admin_factory, world.task_id)[-1]
+    failed = _task_events(admin_factory, world.task_id)[-2]
     assert failed.event_type == WorkflowEventType.VERIFICATION_FAILED
     assert failed.payload["issue_codes"] == ["CRITERION_JUDGED_NOT_MET"]
 
@@ -632,3 +655,120 @@ def test_recovery_resends_lost_evaluations_and_escalates_interrupted_ones(
     escalated = _task_events(admin_factory, interrupted_world.task_id)[-1]
     assert escalated.payload["reason"] == "EVALUATION_UNAVAILABLE"
     assert escalated.payload["error_code"] == "EVALUATION_INTERRUPTED"
+
+
+# --- rework instructions, bounded retries and reassignment (Step 5.3, ADR-0032) -----------------
+
+# No built-in agent has both skills, so only the test's own agents are eligible.
+RARE_SKILLS = ("report_writing", "code_generation")
+
+
+def _fail_verification(admin: Factory, worker: Factory, world: World) -> runner.Claim:
+    """One attempt whose agent says it did not meet the criterion, verified by the platform."""
+    claim = _submit(admin, worker, world, _HonestAgent)
+    event = _events(admin, outbox.TASK_VERIFY, world.task_id)[-1]
+    assert _verify(worker, world, event) == "rework_required"
+    return claim
+
+
+def _claim_next(admin: Factory, worker: Factory, world: World) -> runner.Claim:
+    event = _events(admin, outbox.TASK_DISPATCH, world.task_id)[-1]
+    with session_scope(worker) as s:
+        claim = runner.claim(
+            s,
+            event_id=event.id,
+            workspace_id=world.workspace_id,
+            workflow_id=world.workflow_id,
+            task_id=world.task_id,
+            agent_version_id=uuid.UUID(event.payload["agent_version_id"]),
+        )
+    assert isinstance(claim, runner.Claim)
+    return claim
+
+
+def test_a_failed_verification_is_retried_with_corrective_instructions(
+    admin_factory: Factory, worker_factory: Factory
+) -> None:
+    world = _world(admin_factory)
+    _fail_verification(admin_factory, worker_factory, world)
+
+    retried = _task_events(admin_factory, world.task_id)[-1]
+    assert retried.event_type == WorkflowEventType.TASK_ASSIGNED
+    assert retried.payload["actor"] == "SCHEDULER" and retried.payload["automatic_retry"] is True
+    assert retried.payload["policy"] == "retry/v1"
+    assert len(_events(admin_factory, outbox.TASK_DISPATCH, world.task_id)) == 2
+
+    claim = _claim_next(admin_factory, worker_factory, world)
+
+    expected = ["Meet acceptance criterion c1: your previous attempt reported it as not met."]
+    assert claim.attempt_number == 2 and claim.rework_instructions == expected
+    configuration = AgentConfiguration.model_validate(CONFIG)
+    contract = runner.build_contract(claim, configuration)
+    assert contract.contract_version == 2 and contract.rework_instructions == expected
+    with session_scope(admin_factory) as s:
+        stored = s.execute(
+            select(AgentExecution.attempt_number, AgentExecution.rework_instructions).order_by(
+                AgentExecution.attempt_number
+            )
+        ).all()
+    assert [tuple(row) for row in stored] == [(1, []), (2, expected)]
+
+
+def test_the_third_attempt_goes_to_another_eligible_agent_once(
+    admin_factory: Factory, worker_factory: Factory
+) -> None:
+    world = _world(admin_factory, skills=RARE_SKILLS, agents=2)
+    first, second = world.agent_ids
+    _fail_verification(admin_factory, worker_factory, world)  # attempt 1, same agent retries
+    assert _task_events(admin_factory, world.task_id)[-1].event_type == (
+        WorkflowEventType.TASK_ASSIGNED
+    )
+    _fail_verification(admin_factory, worker_factory, world)  # attempt 2: reassigned
+
+    reassigned = _task_events(admin_factory, world.task_id)[-1]
+    assert reassigned.event_type == WorkflowEventType.TASK_REASSIGNED
+    assert reassigned.payload["actor"] == "SCHEDULER"
+    assert reassigned.payload["previous_agent_id"] == str(first)
+    assert reassigned.payload["agent_id"] == str(second)
+    with session_scope(admin_factory) as s:
+        selection = s.execute(select(AgentSelection)).scalar_one()
+        task = s.get(WorkflowTask, world.task_id)
+        assert task is not None
+    assert selection.agent_id == second and selection.decided_by_user_id is None  # platform
+    assert selection.eligible and selection.rank is not None
+    assert str(selection.id) == reassigned.payload["selection_id"]
+    assert (task.assigned_agent_id, task.attempt_count) == (second, 2)
+
+    claim = _claim_next(admin_factory, worker_factory, world)
+    assert claim.agent_id == second and claim.attempt_number == 3
+    assert claim.rework_instructions == [
+        "Meet acceptance criterion c1: your previous attempt reported it as not met."
+    ]
+
+
+def test_with_no_other_eligible_agent_the_same_agent_retries(
+    admin_factory: Factory, worker_factory: Factory
+) -> None:
+    world = _world(admin_factory, skills=RARE_SKILLS)
+    for _ in range(2):
+        _fail_verification(admin_factory, worker_factory, world)
+
+    last = _task_events(admin_factory, world.task_id)[-1]
+    assert last.event_type == WorkflowEventType.TASK_ASSIGNED
+    assert last.payload["agent_id"] == str(world.agent_ids[0])
+    with session_scope(admin_factory) as s:
+        assert s.execute(select(AgentSelection)).first() is None
+    assert _claim_next(admin_factory, worker_factory, world).attempt_number == 3
+
+
+@pytest.mark.parametrize("code", ["TOOL_PERMISSION_DENIED", "AGENT_RUNTIME_UNAVAILABLE"])
+def test_policy_failures_wait_for_people(
+    admin_factory: Factory, worker_factory: Factory, code: str
+) -> None:
+    world = _world(admin_factory)
+    claim = _claim_next(admin_factory, worker_factory, world)
+    with session_scope(worker_factory) as s:
+        assert runner.finish(s, claim, runner.Failure(code, "Refused.")) == "rework_required"
+
+    assert _status(admin_factory, world.task_id) == TaskStatus.REWORK_REQUIRED
+    assert len(_events(admin_factory, outbox.TASK_DISPATCH, world.task_id)) == 1

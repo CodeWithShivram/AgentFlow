@@ -47,6 +47,7 @@ function execution(overrides: Partial<Execution> = {}): Execution {
     },
     tool_invocations: [],
     verifications: [],
+    rework_instructions: [],
     ...overrides,
   };
 }
@@ -162,6 +163,25 @@ describe("ExecutionsPanel developer and QA outputs", () => {
     expect(within(cases).getByText("Open the table.")).toBeInTheDocument();
     expect(within(cases).getByText("Expected: Three rows.")).toBeInTheDocument();
     expect(within(cases).queryByText("Malformed")).not.toBeInTheDocument();
+  });
+});
+
+describe("ExecutionsPanel rework (Step 5.3)", () => {
+  it("shows the corrective instructions a retried attempt was given", async () => {
+    renderPanel([
+      execution(),
+      execution({
+        id: "e-2",
+        attempt_number: 2,
+        rework_instructions: ["Meet acceptance criterion c2: your previous attempt reported it as not met."],
+      }),
+    ]);
+
+    const given = await screen.findByRole("region", { name: "Corrective instructions given" });
+    expect(within(given).getByRole("listitem")).toHaveTextContent(
+      "Meet acceptance criterion c2: your previous attempt reported it as not met.",
+    );
+    expect(screen.getAllByRole("region", { name: "Corrective instructions given" })).toHaveLength(1);
   });
 });
 

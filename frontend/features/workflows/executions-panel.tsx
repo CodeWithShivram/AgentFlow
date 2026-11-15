@@ -69,6 +69,20 @@ export function ExecutionsPanel({ task, agentsById }: ExecutionsPanelProps) {
               </>
             ) : null}
           </p>
+          {e.rework_instructions.length > 0 ? (
+            <section aria-label="Corrective instructions given" className="mt-2">
+              <p className="text-xs font-medium text-muted-foreground">
+                Corrective instructions given (from the previous attempt)
+              </p>
+              <ul className="mt-1 list-disc space-y-1 pl-5 text-xs">
+                {e.rework_instructions.map((item, i) => (
+                  <li key={i} className="break-words">
+                    {item}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
           {e.result_summary ? <p className="mt-2 whitespace-pre-wrap break-words">{e.result_summary}</p> : null}
           {e.submission ? <SubmissionDetails submission={e.submission} criteria={task.acceptance_criteria} /> : null}
           {e.verifications.map((v) => (

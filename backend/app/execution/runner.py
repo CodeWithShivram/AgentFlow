@@ -20,7 +20,7 @@ An execution is three bounded steps; no transaction stays open while the agent w
 import logging
 import uuid
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from functools import partial
@@ -57,6 +57,7 @@ from app.schemas.agents import AgentConfiguration
 from app.services.usage import record_tool_invocation
 from app.tools.gateway import InvocationRecord, InvocationRecorder, ToolGateway
 from app.tools.registry import REGISTRY, ToolCallContext, ToolDefinition, usable_grants
+from app.verification import rework
 from app.workflows import engine
 from app.workflows.state_machine import Actor
 
@@ -101,6 +102,8 @@ class Claim:
     output_schema: dict[str, Any] | None
     acceptance_criteria: list[dict[str, Any]]
     dependencies: list[uuid.UUID]
+    # From the previous attempt's failure (ADR-0032); empty on a first attempt.
+    rework_instructions: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -253,6 +256,7 @@ def claim(
         reconcile=False,
         extra={"attempt_number": attempt_number},
     )
+    instructions = rework.previous_attempt_instructions(session, task, attempt_number)
     execution = AgentExecution(
         id=uuid.uuid4(),
         workspace_id=workflow.workspace_id,
@@ -263,6 +267,7 @@ def claim(
         attempt_number=attempt_number,
         status=ExecutionStatus.RUNNING,
         dispatch_event_id=event_id,
+        rework_instructions=instructions,
     )
     session.add(execution)
     dependencies = session.execute(
@@ -289,6 +294,7 @@ def claim(
         output_schema=task.expected_output_schema,
         acceptance_criteria=list(task.acceptance_criteria),
         dependencies=list(dependencies),
+        rework_instructions=instructions,
     )
     session.commit()
     return claimed
@@ -319,6 +325,7 @@ def build_contract(
             "retry_policy": RetryPolicy(
                 max_attempts=MAX_ATTEMPTS_PER_TASK, attempt_number=claim.attempt_number
             ),
+            "rework_instructions": claim.rework_instructions,
         }
     )
 
@@ -427,5 +434,7 @@ def finish(session: Session, claim: Claim, outcome: AgentSubmission | Failure) -
             session, workflow, task, target, actor=Actor.SYSTEM, reason=outcome.code, extra=context
         )
         result = target.value.lower()
+        if target == TaskStatus.REWORK_REQUIRED:  # the next attempt, if the policy allows (5.3)
+            rework.schedule_rework(session, workflow, task, failure_codes=[outcome.code])
     session.commit()
     return result

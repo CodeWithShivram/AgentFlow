@@ -59,3 +59,6 @@
 - **Phase 5 history.** Quality history can join the score once verification produces trustworthy outcomes. That needs a new rules version.
 - **Automatic assignment** (for example in autonomous workflows) can reuse the same ranking and table with `decided_by_user_id` NULL, but is not enabled: people decide.
 - **Assignment rules unchanged.** Agents without a runtime can still be assigned, as in ADR-0021: the attempt fails clearly. The rationale records them as not eligible.
+
+## Amendment (Step 5.3, 2026-11-15)
+"People decide; the platform only suggests" has one exception (ADR-0032): after two failed attempts by the same agent, the platform reassigns the task once to the best-ranked other eligible agent under these rules, storing the same rationale with `decided_by_user_id` NULL. Members can still reassign or cancel the task at any time.

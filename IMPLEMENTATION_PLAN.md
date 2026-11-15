@@ -164,8 +164,8 @@ Acceptance (phase): deterministic tests with mock model responses; invalid plans
 | Step | Title | Status |
 |---|---|---|
 | 5.1 | Deterministic verification layer | DONE (ADR-0030) — `fdda86b` |
-| 5.2 | Semantic evaluation with structured evidence | DONE (ADR-0031) — see `progress.md` |
-| 5.3 | Rework instructions, bounded retries and reassignment | NOT_STARTED |
+| 5.2 | Semantic evaluation with structured evidence | DONE (ADR-0031) — `7f7805a` |
+| 5.3 | Rework instructions, bounded retries and reassignment | DONE (ADR-0032) — see `progress.md` |
 | 5.4 | Replan with DAG validation | NOT_STARTED |
 | 5.5 | Escalation policies; only platform verification accepts tasks | NOT_STARTED |
 

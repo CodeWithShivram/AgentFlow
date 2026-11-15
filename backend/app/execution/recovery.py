@@ -50,7 +50,7 @@ from app.models import (
 )
 from app.planning import analysis, plan
 from app.verification import job as verification_job
-from app.verification import semantic
+from app.verification import rework, semantic
 from app.workflows import engine
 from app.workflows.state_machine import WORKFLOW_EXECUTING, Actor
 
@@ -216,23 +216,9 @@ def recover_attempt(
             extra=context,
             reconcile=False,
         )
-        # The next attempt, as a member's retry would start it (`tasks.assign_agent`).
-        task.attempt_count += 1
-        engine.transition_task(
-            session,
-            workflow,
-            task,
-            TaskStatus.ASSIGNED,
-            actor=Actor.SCHEDULER,
-            reason="automatic retry after the worker was lost",
-            extra={
-                "agent_id": str(task.assigned_agent_id),
-                "agent_version_id": str(task.assigned_agent_version_id),
-                "attempt_count": task.attempt_count,
-                "automatic_retry": True,
-            },
-        )
-        outcome = "retried"
+        # The next attempt through the retry policy (ADR-0032). A lost worker is not the
+        # agent's failure, so it never leads to a reassignment.
+        outcome = rework.schedule_rework(session, workflow, task, failure_codes=[WORKER_LOST])
     session.commit()
     logger.warning(
         "lost attempt recovered",

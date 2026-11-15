@@ -97,6 +97,18 @@ def build_request(
             role="user", content=f"<task_contract>\n{_contract_json(contract)}\n</task_contract>"
         ),
     ]
+    if contract.rework_instructions:
+        # Platform text, outside the delimited contract so it reads as an instruction (ADR-0032).
+        points = "\n".join(f"- {item}" for item in contract.rework_instructions)
+        messages.append(
+            ChatMessage(
+                role="user",
+                content=(
+                    f"Your previous attempt (attempt {contract.retry_policy.attempt_number - 1}) "
+                    f"was not accepted. Address each point in this attempt:\n{points}"
+                ),
+            )
+        )
     if correction:
         messages.append(
             ChatMessage(
