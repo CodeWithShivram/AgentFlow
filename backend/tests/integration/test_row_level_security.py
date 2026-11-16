@@ -61,6 +61,9 @@ OUTSIDE_RLS = {
     "workspace_invitations",
     "inbox_messages",
     "checkpoint_migrations",
+    # Platform price lists (ADR-0039): not workspace data; applications may only read them.
+    "pricing_versions",
+    "model_prices",
 }
 
 

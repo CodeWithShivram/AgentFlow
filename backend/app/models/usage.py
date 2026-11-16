@@ -1,8 +1,11 @@
 """Per-call model usage, written by the model gateway (handoff §5 `llm_usage`, §12).
 
 Token counts are what the provider reported; a missing count stays NULL rather than being
-estimated. Cost columns stay NULL ("not priced") until pricing snapshots arrive in Phase 7, and
-are then filled all together with the currency and pricing version used.
+estimated. `usage_source` says whether the counts were reported by the provider, estimated (by
+LiteLLM, for providers that do not report usage: OD-21) or not reported at all. Each call links
+the pricing snapshot in force for its model (`model_price_id`, ADR-0039; NULL when no price is
+known). Cost columns stay NULL until Step 7.2 computes them, all together with the currency and
+pricing version used.
 """
 
 import uuid
@@ -24,6 +27,12 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, created_at_column, str_enum, uuid_pk
+
+
+class UsageSource(StrEnum):
+    REPORTED = "reported"  # the provider reported the counts
+    ESTIMATED = "estimated"  # counts present, but the provider does not report usage (OD-21)
+    NOT_REPORTED = "not_reported"  # no counts at all
 
 
 class LlmCallStatus(StrEnum):
@@ -91,6 +100,11 @@ class LlmUsage(Base):
     currency: Mapped[str | None] = mapped_column(String(3))
     pricing_version: Mapped[str | None] = mapped_column(String(100))
     provider_request_id: Mapped[str | None] = mapped_column(String(200))
+    usage_source: Mapped[UsageSource] = mapped_column(str_enum(UsageSource, "usage_source"))
+    # The price in force for this provider and model when the call was recorded (ADR-0039).
+    model_price_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("model_prices.id", ondelete="RESTRICT"), index=True
+    )
     # A short code only; never provider error text, prompts or outputs.
     error_code: Mapped[str | None] = mapped_column(String(64))
     latency_ms: Mapped[int]

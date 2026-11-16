@@ -1,9 +1,9 @@
 # AgentFlow Progress
 
 ## Current position
-- Phase: 6 — Human intervention, complete with Step 6.4 (Phases 2–6 complete; Phase 1 released as `v0.1.0`, pushed with its tag)
-- Last completed step: 6.4 — Approval audit records and per-action authorization
-- Next step: 7.1 — Centralized usage tracker and pricing snapshots (Phase 7), which needs a short plan and the owner's go-ahead
+- Phase: 7 — Observability and cost, in progress (Phases 2–6 complete; Phase 1 released as `v0.1.0`, pushed with its tag)
+- Last completed step: 7.1 — Centralized usage tracker and pricing snapshots
+- Next step: 7.2 — Cost calculation and reconciliation (actual vs estimated), which needs a short plan and the owner's go-ahead
 
 ## Completed steps
 | Step | Commit message | Hash |
@@ -48,16 +48,17 @@
 | 6.1 | `feat(interventions): add clarification and approval requests` | `92e5327` (pushed, CI ✔) |
 | 6.2 | `feat(workflows): pause for decisions and resume safely` | `4ba0be9` (pushed, CI ✔) |
 | 6.3 | `feat(interventions): expire approval requests and offer rejection choices` | `0386fba` (pushed, CI ✔) |
-| 6.4 | `feat(interventions): audit approval decisions and authorize them per action` | latest commit touching `docs/ADR/0038-approval-audit-and-authorization.md` |
+| 6.4 | `feat(interventions): audit approval decisions and authorize them per action` | `abb273c` (pushed, CI ✔) |
+| 7.1 | `feat(usage): add pricing snapshots and link each model call to its price` | latest commit touching `docs/ADR/0039-pricing-snapshots.md` |
 
 ## Environment snapshot (2026-11-14)
 | Item | Value |
 |---|---|
-| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `0386fba` plus tag `v0.1.0` (owner-authorized) |
+| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `abb273c` plus tag `v0.1.0` (owner-authorized) |
 | Python / uv / Node / npm | 3.12.14 via uv 0.12.9 / Node 24.13.0 / npm 11.6.2 |
 | Celery / kombu | 5.7.0 / 5.7.0 |
 | Docker | 29.9.3 — `agentflow` stack healthy (Docker Desktop must be started first; it had stopped and was restarted in Steps 3.1 and 3.4) |
-| Dev database | `agentflow` at `0027 (head)`; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
+| Dev database | `agentflow` at `0028 (head)`, price list `2026-11-16.1` loaded; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
 | Local `.env` | holds generated `WORKER_DB_PASSWORD` and (new) `API_DB_PASSWORD` (gitignored) |
 | Port 8000 | Used by another local project (`easa`); smoke tests used 8010 |
 | E2E | API :8011 (as `agentflow_api`), frontend :3100, database `agentflow_e2e` (reset each run), Redis DBs 2/3, installed Google Chrome |
@@ -65,6 +66,49 @@
 | Test HTTP client | `httpx2` 2.16.0 (replaces `httpx`, OD-10); `httpx` is back only as a LiteLLM dependency |
 | LiteLLM | 1.109.1, imported by workers only when `MODEL_PROVIDER=litellm`; `.env` keeps the mock |
 | LangGraph | 1.2.22 (with langchain-core 1.8.0 and langsmith 0.14.17), imported by workers only; LangSmith tracing disabled; checkpoints via `langgraph-checkpoint-postgres` 3.2.1 |
+
+## Step 7.1 — pricing snapshots and the usage tracker (ADR-0039; resolves OD-21)
+- **Owner decisions (2026-11-16):**
+  - prices come from a curated file in the repository;
+  - they are platform-wide;
+  - the mock provider is priced at zero and labelled mock;
+  - counts a provider does not report are marked estimated.
+- **Snapshots:**
+  - `pricing_versions` and `model_prices` (migration `0028`): immutable (triggers refuse updates and deletes), not workspace data, so no RLS;
+  - the API and workers may only read them (`roles.API_READ_ONLY_TABLES`, worker SELECT).
+- **Loading:**
+  - `uv run python -m app.llm.pricing load` loads `app/llm/pricing.json`, which is strictly validated: non-negative decimal prices per million tokens, ISO currency, an aware `effective_from` and a per-provider `reports_usage`;
+  - an unchanged file is a no-op; a changed file under a loaded label is refused (`PricingVersionConflictError`);
+  - the version in force is the latest effective one;
+  - loading was added to CI, the E2E stack and the README.
+- **Usage tracker:** `services.usage.record_model_call` now links each call to the price in force for its provider and model (`llm_usage.model_price_id`, NULL when none) and records `usage_source`:
+  - `reported` only when the price list says the provider reports usage;
+  - `estimated` when counts are present for any other provider, including ones the list does not know;
+  - `not_reported` when no counts are present.
+
+  Existing rows were backfilled. Costs stay NULL for 7.2.
+- **API:** `GET /pricing` (any signed-in user; 404 `PRICING_NOT_LOADED` before a load).
+- **The price list:** only the mock provider is priced (zero, `mock: true`); `ollama` is listed as not reporting usage. No real prices were invented: the owner adds them in a new version.
+- **Tests:**
+  - 6 integration tests (load, idempotent reload and version conflict, immutability, linking and usage sources across versions, read-only grants, the API, the repository file);
+  - 4 unit tests (file validation, content hash, usage sources).
+- **Tests changed (intended):**
+  - the usage-constraint test supplies the now-required `usage_source`, so each case still fails only on its own constraint;
+  - the table lists (migrations, RLS);
+  - the price tables added to the workspace-scope exemptions, with their reason (the first gate run failed on that).
+
+## Checks last executed (Step 7.1)
+- **Full gate (`check.ps1 -E2E`) ✔, exit 0, on the third run:**
+  - backend: ruff format, ruff check, mypy (206 files), alembic check;
+  - pytest **1145 passed**;
+  - frontend: eslint, typecheck, Vitest **135**, Playwright **17 passed**, build.
+- **Earlier runs:**
+  - run 1 failed on the workspace-scope exemption test (fixed);
+  - run 2 passed the backend, but 4 Vitest tests timed out at 5 s, two of them untouched since earlier steps. Another local project's CLI job (`easa`, `app.cli evaluate-access`) held the CPU at 90–100%. Run alone under the same load, all 135 passed; run 3 passed in full.
+- **Deliberate-bug check** (restored byte-for-byte): treating unlisted providers as reporting usage labels estimates as reported, and fails both the integration and the unit test.
+- **Environment:**
+  - the dev DB is at `0028`, the price list `2026-11-16.1` is loaded, and the roles are re-provisioned;
+  - no servers were left running after E2E.
 
 ## Step 6.4 — approval audit records and per-action authorization (ADR-0038)
 - **Owner decisions (2026-11-16):**
@@ -93,7 +137,7 @@
   - journey 13 extended to the Approval history page.
 - **Tests changed (intended):** the expected table lists (migrations, RLS).
 
-## Checks last executed (Step 6.4)
+## Checks (Step 6.4)
 - **Full gate (`check.ps1 -E2E`) ✔, exit 0, on the first run:**
   - backend: ruff format, ruff check, mypy (198 files), alembic check;
   - pytest **1131 passed**;
@@ -1045,7 +1089,8 @@
 ## Known issues / limitations
 - **Blank titles (found in 6.1, pre-existing):** a task title of only spaces passes validation and is stored empty (`Title` in `app/schemas/workflows.py` strips after the length check). To fix with a non-blank check like the 6.1 answers.
 - **OD-20:** a non-superuser schema owner for migrations, before any hosted deployment.
-- **OD-21:** token counts LiteLLM estimates for providers that don't report usage (e.g. Ollama) look like reported ones. Phase 7 pricing must treat them as unverified.
+- **OD-21 (resolved in 7.1):** token counts are recorded with `usage_source`; counts from providers the price list does not mark as reporting usage are `estimated`.
+- **Prices:** only the mock provider is priced. Real providers need their published prices added to `app/llm/pricing.json` under a new version before their costs can be computed (7.2).
 - **Live provider path unverified:** Step 3.3 was verified offline only, by owner decision.
 - **OD-14:** trusted proxy IP handling, before hosted deployment.
 - **OD-19:** the hosted frontend must share a host with the API (CSRF cookie readability); a CSP with nonces is not set yet.
@@ -1059,6 +1104,6 @@
 None.
 
 ## Next exact action
-1. **Push Step 6.4** on the owner's go-ahead, and confirm CI on GitHub. Phase 6 is then complete.
-2. **Phase 7, Step 7.1 (centralized usage tracker and pricing snapshots):** present a short plan and get the owner's go-ahead.
+1. **Push Step 7.1** on the owner's go-ahead, and confirm CI on GitHub.
+2. **Step 7.2 (cost calculation and reconciliation):** present a short plan and get the owner's go-ahead.
 3. **Before any hosted deployment:** settle OD-14, OD-19 and OD-20.

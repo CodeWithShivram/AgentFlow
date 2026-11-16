@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1 import agents, auth, health, interventions, workflows, workspaces
+from app.api.v1 import agents, auth, health, interventions, pricing, workflows, workspaces
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(health.router)
@@ -11,3 +11,4 @@ api_router.include_router(agents.catalog_router)
 api_router.include_router(workflows.router)
 api_router.include_router(interventions.router)
 api_router.include_router(interventions.approvals_router)
+api_router.include_router(pricing.router)

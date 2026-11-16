@@ -202,6 +202,8 @@ def test_the_database_rejects_inconsistent_usage_rows(
         "model": "mock-1",
         "status": "SUCCEEDED",
         "latency_ms": 1,
+        # Step 7.1: required, so each case fails on its own constraint only.
+        "usage_source": "reported",
         **values,
     }
     columns = ", ".join(row)

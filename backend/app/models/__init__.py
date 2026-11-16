@@ -35,9 +35,10 @@ from app.models.intervention import (
     InterventionType,
 )
 from app.models.plan import WorkflowPlan
+from app.models.pricing import ModelPrice, PricingVersion
 from app.models.selection import AgentSelection
 from app.models.tenancy import User, Workspace, WorkspaceMember, WorkspaceRole
-from app.models.usage import LlmCallStatus, LlmUsage
+from app.models.usage import LlmCallStatus, LlmUsage, UsageSource
 from app.models.verification import VerificationOutcome, VerificationResult
 from app.models.workflow import (
     AnalysisStatus,
@@ -82,14 +83,17 @@ __all__ = [
     "InterventionType",
     "LlmCallStatus",
     "LlmUsage",
+    "ModelPrice",
     "OutboxEvent",
     "OutboxStatus",
     "PauseReason",
+    "PricingVersion",
     "PlanStatus",
     "RefreshToken",
     "SessionRevocationReason",
     "TaskDependency",
     "TaskStatus",
+    "UsageSource",
     "ToolInvocation",
     "ToolInvocationStatus",
     "User",

@@ -70,6 +70,7 @@ cd backend
 uv sync                                   # creates backend\.venv with Python 3.12 + dev tools
 uv run alembic upgrade head               # create or update the database schema
 uv run python -m app.agents.seed          # load/refresh the six built-in agents (idempotent)
+uv run python -m app.llm.pricing load     # load the curated price list as a snapshot (idempotent)
 uv run python -m app.db.roles provision    # create/refresh the restricted API and worker DB roles
 uv run uvicorn app.main:create_app --factory --reload --port 8000 --loop asyncio:SelectorEventLoop
 ```
@@ -311,6 +312,14 @@ A rejection can carry a note. Only people see it; it is never sent to agents.
 An approved action reaches only the agent's next attempt, and only while the request still matches its fingerprint. Requests from agents granted high-risk tools need an owner; other approvals need an admin.
 
 Admins see every record on the "Approval history" page (`GET /workspaces/{id}/approvals`).
+
+**Pricing snapshots** ([ADR-0039](docs/ADR/0039-pricing-snapshots.md)). Model prices come from the curated `backend/app/llm/pricing.json` and are loaded with `python -m app.llm.pricing load`.
+- **Immutable versions.** Each version is kept immutably. Changing a price means a new version label, and nothing is fetched from the internet.
+- **Every call is linked.** Each model call is linked to the price in force for its provider and model, and records where its token counts came from: reported by the provider, estimated (by LiteLLM, for providers that don't report usage, such as Ollama), or not reported.
+- **What is priced so far.** Only the mock provider is priced, at zero and marked mock (never a real charge). Add real providers with their published prices in a new version.
+- **Costs come next.** They are computed in Step 7.2.
+
+`GET /pricing` shows the list in force to any signed-in user.
 
 **Replanning** ([ADR-0033](docs/ADR/0033-replanning.md)). A paused or blocked workflow can be replanned: "Replan remaining work" asks the planner to draft only what remains, building on the completed tasks it keeps. The draft is validated like any plan. Confirming it replaces the unfinished tasks (they stay as history, and failed ones stay as they are), once nothing is running or being verified. Workflows that require plan approval need an admin to confirm a replan. Confirming never resumes work. A blocked workflow's Next step banner suggests replanning; the platform never starts one by itself.
 

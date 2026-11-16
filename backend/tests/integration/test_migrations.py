@@ -34,6 +34,8 @@ EXPECTED_TABLES = {
     "inbox_messages",
     "agent_executions",
     "llm_usage",
+    "pricing_versions",
+    "model_prices",
     "workflow_plans",
     "tool_invocations",
     "agent_selections",

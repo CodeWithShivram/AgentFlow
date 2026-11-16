@@ -1,0 +1,23 @@
+{
+  "version": "2026-11-16.1",
+  "currency": "USD",
+  "effective_from": "2026-11-16T00:00:00Z",
+  "source": "Curated in the AgentFlow repository (ADR-0039). Only the mock provider is priced so far; add real providers with their published list prices and a new version.",
+  "providers": {
+    "mock": {
+      "reports_usage": true,
+      "models": {
+        "mock-1": {
+          "input_per_million": "0",
+          "output_per_million": "0",
+          "cached_input_per_million": "0",
+          "mock": true
+        }
+      }
+    },
+    "ollama": {
+      "reports_usage": false,
+      "models": {}
+    }
+  }
+}

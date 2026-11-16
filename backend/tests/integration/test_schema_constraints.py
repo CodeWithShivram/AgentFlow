@@ -111,6 +111,10 @@ def test_every_table_is_workspace_scoped_or_explicitly_exempt() -> None:
         "checkpoints": "worker-only library schema keyed by workflow id (ADR-0026)",
         "checkpoint_blobs": "worker-only library schema keyed by workflow id (ADR-0026)",
         "checkpoint_writes": "worker-only library schema keyed by workflow id (ADR-0026)",
+        # Platform-wide price lists (ADR-0039): the providers' prices, not tenant data;
+        # applications may only read them.
+        "pricing_versions": "platform-wide price list versions (ADR-0039)",
+        "model_prices": "platform-wide model prices (ADR-0039)",
     }
     for table in Base.metadata.sorted_tables:
         if table.name in exempt:

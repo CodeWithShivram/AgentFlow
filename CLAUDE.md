@@ -162,6 +162,10 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   tools, `runner.approval_role`) and the service enforces it. Decisions write an immutable `approval_decisions` row
   via `engine.resolve_intervention` (pass `decided_role`); approved actions reach only the next attempt and only while
   the record's `action_fingerprint` matches the request.
+- Pricing (ADR-0039): prices come only from `app/llm/pricing.json`, loaded as immutable snapshots by
+  `uv run python -m app.llm.pricing load` (change a price = new `version`; never fetch prices online, never invent
+  real prices). `record_model_call` links each call to the price in force (`model_price_id`) and sets `usage_source`;
+  counts are `reported` only for providers the list marks `reports_usage`. Applications only read price tables.
 - Workflow events are append-only.
 
 ## Security

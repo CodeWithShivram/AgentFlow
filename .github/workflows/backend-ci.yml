@@ -74,10 +74,11 @@ jobs:
       - name: mypy
         run: uv run mypy app tests alembic
 
-      - name: Migrate, seed and provision roles
+      - name: Migrate, seed, load prices and provision roles
         run: |
           uv run alembic upgrade head
           uv run python -m app.agents.seed
+          uv run python -m app.llm.pricing load
           uv run python -m app.db.roles provision
       - name: alembic check (models match migrations)
         run: uv run alembic check

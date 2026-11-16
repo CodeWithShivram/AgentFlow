@@ -45,6 +45,9 @@ WORKER_GRANTS: dict[str, tuple[str, ...]] = {
     "workspace_invitations": ("SELECT", "DELETE"),
     # Model gateway usage records (ADR-0013); the worker is the only caller of models.
     "llm_usage": ("SELECT", "INSERT"),
+    # Pricing snapshots (ADR-0039): read to link each call to the price in force.
+    "pricing_versions": ("SELECT",),
+    "model_prices": ("SELECT",),
     # Plan drafts (ADR-0015) are written by the planning job and never changed.
     "workflow_plans": ("SELECT", "INSERT"),
     # Tool invocation records (ADR-0019), written by the tool gateway in workers.
@@ -76,6 +79,8 @@ API_EXCLUDED_TABLES = frozenset(
         "checkpoint_writes",
     }
 )
+# Tables the API may only read: platform price lists, written by the administrator (ADR-0039).
+API_READ_ONLY_TABLES = frozenset({"pricing_versions", "model_prices"})
 _ROLE_NAME = re.compile(r"[a-z_][a-z0-9_]{0,62}")
 _LOGIN_ATTRIBUTES = (
     "LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT PASSWORD {}"
@@ -158,7 +163,10 @@ def provision_api_role(connection: psycopg.Connection, *, role: str, password: s
         for table in tables:
             connection.execute(
                 sql.SQL("GRANT {} ON TABLE {} TO {}").format(
-                    sql.SQL(", ").join(sql.SQL(p) for p in API_PRIVILEGES),
+                    sql.SQL(", ").join(
+                        sql.SQL(p)
+                        for p in (("SELECT",) if table in API_READ_ONLY_TABLES else API_PRIVILEGES)
+                    ),
                     sql.Identifier(table),
                     ident,
                 )
