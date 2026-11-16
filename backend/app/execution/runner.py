@@ -455,6 +455,8 @@ def finish(session: Session, claim: Claim, outcome: AgentSubmission | Failure) -
             requested_by="AGENT",
             requested_by_agent_id=claim.agent_id,
         )
+        # Workflows whose plan needs approval also stop for the decision (ADR-0036).
+        engine.pause_for_decision(session, workflow)
         result = "waiting_approval"
     elif isinstance(outcome, AgentSubmission):
         execution.status = ExecutionStatus.SUCCEEDED

@@ -241,7 +241,9 @@ async def user_transition(
                 resolved_by_user_id=access.user_id,
             )
         )
-    await transition_workflow(session, workflow, target, actor=Actor.USER, reason=reason)
+    await transition_workflow(
+        session, workflow, target, actor=Actor.USER, reason=reason, user_id=access.user_id
+    )
     await session.commit()
     return workflow
 

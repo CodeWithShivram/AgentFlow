@@ -20,6 +20,7 @@ from app.models import (
     AnalysisStatus,
     AutonomyPolicy,
     ExecutionStatus,
+    PauseReason,
     PlanStatus,
     TaskStatus,
     ToolInvocationStatus,
@@ -211,6 +212,11 @@ class WorkflowResponse(BaseModel):
     updated_at: datetime
     started_at: datetime | None
     completed_at: datetime | None
+    # Set while PAUSED (ADR-0036). `pause_note` is a person's text: plain text only.
+    pause_reason: PauseReason | None = None
+    paused_by_user_id: uuid.UUID | None = None
+    paused_at: datetime | None = None
+    pause_note: str | None = None
 
 
 class TaskResponse(BaseModel):

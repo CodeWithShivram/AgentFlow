@@ -33,6 +33,7 @@ from app.models import (
     LlmUsage,
     OutboxEvent,
     OutboxStatus,
+    PauseReason,
     TaskDependency,
     TaskStatus,
     User,
@@ -850,6 +851,9 @@ def test_a_workflow_is_paused_once_when_its_deadline_passes(
             .limit(1)
         ).scalar_one()
         assert paused.payload["reason"] == "DEADLINE_PASSED" and paused.payload["actor"] == "SYSTEM"
+        # Step 6.2 (ADR-0036): the workflow says why it is paused.
+        assert workflow.pause_reason == PauseReason.DEADLINE_PASSED
+        assert workflow.paused_at is not None and workflow.paused_by_user_id is None
         # People decided to carry on: the deadline does not pause it again.
         engine.transition_workflow(s, workflow, WorkflowStatus.RUNNING, actor=Actor.USER)
         s.commit()

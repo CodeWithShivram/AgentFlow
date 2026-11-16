@@ -33,6 +33,7 @@ import { TaskFormDialog } from "./task-form-dialog";
 import { useWorkflow, workflowKeys } from "./use-workflow";
 import { FailedJobs } from "./failed-jobs";
 import { NeedsInput } from "./needs-input";
+import { PauseBanner } from "./pause-banner";
 import { NextStepBanner } from "./next-step-banner";
 import { WorkflowActions } from "./workflow-actions";
 
@@ -115,6 +116,7 @@ export function WorkflowDetailView() {
         )}
       </header>
 
+      <PauseBanner workflow={wf} />
       <NextStepBanner nextStep={wf.next_step} />
       <NeedsInput workflowId={wf.id} version={`${wf.revision}:${events.data?.at(-1)?.sequence ?? 0}`} />
       <FailedJobs workflowId={wf.id} tasks={tasks.data ?? []} />

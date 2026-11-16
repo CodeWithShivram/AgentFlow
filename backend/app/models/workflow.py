@@ -30,6 +30,14 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base import Base, created_at_column, str_enum, updated_at_column, uuid_pk
 
 
+class PauseReason(StrEnum):
+    # Why a PAUSED workflow is paused (ADR-0036). Only AWAITING_DECISION is ever lifted by the
+    # platform itself, once the decisions it waited for are made.
+    USER = "USER"
+    DEADLINE_PASSED = "DEADLINE_PASSED"
+    AWAITING_DECISION = "AWAITING_DECISION"
+
+
 class WorkflowStatus(StrEnum):
     # OD-11, ADR-0009. Transitions live in app/workflows/state_machine.py.
     PENDING = "PENDING"
@@ -137,6 +145,11 @@ class Workflow(Base):
         CheckConstraint("currency ~ '^[A-Z]{3}$'", name="currency_iso4217"),
         CheckConstraint("max_parallel_tasks BETWEEN 1 AND 100", name="max_parallel_tasks_range"),
         CheckConstraint("revision >= 1", name="revision_positive"),
+        # A paused workflow always says why; any other status carries no pause details.
+        CheckConstraint(
+            "(status = 'PAUSED') = (pause_reason IS NOT NULL AND paused_at IS NOT NULL)",
+            name="paused_iff_reason",
+        ),
         Index("ix_workflows_workspace_id_created_at", "workspace_id", "created_at"),
         Index("ix_workflows_workspace_id_status", "workspace_id", "status"),
     )
@@ -187,6 +200,14 @@ class Workflow(Base):
     updated_at: Mapped[datetime] = updated_at_column()
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Set while PAUSED (ADR-0036): why, by whom (a person's pause only), when, and the person's
+    # optional note (user text: shown as plain text only).
+    pause_reason: Mapped[PauseReason | None] = mapped_column(str_enum(PauseReason, "pause_reason"))
+    paused_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT")
+    )
+    paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    pause_note: Mapped[str | None] = mapped_column(Text)
 
 
 class WorkflowTask(Base):

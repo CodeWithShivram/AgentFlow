@@ -46,6 +46,7 @@ from app.models import (
     InboxMessage,
     OutboxEvent,
     OutboxStatus,
+    PauseReason,
     PlanStatus,
     TaskStatus,
     Workflow,
@@ -525,7 +526,12 @@ def pause_at_deadline(
         session.rollback()
         return 0
     engine.transition_workflow(
-        session, workflow, WorkflowStatus.PAUSED, actor=Actor.SYSTEM, reason=DEADLINE_PASSED
+        session,
+        workflow,
+        WorkflowStatus.PAUSED,
+        actor=Actor.SYSTEM,
+        reason=DEADLINE_PASSED,
+        pause_reason=PauseReason.DEADLINE_PASSED,
     )
     session.commit()
     logger.warning("workflow paused at its deadline", extra={"workflow_id": str(workflow_id)})

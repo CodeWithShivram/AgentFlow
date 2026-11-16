@@ -191,3 +191,69 @@ def test_downgrade_succeeds_with_data_present() -> None:
         command.downgrade(config, "base")
 
         assert _with_connection(url, _public_tables) == {"alembic_version"}
+
+
+def test_paused_workflows_are_backfilled_with_why_they_were_paused() -> None:
+    # Migration 0025 (ADR-0036): a workflow paused before it learns its reason from its latest
+    # pause event, so the new "paused needs a reason" check holds.
+    with disposable_database() as url:
+        config = alembic_config(url)
+        command.upgrade(config, "0024")
+
+        def seed(connection: Connection) -> None:
+            connection.execute(
+                text(
+                    """
+                    WITH u AS (
+                        INSERT INTO users (email, password_hash) VALUES ('a@example.com', 'x')
+                        RETURNING id
+                    ), w AS (
+                        INSERT INTO workspaces (owner_id, name) SELECT id, 'w' FROM u
+                        RETURNING id, owner_id
+                    ), wf AS (
+                        INSERT INTO workflows (workspace_id, created_by_user_id, prompt, status,
+                                               autonomy_policy)
+                        SELECT id, owner_id, p, s, 'autonomous'
+                        FROM w, (VALUES ('deadline', 'PAUSED'), ('user', 'PAUSED'),
+                                        ('running', 'RUNNING')) AS v(p, s)
+                        RETURNING id
+                    )
+                    SELECT count(*) FROM wf
+                    """
+                )
+            )
+            # One statement per event, so their sequence follows this order.
+            for prompt, payload in (
+                ("deadline", '{"to": "PAUSED", "reason": "DEADLINE_PASSED"}'),
+                ("user", '{"to": "PAUSED", "reason": "DEADLINE_PASSED"}'),
+                ("user", '{"to": "RUNNING"}'),
+                ("user", '{"to": "PAUSED", "actor": "USER"}'),
+            ):
+                connection.execute(
+                    text(
+                        "INSERT INTO workflow_events (workspace_id, workflow_id, event_type, "
+                        "payload) SELECT workspace_id, id, 'WORKFLOW_STATUS_CHANGED', "
+                        "CAST(:payload AS jsonb) FROM workflows WHERE prompt = :prompt"
+                    ),
+                    {"prompt": prompt, "payload": payload},
+                )
+            connection.commit()
+
+        _with_connection(url, seed)
+        command.upgrade(config, "0025")
+
+        def read(connection: Connection) -> list[Any]:
+            return list(
+                connection.execute(
+                    text(
+                        "SELECT prompt, pause_reason, paused_at IS NOT NULL FROM workflows "
+                        "ORDER BY prompt"
+                    )
+                )
+            )
+
+        assert _with_connection(url, read) == [
+            ("deadline", "DEADLINE_PASSED", True),
+            ("running", None, False),
+            ("user", "USER", True),  # the latest pause decides, not an earlier one
+        ]

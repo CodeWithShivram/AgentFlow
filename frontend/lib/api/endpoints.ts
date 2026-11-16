@@ -122,6 +122,7 @@ export function createEndpoints(client: ApiClient) {
       transition: (
         workspaceId: Uuid,
         workflowId: Uuid,
+        /** `reason` is kept as the pause note when pausing (ADR-0036). */
         body: { to_status: WorkflowStatus; revision: number; reason?: string },
       ) => client.post<Workflow>(`${wf(workspaceId, workflowId)}/transitions`, body),
       /** Requests the prompt analysis again after it failed; it runs in a worker. */

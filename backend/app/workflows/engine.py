@@ -40,6 +40,7 @@ from app.models import (
     InterventionStatus,
     InterventionSubject,
     InterventionType,
+    PauseReason,
     PlanStatus,
     TaskDependency,
     TaskStatus,
@@ -120,6 +121,10 @@ def record_event(
         )
     )
 
+
+# Reasons recorded with the platform's own pause and resume (ADR-0036).
+AWAITING_DECISION = "AWAITING_DECISION"
+DECISIONS_MADE = "DECISIONS_MADE"
 
 # --- human interventions (ADR-0035) ---------------------------------------------------------
 # Requests that need a person. Opened and closed in the transaction of the change that causes
@@ -535,12 +540,20 @@ def transition_workflow(
     *,
     actor: Actor,
     reason: str | None = None,
+    user_id: uuid.UUID | None = None,
+    pause_reason: PauseReason | None = None,
 ) -> None:
+    """`user_id` names the person behind a USER transition. A pause records why (ADR-0036): a
+    person's pause by default, otherwise the platform's `pause_reason`, which is required."""
     source = workflow.status
     if not workflow_transition_allowed(source, target, actor):
         raise InvalidTransitionError(
             details={"from": source.value, "to": target.value, "actor": actor.value}
         )
+    if target == W.PAUSED and pause_reason is None:
+        if actor != Actor.USER:
+            raise ValueError("a platform pause needs a pause_reason")
+        pause_reason = PauseReason.USER
     tasks = _active(list_tasks(session, workflow))
     _check_workflow_guards(workflow, source, target, tasks)
 
@@ -554,6 +567,21 @@ def transition_workflow(
     payload: dict[str, Any] = {"from": source.value, "to": target.value, "actor": actor.value}
     if reason:
         payload["reason"] = reason
+    if user_id is not None:
+        payload["user_id"] = str(user_id)
+    if source == W.PAUSED and workflow.pause_reason is not None:
+        payload["pause_reason"] = workflow.pause_reason.value
+    if target == W.PAUSED and pause_reason is not None:  # set above for every pause
+        payload["pause_reason"] = pause_reason.value
+        workflow.pause_reason = pause_reason
+        workflow.paused_at = now
+        workflow.paused_by_user_id = user_id if pause_reason == PauseReason.USER else None
+        workflow.pause_note = reason if pause_reason == PauseReason.USER else None
+    else:
+        workflow.pause_reason = None
+        workflow.paused_at = None
+        workflow.paused_by_user_id = None
+        workflow.pause_note = None
     record_event(session, workflow, _workflow_event_type(source, target), payload=payload)
     _on_workflow_change(session, workflow, source, target)
     request_orchestration(session, workflow)
@@ -693,6 +721,48 @@ def transition_task(
         _dispatch_waiting(session, workflow)
     if reconcile:
         reconcile_workflow(session, workflow)
+    if source == T.WAITING_APPROVAL:
+        resume_after_decisions(session, workflow)
+
+
+# --- pausing for people's decisions (ADR-0036) --------------------------------------------------
+# A workflow whose plan needs approval also stops while an agent's request waits for an admin,
+# and the platform resumes it once every such request is closed. It never lifts a person's or
+# the deadline's pause.
+
+
+def pause_for_decision(session: Session, workflow: Workflow) -> bool:
+    """Pauses a RUNNING approval-required workflow for an agent's approval request."""
+    if workflow.autonomy_policy != AutonomyPolicy.APPROVAL_REQUIRED or workflow.status != W.RUNNING:
+        return False
+    transition_workflow(
+        session,
+        workflow,
+        W.PAUSED,
+        actor=Actor.SYSTEM,
+        reason=AWAITING_DECISION,
+        pause_reason=PauseReason.AWAITING_DECISION,
+    )
+    return True
+
+
+def resume_after_decisions(session: Session, workflow: Workflow) -> bool:
+    """Resumes a workflow the platform paused for decisions once none is still awaited."""
+    if workflow.status != W.PAUSED or workflow.pause_reason != PauseReason.AWAITING_DECISION:
+        return False
+    waiting = session.execute(
+        select(HumanIntervention).where(
+            HumanIntervention.workflow_id == workflow.id,
+            HumanIntervention.workspace_id == workflow.workspace_id,
+            HumanIntervention.subject == InterventionSubject.AGENT_ACTION.value,
+            HumanIntervention.status == InterventionStatus.OPEN,
+        )
+    ).scalars()
+    # Loaded status decides: a request closed earlier in this transaction may not be flushed.
+    if any(row.status == InterventionStatus.OPEN for row in waiting):
+        return False
+    transition_workflow(session, workflow, W.RUNNING, actor=Actor.SYSTEM, reason=DECISIONS_MADE)
+    return True
 
 
 # Every verifier whose PASSED result a task's latest successful attempt needs (ADR-0034); the

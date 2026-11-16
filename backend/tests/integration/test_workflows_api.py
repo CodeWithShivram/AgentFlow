@@ -471,7 +471,14 @@ def test_events_are_ordered_paginated_append_only_and_free_of_prompts(
         "WORKFLOW_STATUS_CHANGED",
         "ANALYSIS_REQUESTED",
     ]
-    assert events[2]["payload"] == {"from": "PENDING", "to": "PLANNING", "actor": "USER"}
+    # Step 6.2 (ADR-0036): a person's workflow transition names them.
+    user_id = owner.get(f"{API}/auth/me").json()["user"]["id"]
+    assert events[2]["payload"] == {
+        "from": "PENDING",
+        "to": "PLANNING",
+        "actor": "USER",
+        "user_id": user_id,
+    }
     assert set(events[3]["payload"]) == {"actor", "request_id"}
     assert "Research AI support platforms" not in str(page) + str(rest)
     with pytest.raises(DBAPIError, match="append-only"):

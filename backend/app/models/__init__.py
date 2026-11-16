@@ -41,6 +41,7 @@ from app.models.verification import VerificationOutcome, VerificationResult
 from app.models.workflow import (
     AnalysisStatus,
     AutonomyPolicy,
+    PauseReason,
     PlanStatus,
     TaskDependency,
     TaskStatus,
@@ -81,6 +82,7 @@ __all__ = [
     "LlmUsage",
     "OutboxEvent",
     "OutboxStatus",
+    "PauseReason",
     "PlanStatus",
     "RefreshToken",
     "SessionRevocationReason",

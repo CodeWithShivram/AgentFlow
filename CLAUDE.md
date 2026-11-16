@@ -150,6 +150,10 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   ADMINs decide APPROVALs (`app/services/interventions.py`); escalations resolve by acting on the task (pass `user_id`
   in `extra`). Answers reach the planner only inside `<clarifications>`; approved agent actions only inside the
   contract (`approved_actions`). An agent's request counts as an attempt; the limit lives in `state_machine.py`.
+- Pauses (ADR-0036): PAUSED always has `workflows.pause_reason` (USER, DEADLINE_PASSED, AWAITING_DECISION; check
+  constraint, migration 0025); platform pauses pass `pause_reason=` to `transition_workflow`, people's transitions
+  pass `user_id=`. Only `engine.resume_after_decisions` resumes automatically, and only AWAITING_DECISION pauses
+  with no open agent request; never lift a person's or the deadline's pause.
 - Workflow events are append-only.
 
 ## Security

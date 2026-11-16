@@ -378,7 +378,15 @@ export interface Workflow {
   updated_at: IsoDateTime;
   started_at: IsoDateTime | null;
   completed_at: IsoDateTime | null;
+  /** Set while PAUSED (ADR-0036). `pause_note` is a person's text: plain text only. */
+  pause_reason?: PauseReason | null;
+  paused_by_user_id?: Uuid | null;
+  paused_at?: IsoDateTime | null;
+  pause_note?: string | null;
 }
+
+/** Why a workflow is paused. Only AWAITING_DECISION is lifted by the platform itself. */
+export type PauseReason = "USER" | "DEADLINE_PASSED" | "AWAITING_DECISION";
 
 export interface AcceptanceCriterion {
   id: string;

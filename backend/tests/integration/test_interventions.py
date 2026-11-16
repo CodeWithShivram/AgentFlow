@@ -32,6 +32,7 @@ from app.models import (
     InterventionSubject,
     InterventionType,
     OutboxEvent,
+    PauseReason,
     TaskStatus,
     Workflow,
     WorkflowStatus,
@@ -348,7 +349,13 @@ class World:
     agent_id: uuid.UUID
 
 
-def _running(admin: Factory, client: TestClient, *, attempt_count: int = 0) -> World:
+def _running(
+    admin: Factory,
+    client: TestClient,
+    *,
+    attempt_count: int = 0,
+    policy: AutonomyPolicy = AutonomyPolicy.AUTONOMOUS,
+) -> World:
     """A RUNNING workflow in the client's workspace with one task, pre-assigned and
     dispatched."""
     workspace_id = uuid.UUID(my_workspace(client))
@@ -375,7 +382,7 @@ def _running(admin: Factory, client: TestClient, *, attempt_count: int = 0) -> W
             workspace_id=workspace_id,
             created_by_user_id=uuid.UUID(_user_id(client)),
             prompt="p",
-            autonomy_policy=AutonomyPolicy.AUTONOMOUS,
+            autonomy_policy=policy,
         )
         s.add(workflow)
         s.flush()
@@ -393,7 +400,10 @@ def _running(admin: Factory, client: TestClient, *, attempt_count: int = 0) -> W
         )
         s.add(task)
         s.flush()
-        for target in (WorkflowStatus.PLANNING, WorkflowStatus.READY, WorkflowStatus.RUNNING):
+        path = [WorkflowStatus.PLANNING, WorkflowStatus.READY, WorkflowStatus.RUNNING]
+        if policy == AutonomyPolicy.APPROVAL_REQUIRED:
+            path.insert(1, WorkflowStatus.AWAITING_APPROVAL)
+        for target in path:
             engine.transition_workflow(s, workflow, target, actor=Actor.USER)
         s.commit()
         return World(workspace_id, workflow.id, task.id, agent.id)
@@ -565,3 +575,112 @@ def test_the_worker_role_can_open_and_close_requests_but_not_delete_them(
         s.delete(row)
         with pytest.raises(Exception, match="permission denied"):
             s.flush()
+
+
+# --- pausing for decisions (Step 6.2, ADR-0036) --------------------------------------------
+
+
+def _workflow(admin: Factory, world: World) -> Workflow:
+    with session_scope(admin) as s:
+        return s.get_one(Workflow, world.workflow_id)
+
+
+def _dispatches(admin: Factory, world: World) -> int:
+    with session_scope(admin) as s:
+        return len(
+            s.scalars(
+                select(OutboxEvent).where(
+                    OutboxEvent.event_type == outbox.TASK_DISPATCH,
+                    OutboxEvent.task_id == world.task_id,
+                )
+            ).all()
+        )
+
+
+def test_an_approval_request_pauses_an_approval_workflow_until_the_decision(
+    owner: TestClient, admin_factory: Factory, worker_factory: Factory
+) -> None:
+    # Handoff critical scenario 10: human approval pauses and resumes a workflow.
+    world = _running(admin_factory, owner, policy=AutonomyPolicy.APPROVAL_REQUIRED)
+    _ask(admin_factory, worker_factory, world)
+
+    paused = owner.get(_wf_url(owner, f"/{world.workflow_id}")).json()
+    assert paused["status"] == "PAUSED" and paused["pause_reason"] == "AWAITING_DECISION"
+    assert paused["paused_at"] and paused["paused_by_user_id"] is None
+    request = _intervention(admin_factory, world, "agent_action")
+
+    approved = owner.post(_url(owner, f"/{request.id}/approve"), headers=csrf(owner))
+    assert approved.status_code == 200, approved.text
+
+    resumed = owner.get(_wf_url(owner, f"/{world.workflow_id}")).json()
+    assert resumed["status"] == "RUNNING" and resumed["pause_reason"] is None
+    assert resumed["paused_at"] is None
+    assert _dispatches(admin_factory, world) == 2  # the next attempt is dispatched at once
+    changes = [
+        e["payload"]
+        for e in _events(owner, str(world.workflow_id))
+        if e["event_type"] == "WORKFLOW_STATUS_CHANGED" and e["task_id"] is None
+    ]
+    assert changes[-2]["to"] == "PAUSED" and changes[-2]["reason"] == engine.AWAITING_DECISION
+    assert changes[-1] == {
+        "from": "PAUSED",
+        "to": "RUNNING",
+        "actor": "SYSTEM",
+        "reason": engine.DECISIONS_MADE,
+        "pause_reason": "AWAITING_DECISION",
+    }
+
+
+def test_autonomous_workflows_keep_running_while_one_task_waits(
+    owner: TestClient, admin_factory: Factory, worker_factory: Factory
+) -> None:
+    world = _running(admin_factory, owner)
+    _ask(admin_factory, worker_factory, world)
+    assert _workflow(admin_factory, world).status == WorkflowStatus.RUNNING
+
+
+def test_the_platform_never_lifts_a_person_s_pause(
+    owner: TestClient, admin_factory: Factory, worker_factory: Factory
+) -> None:
+    world = _running(admin_factory, owner, policy=AutonomyPolicy.APPROVAL_REQUIRED)
+    _ask(admin_factory, worker_factory, world)
+    # A person resumes by hand, then pauses again with a note: the pause is now theirs.
+    assert _move(owner, str(world.workflow_id), "RUNNING") == 200
+    revision = owner.get(_wf_url(owner, f"/{world.workflow_id}")).json()["revision"]
+    paused = owner.post(
+        _wf_url(owner, f"/{world.workflow_id}/transitions"),
+        json={"to_status": "PAUSED", "revision": revision, "reason": "Waiting for legal review"},
+        headers=csrf(owner),
+    ).json()
+    assert paused["pause_reason"] == "USER" and paused["paused_by_user_id"] == _user_id(owner)
+    assert paused["pause_note"] == "Waiting for legal review"
+    request = _intervention(admin_factory, world, "agent_action")
+
+    assert owner.post(_url(owner, f"/{request.id}/approve"), headers=csrf(owner)).status_code == 200
+
+    still = _workflow(admin_factory, world)
+    assert still.status == WorkflowStatus.PAUSED and still.pause_reason == PauseReason.USER
+    assert _task(admin_factory, world).status == TaskStatus.ASSIGNED
+    assert _dispatches(admin_factory, world) == 1  # nothing runs until people resume
+    assert _move(owner, str(world.workflow_id), "RUNNING") == 200
+    assert _dispatches(admin_factory, world) == 2
+
+
+def test_cancelling_the_waiting_task_also_resumes_the_workflow(
+    owner: TestClient, admin_factory: Factory, worker_factory: Factory
+) -> None:
+    world = _running(admin_factory, owner, policy=AutonomyPolicy.APPROVAL_REQUIRED)
+    _ask(admin_factory, worker_factory, world)
+    task = owner.get(_wf_url(owner, f"/{world.workflow_id}/tasks/{world.task_id}")).json()
+
+    cancelled = owner.post(
+        _wf_url(owner, f"/{world.workflow_id}/tasks/{world.task_id}/cancel"),
+        json={"revision": task["revision"]},
+        headers=csrf(owner),
+    )
+    assert cancelled.status_code == 200, cancelled.text
+    # No decision is awaited any more; the workflow then goes on (here: blocked by the
+    # cancelled required task, which people resolve).
+    workflow = _workflow(admin_factory, world)
+    assert workflow.pause_reason is None
+    assert workflow.status in {WorkflowStatus.RUNNING, WorkflowStatus.BLOCKED}

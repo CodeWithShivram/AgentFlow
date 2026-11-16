@@ -6,6 +6,7 @@ connection, transaction and identity map, so loaded objects and the caller's tra
 shared. Celery workers call the engine directly with a sync Session.
 """
 
+import uuid
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,9 +39,12 @@ async def transition_workflow(
     *,
     actor: Actor,
     reason: str | None = None,
+    user_id: uuid.UUID | None = None,
 ) -> None:
     await session.run_sync(
-        lambda sync: engine.transition_workflow(sync, workflow, target, actor=actor, reason=reason)
+        lambda sync: engine.transition_workflow(
+            sync, workflow, target, actor=actor, reason=reason, user_id=user_id
+        )
     )
 
 

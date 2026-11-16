@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-import { createWorkflow, newUser, visibleText, workspaceUrl } from "./support/helpers";
+import { addTask, createWorkflow, newUser, visibleText, workspaceUrl } from "./support/helpers";
 
 test("journey 13: answer the analysis's question from the workflow and find it on the Requests page", async ({
   browser,
@@ -27,5 +27,35 @@ test("journey 13: answer the analysis's question from the workflow and find it o
   const answered = page.getByRole("article", { name: "Question about the request" });
   await expect(answered.getByText("Two pages, for executives.")).toBeVisible();
   await expect(answered.getByRole("link", { name: "Write a report" })).toBeVisible();
+  await user.context.close();
+});
+
+test("journey 14: pause a running workflow with a reason, see why it is paused, and resume", async ({
+  browser,
+}) => {
+  const user = await newUser(browser, "pause");
+  const { page } = user;
+  await createWorkflow(page, user.workspaceId, "Write the quarterly release notes for the team", {
+    autonomous: true,
+  });
+  await page.getByRole("button", { name: "Start planning" }).click();
+  await addTask(page, "Draft the notes");
+  await page.getByRole("button", { name: "Mark plan ready" }).click();
+  await expect(visibleText(page, "Ready")).toBeVisible();
+  await page.getByRole("button", { name: "Start workflow" }).click();
+  await expect(visibleText(page, "Running")).toBeVisible();
+
+  // Step 6.2: a person's pause records who and, optionally, why.
+  await page.getByRole("button", { name: "Pause" }).click();
+  const dialog = page.getByRole("alertdialog");
+  await dialog.getByLabel("Reason (optional)").fill("Waiting for legal review");
+  await dialog.getByRole("button", { name: "Pause" }).click();
+  const banner = page.getByRole("region", { name: "Paused" });
+  await expect(banner.getByText("Paused by you")).toBeVisible();
+  await expect(banner.getByText("Waiting for legal review")).toBeVisible();
+
+  await page.getByRole("button", { name: "Resume" }).click();
+  await expect(visibleText(page, "Running")).toBeVisible();
+  await expect(banner).toBeHidden();
   await user.context.close();
 });

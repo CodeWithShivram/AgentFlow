@@ -288,6 +288,12 @@ Workflow tasks are executed by Celery workers, fed through a transactional outbo
 
 Every response records who gave it. Requests are withdrawn when the work moves on (a newer analysis, a cancelled task or workflow). `GET/POST /workspaces/{id}/interventions…` is the API.
 
+**Pausing and resuming** ([ADR-0036](docs/ADR/0036-pause-and-resume.md)). A paused workflow shows why: a member paused it (with their optional reason), its deadline passed, or it waits for a decision.
+
+In a workflow whose plan needs approval, an agent's approval request pauses the whole workflow. Once the admin decides, the platform resumes it and starts the agent's next attempt. Autonomous workflows keep running their other tasks meanwhile.
+
+The platform never lifts a person's or the deadline's pause. Resuming dispatches waiting tasks by priority, within the parallel task limit.
+
 **Replanning** ([ADR-0033](docs/ADR/0033-replanning.md)). A paused or blocked workflow can be replanned: "Replan remaining work" asks the planner to draft only what remains, building on the completed tasks it keeps. The draft is validated like any plan. Confirming it replaces the unfinished tasks (they stay as history, and failed ones stay as they are), once nothing is running or being verified. Workflows that require plan approval need an admin to confirm a replan. Confirming never resumes work. A blocked workflow's Next step banner suggests replanning; the platform never starts one by itself.
 
 **Cancellation and recovery** ([ADR-0029](docs/ADR/0029-cancellation-and-restart-recovery.md)). Cancelling a task or workflow stops a running agent at its next model or tool call; pausing lets running attempts finish. Every minute, a recovery sweep picks up work a lost worker or message left behind:

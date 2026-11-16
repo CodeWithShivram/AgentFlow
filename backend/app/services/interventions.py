@@ -213,7 +213,12 @@ async def decide(
         await _resolve(session, access, workflow, row, {"decision": decision})
         target = WorkflowStatus.READY if decision == "approve" else WorkflowStatus.PLANNING
         await transition_workflow(
-            session, workflow, target, actor=Actor.USER, reason=f"plan approval: {decision}"
+            session,
+            workflow,
+            target,
+            actor=Actor.USER,
+            reason=f"plan approval: {decision}",
+            user_id=access.user_id,
         )
     elif row.subject == InterventionSubject.AGENT_ACTION and row.task_id is not None:
         task = (
