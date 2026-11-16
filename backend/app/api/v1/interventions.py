@@ -11,12 +11,18 @@ from fastapi import APIRouter, Depends, Query
 
 from app.api.deps import DbSession, workspace_role
 from app.models import InterventionStatus, WorkspaceRole
-from app.schemas.interventions import AnswerRequest, InterventionResponse, RejectRequest
+from app.schemas.interventions import (
+    AnswerRequest,
+    ApprovalDecisionResponse,
+    InterventionResponse,
+    RejectRequest,
+)
 from app.schemas.workspaces import Page
 from app.services import interventions as service
 from app.services.authorization import WorkspaceAccess
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/interventions", tags=["interventions"])
+approvals_router = APIRouter(prefix="/workspaces/{workspace_id}/approvals", tags=["interventions"])
 
 Limit = Annotated[int, Query(ge=1, le=100)]
 Offset = Annotated[int, Query(ge=0, le=100_000)]
@@ -37,6 +43,22 @@ async def list_interventions(
     """The workspace's requests, newest first."""
     items, total = await service.list_interventions(
         session, access, status=status, workflow_id=workflow_id, limit=limit, offset=offset
+    )
+    return Page(items=items, total=total, limit=limit, offset=offset)
+
+
+@approvals_router.get("")
+async def list_approvals(
+    access: Admin,
+    session: DbSession,
+    workflow_id: uuid.UUID | None = None,
+    limit: Limit = 50,
+    offset: Offset = 0,
+) -> Page[ApprovalDecisionResponse]:
+    """The workspace's approval decisions, newest first (ADMIN, ADR-0038): who decided, in which
+    role, what exactly (fingerprint) and for which attempt."""
+    items, total = await service.list_approvals(
+        session, access, workflow_id=workflow_id, limit=limit, offset=offset
     )
     return Page(items=items, total=total, limit=limit, offset=offset)
 

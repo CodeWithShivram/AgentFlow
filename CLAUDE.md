@@ -158,6 +158,10 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   `Settings.intervention_approval_ttl_hours`, passed to `runner.finish`); the recovery sweep makes them EXPIRED and
   applies a rejection. Every decision on an agent request goes through `engine.decide_agent_action` (`stop` escalates).
   Rejection notes are for people: keep them out of events, logs, contracts and prompts.
+- Approval audit (ADR-0038): every APPROVAL request has `required_role` (ADMIN; OWNER for agents granted HIGH-risk
+  tools, `runner.approval_role`) and the service enforces it. Decisions write an immutable `approval_decisions` row
+  via `engine.resolve_intervention` (pass `decided_role`); approved actions reach only the next attempt and only while
+  the record's `action_fingerprint` matches the request.
 - Workflow events are append-only.
 
 ## Security

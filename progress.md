@@ -1,9 +1,9 @@
 # AgentFlow Progress
 
 ## Current position
-- Phase: 6 — Human intervention, in progress (Phases 2–5 complete; Phase 1 released as `v0.1.0`, pushed with its tag)
-- Last completed step: 6.3 — Expiration and rejection behaviour
-- Next step: 6.4 — Approval audit records and per-action authorization, which needs a short plan and the owner's go-ahead
+- Phase: 6 — Human intervention, complete with Step 6.4 (Phases 2–6 complete; Phase 1 released as `v0.1.0`, pushed with its tag)
+- Last completed step: 6.4 — Approval audit records and per-action authorization
+- Next step: 7.1 — Centralized usage tracker and pricing snapshots (Phase 7), which needs a short plan and the owner's go-ahead
 
 ## Completed steps
 | Step | Commit message | Hash |
@@ -47,16 +47,17 @@
 | 5.5 | `feat(verification): escalate exhausted work and let only platform verification accept tasks` | `f51f77f` (pushed, CI ✔) |
 | 6.1 | `feat(interventions): add clarification and approval requests` | `92e5327` (pushed, CI ✔) |
 | 6.2 | `feat(workflows): pause for decisions and resume safely` | `4ba0be9` (pushed, CI ✔) |
-| 6.3 | `feat(interventions): expire approval requests and offer rejection choices` | latest commit touching `docs/ADR/0037-expiry-and-rejection.md` |
+| 6.3 | `feat(interventions): expire approval requests and offer rejection choices` | `0386fba` (pushed, CI ✔) |
+| 6.4 | `feat(interventions): audit approval decisions and authorize them per action` | latest commit touching `docs/ADR/0038-approval-audit-and-authorization.md` |
 
 ## Environment snapshot (2026-11-14)
 | Item | Value |
 |---|---|
-| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `4ba0be9` plus tag `v0.1.0` (owner-authorized) |
+| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `0386fba` plus tag `v0.1.0` (owner-authorized) |
 | Python / uv / Node / npm | 3.12.14 via uv 0.12.9 / Node 24.13.0 / npm 11.6.2 |
 | Celery / kombu | 5.7.0 / 5.7.0 |
 | Docker | 29.9.3 — `agentflow` stack healthy (Docker Desktop must be started first; it had stopped and was restarted in Steps 3.1 and 3.4) |
-| Dev database | `agentflow` at `0026 (head)`; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
+| Dev database | `agentflow` at `0027 (head)`; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
 | Local `.env` | holds generated `WORKER_DB_PASSWORD` and (new) `API_DB_PASSWORD` (gitignored) |
 | Port 8000 | Used by another local project (`easa`); smoke tests used 8010 |
 | E2E | API :8011 (as `agentflow_api`), frontend :3100, database `agentflow_e2e` (reset each run), Redis DBs 2/3, installed Google Chrome |
@@ -64,6 +65,43 @@
 | Test HTTP client | `httpx2` 2.16.0 (replaces `httpx`, OD-10); `httpx` is back only as a LiteLLM dependency |
 | LiteLLM | 1.109.1, imported by workers only when `MODEL_PROVIDER=litellm`; `.env` keeps the mock |
 | LangGraph | 1.2.22 (with langchain-core 1.8.0 and langsmith 0.14.17), imported by workers only; LangSmith tracing disabled; checkpoints via `langgraph-checkpoint-postgres` 3.2.1 |
+
+## Step 6.4 — approval audit records and per-action authorization (ADR-0038)
+- **Owner decisions (2026-11-16):**
+  - the role needed follows the agent's risk;
+  - the workflow's creator may decide when their role allows;
+  - the history shows on each request and on a workspace page;
+  - the audit keeps the rejection note.
+- **Audit:** `approval_decisions` (migration `0027`: RLS, a trigger refusing updates, worker SELECT/INSERT) holds one immutable row per decided APPROVAL request:
+  - the decision, `then` and note;
+  - the required role;
+  - the decider and their role, or `expired` with neither;
+  - the asking `execution_id`;
+  - `action_fingerprint` (SHA-256 of what was shown, `engine.action_fingerprint`).
+
+  `engine.resolve_intervention` writes it for every decision path (endpoints, the workflow's buttons, expiry); callers pass `decided_role`.
+- **Binding:** `rework.previous_attempt_approvals` passes an approved action on only when its record exists, approves and still matches the request's fingerprint. A later attempt never inherits it.
+- **Per-action authorization:** `human_interventions.required_role` is set on open: plan approvals need ADMIN; agent requests need OWNER when the version is granted a HIGH-risk tool (`runner.approval_role`), else ADMIN. It is backfilled for existing approvals and checked by a constraint. The service refuses lower roles with 403 `INSUFFICIENT_ROLE`.
+- **API:** `GET /workspaces/{id}/approvals` (ADMIN); requests carry `required_role` and `decision_record` (with `by_workflow_creator`).
+- **Frontend:**
+  - requests show the role they need ("An owner approves…") and the audit line (role, creator, fingerprint);
+  - a new "Approval history" page (ADMIN), linked from Requests.
+- **Tests:**
+  - 6 integration tests: records for every path with role, fingerprint and attempt; the approvals list is admin-only and workspace-scoped; records are append-only; an approval reaches the next attempt only; a changed request loses its approval; OWNER is needed for HIGH-risk agents (scenario 11);
+  - unit tests for the fingerprint and `approval_role`;
+  - 4 component tests;
+  - journey 13 extended to the Approval history page.
+- **Tests changed (intended):** the expected table lists (migrations, RLS).
+
+## Checks last executed (Step 6.4)
+- **Full gate (`check.ps1 -E2E`) ✔, exit 0, on the first run:**
+  - backend: ruff format, ruff check, mypy (198 files), alembic check;
+  - pytest **1131 passed**;
+  - frontend: eslint, typecheck, Vitest **135**, Playwright **17 passed** (journey 13 now reaches the Approval history), build.
+- **Deliberate-bug check** (restored byte-for-byte): disabling the service's per-action role check lets an admin approve a HIGH-risk agent's request (200, not 403), and the scenario 11 test fails.
+- **Environment:**
+  - the dev DB is at `0027` and the roles are re-provisioned;
+  - no servers were left running after E2E.
 
 ## Step 6.3 — expiring approval requests and rejection choices (ADR-0037)
 - **Owner decisions (2026-11-16):**
@@ -93,7 +131,7 @@
 - **Test changed (intended):** the state machine test, for the two new edges.
 - **Not covered by E2E:** expiry needs a clock in the past, so it is tested through the sweep only.
 
-## Checks last executed (Step 6.3)
+## Checks (Step 6.3)
 - **Full gate (`check.ps1 -E2E`) ✔, exit 0, on the first run:**
   - backend: ruff format, ruff check, mypy (196 files), alembic check;
   - pytest **1123 passed**;
@@ -1021,6 +1059,6 @@
 None.
 
 ## Next exact action
-1. **Push Step 6.3** on the owner's go-ahead, and confirm CI on GitHub.
-2. **Step 6.4 (approval audit records and per-action authorization):** present a short plan and get the owner's go-ahead.
+1. **Push Step 6.4** on the owner's go-ahead, and confirm CI on GitHub. Phase 6 is then complete.
+2. **Phase 7, Step 7.1 (centralized usage tracker and pricing snapshots):** present a short plan and get the owner's go-ahead.
 3. **Before any hosted deployment:** settle OD-14, OD-19 and OD-20.

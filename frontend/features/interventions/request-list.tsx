@@ -22,7 +22,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
 import { describeError } from "@/lib/api/errors";
-import type { Intervention, InterventionSubject } from "@/lib/api/types";
+import type { ApprovalRecord, Intervention, InterventionSubject } from "@/lib/api/types";
 import { humanize } from "@/lib/format";
 import { workspacePath } from "@/lib/navigation";
 import { useCan, useWorkspace } from "@/lib/workspace";
@@ -31,7 +31,7 @@ export const interventionKeys = {
   all: (workspaceId: string) => ["interventions", workspaceId] as const,
 };
 
-const SUBJECT_LABELS: Record<InterventionSubject, string> = {
+export const SUBJECT_LABELS: Record<InterventionSubject, string> = {
   analysis_question: "Question about the request",
   plan_approval: "Plan approval",
   agent_action: "Agent asks for approval",
@@ -201,7 +201,21 @@ function Resolution({ item }: { item: Intervention }) {
           {note}
         </p>
       ) : null}
+      {item.decision_record ? <AuditLine record={item.decision_record} /> : null}
     </div>
+  );
+}
+
+/** Who decided, in which role, and the fingerprint of what they were shown (ADR-0038). */
+export function AuditLine({ record }: { record: ApprovalRecord }) {
+  const who = record.expired
+    ? "Expired (no person decided)"
+    : `Decided as ${humanize(record.decided_role ?? "")}${record.by_workflow_creator ? " by the workflow's creator" : ""}`;
+  return (
+    <p className="text-xs">
+      {who} · needed {humanize(record.required_role)} · fingerprint{" "}
+      <code title={record.action_fingerprint}>{record.action_fingerprint.slice(0, 12)}…</code>
+    </p>
   );
 }
 
@@ -276,7 +290,9 @@ const THEN_CHOICES: readonly (readonly [Then, string, string])[] = [
 
 function Decision({ item }: { item: Intervention }) {
   const workspace = useWorkspace();
-  const isAdmin = useCan("ADMIN");
+  // Per-action authorization (ADR-0038): the request names the least role that may decide it.
+  const required = item.required_role ?? "ADMIN";
+  const canDecide = useCan(required);
   const refresh = useRefresh(item.workflow_id);
   const [rejecting, setRejecting] = useState(false);
   const [then, setThen] = useState<Then>("retry");
@@ -302,7 +318,15 @@ function Decision({ item }: { item: Intervention }) {
       refresh();
     },
   });
-  if (!isAdmin) return <p className="text-muted-foreground">An admin approves or rejects this request.</p>;
+  if (!canDecide) {
+    return (
+      <p className="text-muted-foreground">
+        {required === "OWNER"
+          ? "An owner approves or rejects this request: the agent holds high-risk tools."
+          : "An admin approves or rejects this request."}
+      </p>
+    );
+  }
   const noteId = `reject-note-${item.id}`;
   return (
     <>

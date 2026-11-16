@@ -27,6 +27,11 @@ test("journey 13: answer the analysis's question from the workflow and find it o
   const answered = page.getByRole("article", { name: "Question about the request" });
   await expect(answered.getByText("Two pages, for executives.")).toBeVisible();
   await expect(answered.getByRole("link", { name: "Write a report" })).toBeVisible();
+
+  // Step 6.4: owners and admins reach the approval history from the Requests page.
+  await page.getByRole("link", { name: "Approval history" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Approval history" })).toBeVisible();
+  await expect(visibleText(page, "No decisions yet")).toBeVisible();
   await user.context.close();
 });
 

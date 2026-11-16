@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError
 from app.models import (
+    ApprovalDecision,
     HumanIntervention,
     InterventionStatus,
     InterventionSubject,
@@ -23,9 +24,14 @@ from app.models import (
     Workflow,
     WorkflowStatus,
     WorkflowTask,
+    WorkspaceRole,
 )
-from app.schemas.interventions import InterventionResponse
-from app.services.authorization import WorkspaceAccess
+from app.schemas.interventions import (
+    ApprovalDecisionResponse,
+    ApprovalRecord,
+    InterventionResponse,
+)
+from app.services.authorization import InsufficientRoleError, WorkspaceAccess, role_at_least
 from app.services.transitions import transition_workflow
 from app.services.workflows import lock_for_change
 from app.workflows import engine
@@ -52,7 +58,27 @@ class InterventionTypeMismatchError(AppError):
     message = "This request does not take that kind of response."
 
 
-def response(row: HumanIntervention, prompt: str) -> InterventionResponse:
+def approval_record(record: ApprovalDecision, creator_id: uuid.UUID) -> ApprovalRecord:
+    return ApprovalRecord(
+        decision=record.decision,
+        then=record.then,
+        note=record.note,
+        required_role=record.required_role,
+        decided_by_user_id=record.decided_by_user_id,
+        decided_role=record.decided_role,
+        expired=record.expired,
+        by_workflow_creator=record.decided_by_user_id == creator_id,
+        action_fingerprint=record.action_fingerprint,
+        decided_at=record.decided_at,
+    )
+
+
+def response(
+    row: HumanIntervention,
+    prompt: str,
+    record: ApprovalDecision | None = None,
+    creator_id: uuid.UUID | None = None,
+) -> InterventionResponse:
     return InterventionResponse(
         id=row.id,
         workflow_id=row.workflow_id,
@@ -70,6 +96,29 @@ def response(row: HumanIntervention, prompt: str) -> InterventionResponse:
         expires_at=row.expires_at,
         created_at=row.created_at,
         workflow_prompt=prompt[:PROMPT_PREVIEW],
+        required_role=row.required_role,
+        decision_record=(
+            approval_record(record, creator_id)
+            if record is not None and creator_id is not None
+            else None
+        ),
+    )
+
+
+def _with_records() -> Any:
+    """Requests with their workflow's prompt and creator and, once decided, their audit."""
+    return (
+        select(HumanIntervention, Workflow.prompt, Workflow.created_by_user_id, ApprovalDecision)
+        .join(
+            Workflow,
+            (Workflow.id == HumanIntervention.workflow_id)
+            & (Workflow.workspace_id == HumanIntervention.workspace_id),
+        )
+        .outerjoin(
+            ApprovalDecision,
+            (ApprovalDecision.intervention_id == HumanIntervention.id)
+            & (ApprovalDecision.workspace_id == HumanIntervention.workspace_id),
+        )
     )
 
 
@@ -89,12 +138,7 @@ async def list_interventions(
     if workflow_id is not None:
         condition &= HumanIntervention.workflow_id == workflow_id
     rows = await session.execute(
-        select(HumanIntervention, Workflow.prompt)
-        .join(
-            Workflow,
-            (Workflow.id == HumanIntervention.workflow_id)
-            & (Workflow.workspace_id == HumanIntervention.workspace_id),
-        )
+        _with_records()
         .where(condition)
         .order_by(HumanIntervention.created_at.desc(), HumanIntervention.id)
         .limit(limit)
@@ -103,7 +147,9 @@ async def list_interventions(
     total = await session.execute(
         select(func.count()).select_from(HumanIntervention).where(condition)
     )
-    return [response(row, prompt) for row, prompt in rows.all()], total.scalar_one()
+    return [
+        response(row, prompt, record, creator) for row, prompt, creator, record in rows.all()
+    ], total.scalar_one()
 
 
 async def get_intervention(
@@ -111,13 +157,7 @@ async def get_intervention(
 ) -> InterventionResponse:
     found = (
         await session.execute(
-            select(HumanIntervention, Workflow.prompt)
-            .join(
-                Workflow,
-                (Workflow.id == HumanIntervention.workflow_id)
-                & (Workflow.workspace_id == HumanIntervention.workspace_id),
-            )
-            .where(
+            _with_records().where(
                 HumanIntervention.id == intervention_id,
                 HumanIntervention.workspace_id == access.workspace_id,
             )
@@ -125,8 +165,8 @@ async def get_intervention(
     ).first()
     if found is None:
         raise InterventionNotFoundError()
-    row, prompt = found
-    return response(row, prompt)
+    row, prompt, creator, record = found
+    return response(row, prompt, record, creator)
 
 
 async def _lock_open(
@@ -179,6 +219,7 @@ async def _resolve(
             status=InterventionStatus.RESOLVED,
             resolution=resolution,
             resolved_by_user_id=access.user_id,
+            decided_role=access.role,
         )
     )
 
@@ -193,7 +234,7 @@ async def answer(
     )
     await _resolve(session, access, workflow, row, {"answer": text})
     await session.commit()
-    return response(row, workflow.prompt)
+    return await get_intervention(session, access, intervention_id)
 
 
 async def decide(
@@ -210,6 +251,11 @@ async def decide(
     told the decision, unless a rejection `stop`s the task for people (ADR-0037); the attempt
     that asked counts, so its limit still applies. A rejection's `note` is for people only."""
     workflow, row = await _lock_open(session, access, intervention_id, InterventionType.APPROVAL)
+    # Per-action authorization (ADR-0038): the request names the least role that may decide it.
+    if row.required_role is None or not role_at_least(
+        access.role, WorkspaceRole(row.required_role)
+    ):
+        raise InsufficientRoleError()
     if row.subject == InterventionSubject.PLAN_APPROVAL:
         if workflow.status != WorkflowStatus.AWAITING_APPROVAL:  # closed by the engine otherwise
             raise InterventionClosedError()
@@ -250,9 +296,64 @@ async def decide(
                 stop=stop,
                 note=note,
                 user_id=access.user_id,
+                role=access.role,
             )
         )
     else:
         raise InterventionTypeMismatchError()
     await session.commit()
-    return response(row, workflow.prompt)
+    return await get_intervention(session, access, intervention_id)
+
+
+async def list_approvals(
+    session: AsyncSession,
+    access: WorkspaceAccess,
+    *,
+    workflow_id: uuid.UUID | None,
+    limit: int,
+    offset: int,
+) -> tuple[list[ApprovalDecisionResponse], int]:
+    """The workspace's approval decisions (ADR-0038), newest first."""
+    condition = ApprovalDecision.workspace_id == access.workspace_id
+    if workflow_id is not None:
+        condition &= ApprovalDecision.workflow_id == workflow_id
+    rows = await session.execute(
+        select(
+            ApprovalDecision,
+            HumanIntervention.requested_action,
+            Workflow.prompt,
+            Workflow.created_by_user_id,
+        )
+        .join(
+            HumanIntervention,
+            (HumanIntervention.id == ApprovalDecision.intervention_id)
+            & (HumanIntervention.workspace_id == ApprovalDecision.workspace_id),
+        )
+        .join(
+            Workflow,
+            (Workflow.id == ApprovalDecision.workflow_id)
+            & (Workflow.workspace_id == ApprovalDecision.workspace_id),
+        )
+        .where(condition)
+        .order_by(ApprovalDecision.decided_at.desc(), ApprovalDecision.id)
+        .limit(limit)
+        .offset(offset)
+    )
+    total = await session.execute(
+        select(func.count()).select_from(ApprovalDecision).where(condition)
+    )
+    items = [
+        ApprovalDecisionResponse(
+            **approval_record(record, creator).model_dump(),
+            id=record.id,
+            intervention_id=record.intervention_id,
+            workflow_id=record.workflow_id,
+            task_id=record.task_id,
+            execution_id=record.execution_id,
+            subject=record.subject,
+            requested_action=action,
+            workflow_prompt=prompt[:PROMPT_PREVIEW],
+        )
+        for record, action, prompt, creator in rows.all()
+    ]
+    return items, total.scalar_one()

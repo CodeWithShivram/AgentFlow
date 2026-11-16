@@ -7,6 +7,7 @@ import type {
   Agent,
   AgentCatalog,
   AgentSuggestionList,
+  ApprovalDecision,
   FailedJob,
   Intervention,
   InterventionStatus,
@@ -177,6 +178,12 @@ export function createEndpoints(client: ApiClient) {
       /** `then: "stop"` escalates an agent's task instead of retrying; the note is for people only. */
       reject: (workspaceId: Uuid, interventionId: Uuid, body: { then?: "retry" | "stop"; note?: string } = {}) =>
         client.post<Intervention>(`${ws(workspaceId)}/interventions/${enc(interventionId)}/reject`, body),
+    },
+
+    /** The workspace's approval decisions, newest first (ADMIN, ADR-0038). */
+    approvals: {
+      list: (workspaceId: Uuid, query: PageQuery & { workflow_id?: Uuid } = {}) =>
+        client.get<Page<ApprovalDecision>>(`${ws(workspaceId)}/approvals`, { query: { ...query } }),
     },
 
     tasks: {

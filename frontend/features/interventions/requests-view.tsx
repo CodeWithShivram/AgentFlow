@@ -2,15 +2,18 @@
 
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { InboxIcon } from "lucide-react";
+import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
 import { PageHeader } from "@/components/common/page-header";
 import { Pagination } from "@/components/common/pagination";
 import { EmptyState, ErrorState, ListSkeleton } from "@/components/common/states";
+import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api } from "@/lib/api";
 import type { InterventionStatus } from "@/lib/api/types";
-import { useWorkspace } from "@/lib/workspace";
+import { workspacePath } from "@/lib/navigation";
+import { useCan, useWorkspace } from "@/lib/workspace";
 
 import { interventionKeys, RequestList } from "./request-list";
 
@@ -19,6 +22,7 @@ const PAGE_SIZE = 20;
 /** The workspace's requests for people (ADR-0035); open ones first by default. */
 export function RequestsView() {
   const workspace = useWorkspace();
+  const isAdmin = useCan("ADMIN");
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
@@ -47,6 +51,13 @@ export function RequestsView() {
       <PageHeader
         title="Requests"
         description="Questions, approvals and escalated tasks that need a person. Answers reach the next plan draft."
+        actions={
+          isAdmin ? (
+            <Button variant="outline" asChild>
+              <Link href={workspacePath(workspace.id, "approvals")}>Approval history</Link>
+            </Button>
+          ) : null
+        }
       />
       <Tabs value={status ?? "all"} onValueChange={(v) => navigate({ status: v })}>
         <TabsList aria-label="Filter requests by status">

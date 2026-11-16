@@ -14,6 +14,37 @@ from app.models import InterventionStatus, InterventionType
 from app.schemas.agents import SafeText
 
 
+class ApprovalRecord(BaseModel):
+    """The immutable audit record of a decision on an approval request (ADR-0038)."""
+
+    decision: Literal["approve", "reject"]
+    then: str | None
+    # A person's note: plain text, people only.
+    note: str | None
+    required_role: str
+    # Null when the request expired (no person decided).
+    decided_by_user_id: uuid.UUID | None
+    decided_role: str | None
+    expired: bool
+    # True when the decider created the workflow (self-approval is allowed; shown for audit).
+    by_workflow_creator: bool
+    # SHA-256 of the action and context the decider was shown.
+    action_fingerprint: str
+    decided_at: datetime
+
+
+class ApprovalDecisionResponse(ApprovalRecord):
+    id: uuid.UUID
+    intervention_id: uuid.UUID
+    workflow_id: uuid.UUID
+    task_id: uuid.UUID | None
+    execution_id: uuid.UUID | None
+    subject: str
+    # What was decided (may be agent text: plain text only) and which work it belonged to.
+    requested_action: str
+    workflow_prompt: str
+
+
 class InterventionResponse(BaseModel):
     id: uuid.UUID
     workflow_id: uuid.UUID
@@ -34,6 +65,10 @@ class InterventionResponse(BaseModel):
     created_at: datetime
     # The start of the workflow's prompt, so an inbox row says which work it is about.
     workflow_prompt: str
+    # APPROVAL only: the least role that may decide (ADR-0038).
+    required_role: str | None = None
+    # The audit record, once an approval request is decided.
+    decision_record: ApprovalRecord | None = None
 
 
 def _not_blank(value: str) -> str:

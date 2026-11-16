@@ -22,6 +22,8 @@ tasks when a running task frees an execution slot. Duplicates are harmless: the 
 on a task that is still ASSIGNED.
 """
 
+import hashlib
+import json
 import uuid
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -34,6 +36,7 @@ from app.execution import outbox
 from app.models import (
     AgentExecution,
     AnalysisStatus,
+    ApprovalDecision,
     AutonomyPolicy,
     ExecutionStatus,
     HumanIntervention,
@@ -51,6 +54,7 @@ from app.models import (
     WorkflowEventType,
     WorkflowStatus,
     WorkflowTask,
+    WorkspaceRole,
 )
 from app.workflows.state_machine import (
     MAX_ATTEMPTS_PER_TASK,
@@ -142,6 +146,22 @@ _PLAN_APPROVAL_ACTION = "Approve the plan so the workflow can start, or send it 
 _CONTEXT_KEYS = ("error_code", "failure_codes", "issue_codes", "attempt_number", "verifier")
 
 
+def action_fingerprint(row: HumanIntervention) -> str:
+    """SHA-256 of exactly what an approval request showed (ADR-0038): its identity, subject,
+    requested action and context. Stored with the decision; checked again before an approved
+    action reaches an agent, so an approval binds to that action and nothing else."""
+    shown = {
+        "intervention_id": str(row.id),
+        "workflow_id": str(row.workflow_id),
+        "task_id": str(row.task_id) if row.task_id else None,
+        "subject": row.subject,
+        "requested_action": row.requested_action,
+        "context": row.context,
+    }
+    encoded = json.dumps(shown, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
 def open_intervention(
     session: Session,
     workflow: Workflow,
@@ -153,10 +173,14 @@ def open_intervention(
     source_key: str,
     task_id: uuid.UUID | None = None,
     expires_at: datetime | None = None,
+    required_role: WorkspaceRole | None = None,
     requested_by: str = "SYSTEM",
     requested_by_agent_id: uuid.UUID | None = None,
 ) -> HumanIntervention | None:
-    """Opens a request once per source; returns None when it already exists."""
+    """Opens a request once per source; returns None when it already exists. An APPROVAL
+    names the least role that may decide it (ADR-0038)."""
+    if (type == InterventionType.APPROVAL) != (required_role is not None):
+        raise ValueError("an approval request, and only one, needs a required_role")
     exists = session.execute(
         select(HumanIntervention.id).where(
             HumanIntervention.workflow_id == workflow.id,
@@ -177,6 +201,7 @@ def open_intervention(
         requested_action=requested_action,
         context=context,
         expires_at=expires_at,
+        required_role=required_role.value if required_role else None,
         requested_by=requested_by,
         requested_by_agent_id=requested_by_agent_id,
         source_key=source_key,
@@ -205,8 +230,32 @@ def resolve_intervention(
     status: InterventionStatus,
     resolution: dict[str, Any],
     resolved_by_user_id: uuid.UUID | None = None,
+    decided_role: WorkspaceRole | None = None,
 ) -> None:
-    """Closes one open request. `resolution` holds a decision, an answer or an outcome."""
+    """Closes one open request. `resolution` holds a decision, an answer or an outcome. A
+    decision on an APPROVAL also writes its immutable audit record (ADR-0038), with the
+    decider's role at that moment."""
+    if row.type == InterventionType.APPROVAL and "decision" in resolution:
+        execution_id = row.context.get("execution_id")
+        session.add(
+            ApprovalDecision(
+                id=uuid.uuid4(),
+                workspace_id=row.workspace_id,
+                workflow_id=row.workflow_id,
+                intervention_id=row.id,
+                task_id=row.task_id,
+                execution_id=uuid.UUID(execution_id) if execution_id else None,
+                subject=row.subject,
+                decision=resolution["decision"],
+                then=resolution.get("then"),
+                note=resolution.get("note"),
+                required_role=row.required_role,
+                decided_by_user_id=resolved_by_user_id,
+                decided_role=decided_role.value if decided_role else None,
+                expired=status == InterventionStatus.EXPIRED,
+                action_fingerprint=action_fingerprint(row),
+            )
+        )
     row.status = status
     row.resolution = resolution
     row.resolved_by_user_id = resolved_by_user_id
@@ -236,6 +285,7 @@ def close_interventions(
     subject: InterventionSubject | None = None,
     task_id: uuid.UUID | None = None,
     resolved_by_user_id: uuid.UUID | None = None,
+    decided_role: WorkspaceRole | None = None,
 ) -> int:
     """Closes the open requests of a workflow (or one task, or one subject)."""
     statement = select(HumanIntervention).where(
@@ -258,6 +308,7 @@ def close_interventions(
             status=status,
             resolution=resolution,
             resolved_by_user_id=resolved_by_user_id,
+            decided_role=decided_role,
         )
     return len(rows)
 
@@ -272,6 +323,7 @@ def decide_agent_action(
     stop: bool = False,
     note: str | None = None,
     user_id: uuid.UUID | None = None,
+    role: WorkspaceRole | None = None,
     expired: bool = False,
 ) -> None:
     """Applies a decision on an agent's approval request (ADR-0035, ADR-0037), for a person or,
@@ -293,6 +345,7 @@ def decide_agent_action(
         status=InterventionStatus.EXPIRED if expired else InterventionStatus.RESOLVED,
         resolution=resolution,
         resolved_by_user_id=user_id,
+        decided_role=role,
     )
     recorded = session.execute(
         select(func.max(AgentExecution.attempt_number)).where(
@@ -407,6 +460,7 @@ def _on_workflow_change(
             type=InterventionType.APPROVAL,
             subject=InterventionSubject.PLAN_APPROVAL,
             requested_action=_PLAN_APPROVAL_ACTION,
+            required_role=WorkspaceRole.ADMIN,
             context={
                 "plan_version": workflow.confirmed_plan_version,
                 "revision": workflow.revision,

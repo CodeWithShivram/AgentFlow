@@ -175,8 +175,8 @@ Acceptance (phase): deterministic tests with mock model responses; invalid plans
 |---|---|---|
 | 6.1 | Clarification and approval request model/API | DONE (ADR-0035) — `92e5327` |
 | 6.2 | Workflow pause/resume | DONE (ADR-0036) — `4ba0be9` |
-| 6.3 | Expiration and rejection behaviour | DONE (ADR-0037) — see `progress.md` |
-| 6.4 | Approval audit records and per-action authorization | NOT_STARTED |
+| 6.3 | Expiration and rejection behaviour | DONE (ADR-0037) — `0386fba` |
+| 6.4 | Approval audit records and per-action authorization | DONE (ADR-0038) — see `progress.md` |
 
 ## Phase 7 — Observability and cost
 

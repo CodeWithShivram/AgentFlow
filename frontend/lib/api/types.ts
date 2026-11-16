@@ -330,6 +330,39 @@ export interface Intervention {
   created_at: IsoDateTime;
   /** The start of the workflow's prompt. */
   workflow_prompt: string;
+  /** APPROVAL only: the least role that may decide it (ADR-0038). */
+  required_role?: WorkspaceRole | null;
+  /** The immutable audit record, once an approval request is decided. */
+  decision_record?: ApprovalRecord | null;
+}
+
+/** The audit record of a decision on an approval request (ADR-0038). */
+export interface ApprovalRecord {
+  decision: "approve" | "reject";
+  then: string | null;
+  /** A person's note: plain text, people only. */
+  note: string | null;
+  required_role: WorkspaceRole;
+  /** Null when the request expired. */
+  decided_by_user_id: Uuid | null;
+  decided_role: WorkspaceRole | null;
+  expired: boolean;
+  by_workflow_creator: boolean;
+  /** SHA-256 of the action and context the decider was shown. */
+  action_fingerprint: string;
+  decided_at: IsoDateTime;
+}
+
+export interface ApprovalDecision extends ApprovalRecord {
+  id: Uuid;
+  intervention_id: Uuid;
+  workflow_id: Uuid;
+  task_id: Uuid | null;
+  execution_id: Uuid | null;
+  subject: InterventionSubject;
+  /** May be agent text: plain text only. */
+  requested_action: string;
+  workflow_prompt: string;
 }
 
 export interface NextStep {

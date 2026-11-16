@@ -28,6 +28,7 @@ from app.models.execution import (
 )
 from app.models.idempotency import IdempotencyKey, IdempotencyStatus
 from app.models.intervention import (
+    ApprovalDecision,
     HumanIntervention,
     InterventionStatus,
     InterventionSubject,
@@ -62,6 +63,7 @@ __all__ = [
     "AgentSelection",
     "AgentStatus",
     "AgentVersion",
+    "ApprovalDecision",
     "AnalysisStatus",
     "AuthSession",
     "AutonomyPolicy",

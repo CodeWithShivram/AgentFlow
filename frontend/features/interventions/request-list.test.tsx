@@ -187,6 +187,47 @@ describe("RequestList", () => {
     expect(stopped!.querySelector("b")).toBeNull();
   });
 
+  it("leaves requests from agents with high-risk tools to owners", () => {
+    renderWith("ADMIN", <RequestList items={[{ ...AGENT_ACTION, required_role: "OWNER" }]} showWorkflow={false} />);
+    expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+    expect(
+      screen.getByText("An owner approves or rejects this request: the agent holds high-risk tools."),
+    ).toBeInTheDocument();
+  });
+
+  it("shows the audit record of a decision", () => {
+    const fingerprint = "ab".repeat(32);
+    renderWith("MEMBER", (
+      <RequestList
+        items={[
+          {
+            ...AGENT_ACTION,
+            status: "RESOLVED",
+            resolution: { decision: "approve" },
+            decision_record: {
+              decision: "approve",
+              then: null,
+              note: null,
+              required_role: "ADMIN",
+              decided_by_user_id: "u-1",
+              decided_role: "OWNER",
+              expired: false,
+              by_workflow_creator: true,
+              action_fingerprint: fingerprint,
+              decided_at: new Date().toISOString(),
+            },
+          },
+        ]}
+        showWorkflow={false}
+      />
+    ));
+    const item = screen.getByRole("article", { name: "Agent asks for approval" });
+    expect(item).toHaveTextContent(
+      "Decided as Owner by the workflow's creator · needed Admin · fingerprint abababababab…",
+    );
+    expect(within(item).getByTitle(fingerprint)).toBeInTheDocument();
+  });
+
   it("shows how a closed request ended", () => {
     renderWith("MEMBER", (
       <RequestList

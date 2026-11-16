@@ -32,6 +32,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.agents.base import AgentContext, BaseAgent
+from app.agents.catalog import ToolRisk, highest_tool_risk
 from app.agents.contract import (
     AgentSubmission,
     InvalidSubmissionError,
@@ -54,6 +55,7 @@ from app.models import (
     Workflow,
     WorkflowStatus,
     WorkflowTask,
+    WorkspaceRole,
 )
 from app.schemas.agents import AgentConfiguration
 from app.services.usage import record_tool_invocation
@@ -410,6 +412,14 @@ def run_agent(
     return validation.submission
 
 
+def approval_role(configuration: Mapping[str, Any]) -> WorkspaceRole:
+    """Who may decide this agent's approval requests (ADR-0038): OWNER when its version is
+    granted any HIGH-risk tool (granting those already needs OWNER, ADR-0008), else ADMIN.
+    Derived from the platform's own record of the version, never from the agent's request."""
+    tools = AgentConfiguration.model_validate(configuration).tool_names()
+    return WorkspaceRole.OWNER if highest_tool_risk(tools) == ToolRisk.HIGH else WorkspaceRole.ADMIN
+
+
 def finish(
     session: Session,
     claim: Claim,
@@ -468,6 +478,7 @@ def finish(
             source_key=f"agent_action:{execution.id}",
             task_id=task.id,
             expires_at=datetime.now(UTC) + approval_ttl,
+            required_role=approval_role(claim.configuration),
             requested_by="AGENT",
             requested_by_agent_id=claim.agent_id,
         )

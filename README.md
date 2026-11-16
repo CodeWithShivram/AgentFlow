@@ -302,6 +302,16 @@ When rejecting an agent's request, an admin chooses one of two outcomes:
 
 A rejection can carry a note. Only people see it; it is never sent to agents.
 
+**Approval audit** ([ADR-0038](docs/ADR/0038-approval-audit-and-authorization.md)). Every decision on an approval request gets an immutable record, whether it came from a request, the workflow's buttons or expiry. The record holds:
+- who decided, and in which role;
+- the rejection choice and note;
+- the attempt the decision was for;
+- a SHA-256 fingerprint of exactly what was shown.
+
+An approved action reaches only the agent's next attempt, and only while the request still matches its fingerprint. Requests from agents granted high-risk tools need an owner; other approvals need an admin.
+
+Admins see every record on the "Approval history" page (`GET /workspaces/{id}/approvals`).
+
 **Replanning** ([ADR-0033](docs/ADR/0033-replanning.md)). A paused or blocked workflow can be replanned: "Replan remaining work" asks the planner to draft only what remains, building on the completed tasks it keeps. The draft is validated like any plan. Confirming it replaces the unfinished tasks (they stay as history, and failed ones stay as they are), once nothing is running or being verified. Workflows that require plan approval need an admin to confirm a replan. Confirming never resumes work. A blocked workflow's Next step banner suggests replanning; the platform never starts one by itself.
 
 **Cancellation and recovery** ([ADR-0029](docs/ADR/0029-cancellation-and-restart-recovery.md)). Cancelling a task or workflow stops a running agent at its next model or tool call; pausing lets running attempts finish. Every minute, a recovery sweep picks up work a lost worker or message left behind:

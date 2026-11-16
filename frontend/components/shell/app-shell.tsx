@@ -94,6 +94,7 @@ const SECTION_LABELS: Record<string, string> = {
   dashboard: "Dashboard",
   workflows: "Workflows",
   requests: "Requests",
+  approvals: "Approval history",
   agents: "Agents",
   proposals: "Agent proposals",
   activity: "Activity",

@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.agents.base import AgentContext
@@ -27,6 +28,7 @@ from app.models import (
     Agent,
     AgentStatus,
     AgentVersion,
+    ApprovalDecision,
     AutonomyPolicy,
     HumanIntervention,
     InterventionStatus,
@@ -53,6 +55,7 @@ from tests.integration.api_helpers import (
     my_workspace,
     new_email,
     register,
+    sql,
 )
 
 pytestmark = pytest.mark.integration
@@ -356,6 +359,7 @@ def _running(
     *,
     attempt_count: int = 0,
     policy: AutonomyPolicy = AutonomyPolicy.AUTONOMOUS,
+    tools: tuple[str, ...] = (),
 ) -> World:
     """A RUNNING workflow in the client's workspace with one task, pre-assigned and
     dispatched."""
@@ -373,7 +377,7 @@ def _running(
                 "schema_version": 1,
                 "system_instruction_ref": "builtin://general/v1",
                 "capabilities": ["report_writing"],
-                "tools": [],
+                "tools": [{"tool": name} for name in tools],
             },
         )
         s.add(version)
@@ -786,3 +790,145 @@ def test_plan_rejections_take_a_note_but_cannot_stop_a_task(owner: TestClient) -
         "note": "Split the research task.",
     }
     assert owner.get(_wf_url(owner, f"/{workflow_id}")).json()["status"] == "PLANNING"
+
+
+# --- approval audit and per-action authorization (Step 6.4, ADR-0038) ------------------------
+
+
+def _record(admin: Factory, intervention_id: uuid.UUID) -> ApprovalDecision:
+    with session_scope(admin) as s:
+        return s.scalars(
+            select(ApprovalDecision).where(ApprovalDecision.intervention_id == intervention_id)
+        ).one()
+
+
+def test_each_decision_is_recorded_with_role_fingerprint_and_attempt(
+    owner: TestClient, new_client: ClientFactory, admin_factory: Factory, worker_factory: Factory
+) -> None:
+    world = _running(admin_factory, owner)
+    first = _ask(admin_factory, worker_factory, world)
+    request = _intervention(admin_factory, world, "agent_action")
+    assert request.required_role == "ADMIN"
+    shown = engine.action_fingerprint(request)
+
+    approved = owner.post(_url(owner, f"/{request.id}/approve"), headers=csrf(owner)).json()
+
+    record = _record(admin_factory, request.id)
+    assert (record.decision, record.decided_role, record.required_role) == (
+        "approve",
+        "OWNER",
+        "ADMIN",
+    )
+    assert str(record.decided_by_user_id) == _user_id(owner) and not record.expired
+    assert record.execution_id == first.execution_id and record.action_fingerprint == shown
+    audit = approved["decision_record"]
+    assert audit["decided_role"] == "OWNER" and audit["action_fingerprint"] == shown
+    assert audit["by_workflow_creator"] is True  # allowed; shown for the audit
+
+    history = owner.get(f"{API}/workspaces/{my_workspace(owner)}/approvals")
+    assert history.status_code == 200
+    (item,) = history.json()["items"]
+    assert item["intervention_id"] == str(request.id)
+    assert item["requested_action"] == ACTION and item["execution_id"] == str(first.execution_id)
+    for role in ("MEMBER", "VIEWER"):
+        other = member(new_client, owner, role)
+        assert other.get(f"{API}/workspaces/{my_workspace(owner)}/approvals").status_code == 403
+    mallory = new_client()
+    register(mallory, new_email())
+    assert mallory.get(f"{API}/workspaces/{my_workspace(owner)}/approvals").status_code == 404
+
+
+def test_plan_decisions_and_expiry_are_recorded_too(
+    owner: TestClient, new_client: ClientFactory, admin_factory: Factory, worker_factory: Factory
+) -> None:
+    # The workflow's own approve button, by an admin who did not create the workflow.
+    workflow_id = _awaiting_approval(owner)
+    (plan,) = _requests(owner, workflow_id=workflow_id, status="OPEN")
+    admin = member(new_client, owner, "ADMIN")
+    assert _move(admin, workflow_id, "READY") == 200
+    record = _record(admin_factory, uuid.UUID(plan["id"]))
+    assert (record.decision, record.decided_role, record.subject) == (
+        "approve",
+        "ADMIN",
+        "plan_approval",
+    )
+    assert (
+        owner.get(_url(owner, f"/{plan['id']}")).json()["decision_record"]["by_workflow_creator"]
+        is False
+    )
+
+    # Expiry: no person, no role.
+    world = _running(admin_factory, owner)
+    _ask(admin_factory, worker_factory, world)
+    _expire(admin_factory, world)
+    recovery.recover_once(worker_factory)
+    expired = _record(admin_factory, _intervention(admin_factory, world, "agent_action").id)
+    assert expired.expired and expired.decided_by_user_id is None and expired.decided_role is None
+    assert expired.decision == "reject"
+
+
+def test_approval_records_are_append_only(
+    owner: TestClient, admin_factory: Factory, worker_factory: Factory, api_settings: Settings
+) -> None:
+    world = _running(admin_factory, owner)
+    _ask(admin_factory, worker_factory, world)
+    request = _intervention(admin_factory, world, "agent_action")
+    owner.post(_url(owner, f"/{request.id}/approve"), headers=csrf(owner))
+
+    with pytest.raises(DBAPIError, match="append-only"):
+        sql(api_settings, "UPDATE approval_decisions SET decision = 'reject'")
+
+
+def test_an_approval_binds_to_the_action_shown_and_the_next_attempt_only(
+    owner: TestClient, admin_factory: Factory, worker_factory: Factory
+) -> None:
+    world = _running(admin_factory, owner)
+    _ask(admin_factory, worker_factory, world)
+    request = _intervention(admin_factory, world, "agent_action")
+    owner.post(_url(owner, f"/{request.id}/approve"), headers=csrf(owner))
+
+    second = _claim(admin_factory, worker_factory, world)
+    assert second.approved_actions == [ACTION]
+    with session_scope(worker_factory) as s:
+        failed = runner.finish(s, second, runner.Failure("EXECUTION_FAILED", "x"))
+    assert failed == "rework_required"
+    third = _claim(admin_factory, worker_factory, world)
+    assert third.attempt_number == 3 and third.approved_actions == []  # not a lasting permission
+
+
+def test_a_changed_request_no_longer_carries_its_approval(
+    owner: TestClient, admin_factory: Factory, worker_factory: Factory
+) -> None:
+    world = _running(admin_factory, owner)
+    _ask(admin_factory, worker_factory, world)
+    request = _intervention(admin_factory, world, "agent_action")
+    owner.post(_url(owner, f"/{request.id}/approve"), headers=csrf(owner))
+    with session_scope(admin_factory) as s:
+        row = s.get_one(HumanIntervention, request.id)
+        row.requested_action = "Email every customer and partner"
+        s.commit()
+
+    assert _claim(admin_factory, worker_factory, world).approved_actions == []
+
+
+def test_requests_from_agents_with_high_risk_tools_need_an_owner(
+    owner: TestClient, new_client: ClientFactory, admin_factory: Factory, worker_factory: Factory
+) -> None:
+    # Handoff critical scenario 11: an unauthorized approval is rejected.
+    world = _running(admin_factory, owner, tools=("python_analysis",))
+    _ask(admin_factory, worker_factory, world)
+    request = _intervention(admin_factory, world, "agent_action")
+    assert request.required_role == "OWNER"
+    admin = member(new_client, owner, "ADMIN")
+    listed = _requests(admin, status="OPEN")
+    assert [r["required_role"] for r in listed] == ["OWNER"]
+
+    for action in ("approve", "reject"):
+        refused = admin.post(_url(admin, f"/{request.id}/{action}"), headers=csrf(admin))
+        assert refused.status_code == 403
+        assert refused.json()["error"]["code"] == "INSUFFICIENT_ROLE"
+    assert _intervention(admin_factory, world, "agent_action").status == InterventionStatus.OPEN
+
+    approved = owner.post(_url(owner, f"/{request.id}/approve"), headers=csrf(owner))
+    assert approved.status_code == 200, approved.text
+    assert _record(admin_factory, request.id).decided_role == "OWNER"

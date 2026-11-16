@@ -56,6 +56,8 @@ WORKER_GRANTS: dict[str, tuple[str, ...]] = {
     # Requests for people (ADR-0035): opened by the analysis, runner and verification jobs, and
     # closed when the work moves on.
     "human_interventions": ("SELECT", "INSERT", "UPDATE"),
+    # Approval audit records (ADR-0038): written when a request expires; read to bind approvals.
+    "approval_decisions": ("SELECT", "INSERT"),
     # LangGraph checkpoints (ADR-0026): the library upserts; the hourly cleanup deletes.
     "checkpoints": ("SELECT", "INSERT", "UPDATE", "DELETE"),
     "checkpoint_blobs": ("SELECT", "INSERT", "UPDATE", "DELETE"),

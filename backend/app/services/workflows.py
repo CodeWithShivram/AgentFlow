@@ -239,6 +239,7 @@ async def user_transition(
                 resolution={"decision": decision},
                 subject=InterventionSubject.PLAN_APPROVAL,
                 resolved_by_user_id=access.user_id,
+                decided_role=access.role,
             )
         )
     await transition_workflow(

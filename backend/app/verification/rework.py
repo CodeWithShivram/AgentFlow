@@ -16,6 +16,7 @@ position, never quoting user, agent or model text, because they reach the model 
 delimited contract (`app/agents/specialists.py`). The runner stores them on the new attempt.
 """
 
+import logging
 import uuid
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -29,6 +30,7 @@ from app.models import (
     AgentExecution,
     AgentStatus,
     AgentVersion,
+    ApprovalDecision,
     ExecutionStatus,
     HumanIntervention,
     InterventionStatus,
@@ -43,6 +45,8 @@ from app.schemas.agents import AgentConfiguration
 from app.services import selection as selection_service
 from app.workflows import engine
 from app.workflows.state_machine import WORKFLOW_EXECUTING, Actor
+
+logger = logging.getLogger("agentflow.verification")
 
 POLICY_VERSION = "retry/v1"
 MAX_REASSIGNMENTS = 1
@@ -194,6 +198,23 @@ def previous_attempt_approvals(
     ).scalar_one_or_none()
     decision = (request.resolution or {}).get("decision") if request else None
     if decision == "approve" and request is not None:
+        # Bound to exactly what was shown (ADR-0038): the audit record must exist and match.
+        record = session.execute(
+            select(ApprovalDecision).where(
+                ApprovalDecision.intervention_id == request.id,
+                ApprovalDecision.workspace_id == task.workspace_id,
+            )
+        ).scalar_one_or_none()
+        if (
+            record is None
+            or record.decision != "approve"
+            or record.action_fingerprint != engine.action_fingerprint(request)
+        ):
+            logger.warning(
+                "approval not applied: its audit record is missing or does not match",
+                extra={"intervention_id": str(request.id), "task_id": str(task.id)},
+            )
+            return [], []
         return [request.requested_action], []
     if decision == "reject":
         return [], [REJECTED_INSTRUCTION]
