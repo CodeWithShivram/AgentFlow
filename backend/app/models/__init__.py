@@ -27,6 +27,12 @@ from app.models.execution import (
     ToolInvocationStatus,
 )
 from app.models.idempotency import IdempotencyKey, IdempotencyStatus
+from app.models.intervention import (
+    HumanIntervention,
+    InterventionStatus,
+    InterventionSubject,
+    InterventionType,
+)
 from app.models.plan import WorkflowPlan
 from app.models.selection import AgentSelection
 from app.models.tenancy import User, Workspace, WorkspaceMember, WorkspaceRole
@@ -64,9 +70,13 @@ __all__ = [
     "CheckpointMigration",
     "CheckpointWrite",
     "ExecutionStatus",
+    "HumanIntervention",
     "IdempotencyKey",
     "IdempotencyStatus",
     "InboxMessage",
+    "InterventionStatus",
+    "InterventionSubject",
+    "InterventionType",
     "LlmCallStatus",
     "LlmUsage",
     "OutboxEvent",

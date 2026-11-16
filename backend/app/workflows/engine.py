@@ -36,6 +36,10 @@ from app.models import (
     AnalysisStatus,
     AutonomyPolicy,
     ExecutionStatus,
+    HumanIntervention,
+    InterventionStatus,
+    InterventionSubject,
+    InterventionType,
     PlanStatus,
     TaskDependency,
     TaskStatus,
@@ -115,6 +119,215 @@ def record_event(
             payload=payload or {},
         )
     )
+
+
+# --- human interventions (ADR-0035) ---------------------------------------------------------
+# Requests that need a person. Opened and closed in the transaction of the change that causes
+# them, with an event; events carry identifiers only, never the request's text.
+
+_ESCALATION_ACTION = (
+    "Decide how this task continues: reassign it (a new attempt), cancel it, or replan the "
+    "remaining work."
+)
+_PLAN_APPROVAL_ACTION = "Approve the plan so the workflow can start, or send it back to planning."
+_CONTEXT_KEYS = ("error_code", "failure_codes", "issue_codes", "attempt_number", "verifier")
+
+
+def open_intervention(
+    session: Session,
+    workflow: Workflow,
+    *,
+    type: InterventionType,
+    subject: InterventionSubject,
+    requested_action: str,
+    context: dict[str, Any],
+    source_key: str,
+    task_id: uuid.UUID | None = None,
+    requested_by: str = "SYSTEM",
+    requested_by_agent_id: uuid.UUID | None = None,
+) -> HumanIntervention | None:
+    """Opens a request once per source; returns None when it already exists."""
+    exists = session.execute(
+        select(HumanIntervention.id).where(
+            HumanIntervention.workflow_id == workflow.id,
+            HumanIntervention.workspace_id == workflow.workspace_id,
+            HumanIntervention.source_key == source_key,
+        )
+    ).first()
+    if exists is not None:
+        return None
+    row = HumanIntervention(
+        id=uuid.uuid4(),
+        workspace_id=workflow.workspace_id,
+        workflow_id=workflow.id,
+        task_id=task_id,
+        type=type,
+        subject=subject.value,
+        status=InterventionStatus.OPEN,
+        requested_action=requested_action,
+        context=context,
+        requested_by=requested_by,
+        requested_by_agent_id=requested_by_agent_id,
+        source_key=source_key,
+    )
+    session.add(row)
+    record_event(
+        session,
+        workflow,
+        WorkflowEventType.INTERVENTION_OPENED,
+        task_id=task_id,
+        payload={
+            "intervention_id": str(row.id),
+            "type": type.value,
+            "subject": subject.value,
+            "requested_by": requested_by,
+        },
+    )
+    return row
+
+
+def resolve_intervention(
+    session: Session,
+    workflow: Workflow,
+    row: HumanIntervention,
+    *,
+    status: InterventionStatus,
+    resolution: dict[str, Any],
+    resolved_by_user_id: uuid.UUID | None = None,
+) -> None:
+    """Closes one open request. `resolution` holds a decision, an answer or an outcome."""
+    row.status = status
+    row.resolution = resolution
+    row.resolved_by_user_id = resolved_by_user_id
+    row.resolved_at = datetime.now(UTC)
+    payload: dict[str, Any] = {"intervention_id": str(row.id), "status": status.value}
+    for key in ("decision", "outcome"):
+        if key in resolution:
+            payload[key] = resolution[key]
+    if resolved_by_user_id is not None:
+        payload["user_id"] = str(resolved_by_user_id)
+    record_event(
+        session,
+        workflow,
+        WorkflowEventType.INTERVENTION_RESOLVED,
+        task_id=row.task_id,
+        payload=payload,
+    )
+
+
+def close_interventions(
+    session: Session,
+    workflow: Workflow,
+    *,
+    status: InterventionStatus,
+    resolution: dict[str, Any],
+    subject: InterventionSubject | None = None,
+    task_id: uuid.UUID | None = None,
+    resolved_by_user_id: uuid.UUID | None = None,
+) -> int:
+    """Closes the open requests of a workflow (or one task, or one subject)."""
+    statement = select(HumanIntervention).where(
+        HumanIntervention.workflow_id == workflow.id,
+        HumanIntervention.workspace_id == workflow.workspace_id,
+        HumanIntervention.status == InterventionStatus.OPEN,
+    )
+    if subject is not None:
+        statement = statement.where(HumanIntervention.subject == subject.value)
+    if task_id is not None:
+        statement = statement.where(HumanIntervention.task_id == task_id)
+    # App sessions do not autoflush: a request closed earlier in this transaction still matches
+    # the query, so its loaded status decides.
+    rows = [r for r in session.execute(statement).scalars() if r.status == InterventionStatus.OPEN]
+    for row in rows:
+        resolve_intervention(
+            session,
+            workflow,
+            row,
+            status=status,
+            resolution=resolution,
+            resolved_by_user_id=resolved_by_user_id,
+        )
+    return len(rows)
+
+
+def _on_task_change(
+    session: Session,
+    workflow: Workflow,
+    task: WorkflowTask,
+    source: TaskStatus,
+    target: TaskStatus,
+    actor: Actor,
+    reason: str | None,
+    extra: dict[str, Any] | None,
+) -> None:
+    if source == T.ESCALATED:
+        # People acted on the escalated task (reassigned, cancelled, removed it).
+        user_id = (extra or {}).get("user_id")
+        close_interventions(
+            session,
+            workflow,
+            status=InterventionStatus.RESOLVED,
+            resolution={"outcome": target.value, "actor": actor.value},
+            subject=InterventionSubject.TASK_ESCALATION,
+            task_id=task.id,
+            resolved_by_user_id=uuid.UUID(user_id) if actor == Actor.USER and user_id else None,
+        )
+    if source == T.WAITING_APPROVAL:
+        # A decision closes its request first; anything left (e.g. a cancellation) is withdrawn.
+        close_interventions(
+            session,
+            workflow,
+            status=InterventionStatus.WITHDRAWN,
+            resolution={"outcome": target.value},
+            subject=InterventionSubject.AGENT_ACTION,
+            task_id=task.id,
+        )
+    if target == T.ESCALATED:
+        details = {k: v for k, v in (extra or {}).items() if k in _CONTEXT_KEYS}
+        open_intervention(
+            session,
+            workflow,
+            type=InterventionType.MANUAL_RECOVERY,
+            subject=InterventionSubject.TASK_ESCALATION,
+            requested_action=_ESCALATION_ACTION,
+            context={"reason": reason, **details},
+            source_key=f"escalation:{task.id}:{task.revision}",
+            task_id=task.id,
+        )
+
+
+def _on_workflow_change(
+    session: Session, workflow: Workflow, source: WorkflowStatus, target: WorkflowStatus
+) -> None:
+    if source == W.AWAITING_APPROVAL:
+        # A decision closes it first (ADR-0035); otherwise the plan changed or was cancelled.
+        close_interventions(
+            session,
+            workflow,
+            status=InterventionStatus.WITHDRAWN,
+            resolution={"outcome": target.value},
+            subject=InterventionSubject.PLAN_APPROVAL,
+        )
+    if target == W.AWAITING_APPROVAL:
+        open_intervention(
+            session,
+            workflow,
+            type=InterventionType.APPROVAL,
+            subject=InterventionSubject.PLAN_APPROVAL,
+            requested_action=_PLAN_APPROVAL_ACTION,
+            context={
+                "plan_version": workflow.confirmed_plan_version,
+                "revision": workflow.revision,
+            },
+            source_key=f"plan_approval:{workflow.revision}",
+        )
+    if target in WORKFLOW_TERMINAL:
+        close_interventions(
+            session,
+            workflow,
+            status=InterventionStatus.WITHDRAWN,
+            resolution={"outcome": target.value},
+        )
 
 
 def list_tasks(session: Session, workflow: Workflow) -> list[WorkflowTask]:
@@ -342,6 +555,7 @@ def transition_workflow(
     if reason:
         payload["reason"] = reason
     record_event(session, workflow, _workflow_event_type(source, target), payload=payload)
+    _on_workflow_change(session, workflow, source, target)
     request_orchestration(session, workflow)
     if source == W.PENDING and target == W.PLANNING:
         # Planning starts with an analysis of the request, in the background.
@@ -465,6 +679,7 @@ def transition_task(
         task_id=task.id,
         payload=payload,
     )
+    _on_task_change(session, workflow, task, source, target, actor, reason, extra)
     request_orchestration(session, workflow)
     if target == T.SUBMITTED:
         request_verification(session, workflow, task)

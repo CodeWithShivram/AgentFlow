@@ -27,8 +27,9 @@ def test_the_graph_is_a_compiled_langgraph_with_one_node_per_outcome() -> None:
         "awaiting_verification",
         "blocked",
         "unblock",
+        "approve_actions",
     }
-    assert GRAPH_VERSION == "orchestration/v4"
+    assert GRAPH_VERSION == "orchestration/v5"
 
 
 @pytest.mark.parametrize(
@@ -105,6 +106,24 @@ def test_nothing_runnable_is_blocked(tasks: list[TaskView], summary: str) -> Non
     # A running workflow that cannot progress; a BLOCKED workflow gets `unblock` (v4).
     step = _assess("RUNNING", tasks)
     assert step["kind"] == "blocked" and step["summary"] == summary
+
+
+def test_tasks_waiting_for_approval_need_an_admin_not_their_dependencies() -> None:
+    # v5 (ADR-0035): an agent's approval request is its own step, not "blocked".
+    tasks = [
+        _task(1, "WAITING_APPROVAL", assigned=True),
+        _task(2, "PENDING"),
+        _task(3, "COMPLETED"),
+    ]
+    step = _assess("RUNNING", tasks)
+    assert (step["kind"], step["actor"]) == ("approve_actions", "people")
+    assert step["summary"] == (
+        "1 task waiting for an admin to approve or reject an agent's request."
+    )
+    assert step["task_ids"] == ["t1"]
+    # Work still running comes first; approvals before plain dependency waits.
+    running = _assess("RUNNING", [*tasks, _task(4, "IN_PROGRESS", assigned=True)])
+    assert running["kind"] == "running"
 
 
 def test_a_blocked_workflow_names_its_blocking_tasks_and_suggests_a_replan() -> None:

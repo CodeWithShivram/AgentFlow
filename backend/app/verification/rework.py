@@ -30,6 +30,8 @@ from app.models import (
     AgentStatus,
     AgentVersion,
     ExecutionStatus,
+    HumanIntervention,
+    InterventionStatus,
     TaskStatus,
     VerificationOutcome,
     VerificationResult,
@@ -158,6 +160,43 @@ def previous_attempt_instructions(
     return instructions_for(
         error_code=previous.error_code, issues=issues, deliverables=list(task.deliverables)
     )
+
+
+REJECTED_INSTRUCTION = (
+    "People rejected the action your previous attempt asked approval for: complete the task "
+    "without it."
+)
+
+
+def previous_attempt_approvals(
+    session: Session, task: WorkflowTask, attempt_number: int
+) -> tuple[list[str], list[str]]:
+    """A decision on the previous attempt's approval request (ADR-0035): the approved action
+    (agent text, passed as data in the contract), or a fixed instruction after a rejection."""
+    previous = session.execute(
+        select(AgentExecution.id).where(
+            AgentExecution.task_id == task.id,
+            AgentExecution.workflow_id == task.workflow_id,
+            AgentExecution.workspace_id == task.workspace_id,
+            AgentExecution.attempt_number == attempt_number - 1,
+        )
+    ).scalar_one_or_none()
+    if previous is None:
+        return [], []
+    request = session.execute(
+        select(HumanIntervention).where(
+            HumanIntervention.workflow_id == task.workflow_id,
+            HumanIntervention.workspace_id == task.workspace_id,
+            HumanIntervention.source_key == f"agent_action:{previous}",
+            HumanIntervention.status == InterventionStatus.RESOLVED,
+        )
+    ).scalar_one_or_none()
+    decision = (request.resolution or {}).get("decision") if request else None
+    if decision == "approve" and request is not None:
+        return [request.requested_action], []
+    if decision == "reject":
+        return [], [REJECTED_INSTRUCTION]
+    return [], []
 
 
 # --- the retry decision ------------------------------------------------------------------------

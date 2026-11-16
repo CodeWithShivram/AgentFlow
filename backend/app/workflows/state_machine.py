@@ -89,6 +89,10 @@ TASK_TRANSITIONS: dict[tuple[T, T], frozenset[Actor]] = {
     (T.REWORK_REQUIRED, T.FAILED): frozenset({_Y}),
     (T.REWORK_REQUIRED, T.CANCELLED): _PEOPLE_OR_SYSTEM,
     (T.WAITING_APPROVAL, T.QUEUED): frozenset({_U}),
+    # A person's decision on an agent's approval request starts a new attempt (ADR-0035).
+    (T.WAITING_APPROVAL, T.ASSIGNED): frozenset({_U}),
+    # ... unless the attempt that asked was the last one allowed (ADR-0034, ADR-0035).
+    (T.WAITING_APPROVAL, T.ESCALATED): frozenset({_Y}),
     (T.WAITING_APPROVAL, T.FAILED): frozenset({_U}),
     (T.WAITING_APPROVAL, T.CANCELLED): _PEOPLE_OR_SYSTEM,
     (T.BLOCKED, T.READY): frozenset({_Y}),
@@ -99,6 +103,9 @@ TASK_TRANSITIONS: dict[tuple[T, T], frozenset[Actor]] = {
     (T.ESCALATED, T.FAILED): frozenset({_U, _Y}),
     (T.ESCALATED, T.CANCELLED): _PEOPLE_OR_SYSTEM,
 }
+
+# Handoff section 6: at most 3 attempts per task.
+MAX_ATTEMPTS_PER_TASK = 3
 
 # Workflow statuses in which the plan (tasks, dependencies) may be edited. Editing in
 # AWAITING_APPROVAL or READY sends the workflow back to PLANNING (approval is invalidated).

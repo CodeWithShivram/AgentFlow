@@ -4,6 +4,7 @@ import { registerViaApi, uniqueEmail, workspaceUrl } from "./support/helpers";
 
 const SECTIONS = [
   ["Workflows", "Workflows"],
+  ["Requests", "Requests"],
   ["Agents", "Agents"],
   ["Agent proposals", "Agent proposals"],
   ["Activity", "Activity"],

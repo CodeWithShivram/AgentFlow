@@ -1,9 +1,9 @@
 # AgentFlow Progress
 
 ## Current position
-- Phase: 5 — Verification and recovery, complete with Step 5.5 (Phases 2–4 complete; Phase 1 released as `v0.1.0`, pushed with its tag)
-- Last completed step: 5.5 — Escalation policies; only platform verification accepts tasks
-- Next step: 6.1 — Clarification and approval request model/API (Phase 6), which needs a short plan and the owner's go-ahead
+- Phase: 6 — Human intervention, in progress (Phases 2–5 complete; Phase 1 released as `v0.1.0`, pushed with its tag)
+- Last completed step: 6.1 — Clarification and approval request model/API
+- Next step: 6.2 — Workflow pause/resume, which needs a short plan and the owner's go-ahead
 
 ## Completed steps
 | Step | Commit message | Hash |
@@ -44,16 +44,17 @@
 | 5.2 | `feat(verification): add semantic evaluation with structured findings` | `7f7805a` (pushed, CI ✔) |
 | 5.3 | `feat(verification): retry failed attempts with corrective instructions and reassign once` | `7ec5310` (pushed, CI ✔) |
 | 5.4 | `feat(planning): replan the remaining work of paused or blocked workflows` | `0012bb7` (pushed, CI ✔) |
-| 5.5 | `feat(verification): escalate exhausted work and let only platform verification accept tasks` | latest commit touching `docs/ADR/0034-escalation-and-platform-acceptance.md` |
+| 5.5 | `feat(verification): escalate exhausted work and let only platform verification accept tasks` | `f51f77f` (pushed, CI ✔) |
+| 6.1 | `feat(interventions): add clarification and approval requests` | latest commit touching `docs/ADR/0035-human-interventions.md` |
 
 ## Environment snapshot (2026-11-14)
 | Item | Value |
 |---|---|
-| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `0012bb7` plus tag `v0.1.0` (owner-authorized) |
+| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `f51f77f` plus tag `v0.1.0` (owner-authorized) |
 | Python / uv / Node / npm | 3.12.14 via uv 0.12.9 / Node 24.13.0 / npm 11.6.2 |
 | Celery / kombu | 5.7.0 / 5.7.0 |
 | Docker | 29.9.3 — `agentflow` stack healthy (Docker Desktop must be started first; it had stopped and was restarted in Steps 3.1 and 3.4) |
-| Dev database | `agentflow` at `0023 (head)`; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
+| Dev database | `agentflow` at `0024 (head)`; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
 | Local `.env` | holds generated `WORKER_DB_PASSWORD` and (new) `API_DB_PASSWORD` (gitignored) |
 | Port 8000 | Used by another local project (`easa`); smoke tests used 8010 |
 | E2E | API :8011 (as `agentflow_api`), frontend :3100, database `agentflow_e2e` (reset each run), Redis DBs 2/3, installed Google Chrome |
@@ -61,6 +62,72 @@
 | Test HTTP client | `httpx2` 2.16.0 (replaces `httpx`, OD-10); `httpx` is back only as a LiteLLM dependency |
 | LiteLLM | 1.109.1, imported by workers only when `MODEL_PROVIDER=litellm`; `.env` keeps the mock |
 | LangGraph | 1.2.22 (with langchain-core 1.8.0 and langsmith 0.14.17), imported by workers only; LangSmith tracing disabled; checkpoints via `langgraph-checkpoint-postgres` 3.2.1 |
+
+## Step 6.1 — requests for people (ADR-0035)
+- **Owner decisions (2026-11-16):**
+  - all four sources (analysis questions, plan approval, agents' approval requests, escalations);
+  - answers feed the next plan or replan draft, and nothing pauses;
+  - members answer, admins approve or reject, responders recorded;
+  - a Requests inbox plus "Needs your input" on the workflow page;
+  - an agent's request is followed by a new attempt either way, and it counts.
+- **Model:** `human_interventions` (migration `0024`) with:
+  - RLS tenant and platform policies;
+  - worker grants SELECT/INSERT/UPDATE;
+  - a unique `(workflow_id, source_key)`;
+  - the `INTERVENTION_OPENED`/`INTERVENTION_RESOLVED` events (identifiers only).
+- **Engine** (`open_intervention`, `resolve_intervention`, `close_interventions`, and hooks in both transition functions):
+  - entering AWAITING_APPROVAL opens a plan approval; leaving withdraws it unless decided;
+  - reaching ESCALATED opens MANUAL_RECOVERY, which acting on the task resolves (attributed: assign, cancel and removal now pass the user id);
+  - leaving WAITING_APPROVAL withdraws an undecided agent request;
+  - a terminal workflow withdraws everything still open.
+- **Sources:**
+  - `analysis.finish` opens one CLARIFICATION per ambiguity and withdraws the previous analysis's open questions;
+  - the plan job passes the current analysis's answers in a delimited `<clarifications>` section (`plan_generation/v2`, `replan/v2`);
+  - `AgentSubmission.approval_request` makes the runner park the task in WAITING_APPROVAL and open an APPROVAL request.
+- **Decisions** (`app/services/interventions.py`, router `/workspaces/{id}/interventions`):
+  - list, get;
+  - answer (MEMBER);
+  - approve/reject (ADMIN);
+  - plan approval moves the workflow to READY or PLANNING;
+  - an agent's request starts the next attempt by the same agent (WAITING_APPROVAL → ASSIGNED, new edge), with `approved_actions` (contract v3) or `rework.REJECTED_INSTRUCTION`;
+  - after the last allowed attempt it escalates instead (WAITING_APPROVAL → ESCALATED, SYSTEM, new edge).
+  - The workflow's own approve and send-back buttons resolve the plan request with the same, attributed decision.
+- **Supporting changes:**
+  - `MAX_ATTEMPTS_PER_TASK` moved to `state_machine.py`, so the API applies the limit without importing worker code; the runner re-exports it;
+  - `close_interventions` checks each row's loaded status, because sessions do not autoflush and a request closed earlier in the same transaction would otherwise be closed twice;
+  - graph `orchestration/v5` gives WAITING_APPROVAL its own step, `approve_actions`.
+- **Frontend:**
+  - a "Requests" sidebar page (Open/Resolved/Withdrawn/All, paginated);
+  - "Needs your input" on the workflow page;
+  - members answer and admins approve or reject, with the agent's reason, risks, consequences and what each decision leads to, all as plain text;
+  - the requirements panel points to them.
+- **Tests:**
+  - 10 integration tests (each source, decisions and roles, attribution, withdrawals, the attempt limit, workspace isolation, the worker's grants);
+  - unit tests (the approval request schema, contract v3 note, rejection sentence, planner v2 delimiting, graph v5, the new edges);
+  - 8 component tests (including "Needs your input" staying on screen while it refreshes);
+  - E2E journey 13 (answer the analysis's question, find it on the Requests page) and Requests added to the navigation journey.
+- **Tests changed (intended):**
+  - version pins (planner v2, contract v3, graph v5);
+  - the expected table lists (migrations, RLS);
+  - the transition matrix;
+  - the escalation tests now pick the escalation event, since an INTERVENTION_OPENED event follows it.
+- **Found:** blank-only text passes `Annotated[SafeText, StringConstraints(min_length=1, strip_whitespace=True)]`, because the strip runs after the length check. Answers now have their own non-blank check. The same pattern on task titles is pre-existing and listed below.
+
+## Checks last executed (Step 6.1)
+- **Full gate (`check.ps1 -E2E`) ✔, exit 0:**
+  - backend: ruff format, ruff check, mypy (194 files), alembic check;
+  - pytest **1114 passed**;
+  - frontend: eslint, typecheck, Vitest **123**, Playwright **16 passed** (new journey 13), build.
+- **Earlier gate runs failed twice, both fixed at the cause:**
+  - the new answer component test typed key by key and passed 5 s; it now pastes the same text, and its assertions are unchanged;
+  - journeys 7 and 12 could not click a task menu. "Needs your input" refetched under a new key on every poll and blinked out, shifting the page. It now keeps the previous result while refreshing, and a component test covers that (it fails without the fix).
+- **A run overlapped with a second pytest session.** The two sessions share the test database roles, so that run errored. The affected tests passed when rerun alone. Never run two sessions at once.
+- **Deliberate-bug checks** (each restored byte-for-byte):
+  - removing `close_interventions`' loaded-status filter makes both plan-approval tests fail (an admin's approval is overwritten as WITHDRAWN in the same transaction);
+  - removing `keepPreviousData` from "Needs your input" fails the new component test.
+- **Environment:**
+  - the dev DB is at `0024` and the roles are re-provisioned;
+  - no servers were left running after E2E.
 
 ## Step 5.5 — escalation and platform-only acceptance (ADR-0034)
 - **Owner decisions (2026-11-15):**
@@ -859,6 +926,8 @@
 - **Pre-existing flaky test fixed.** `test_tokens.py` built its claims at collection time. Once the suite passed 5 minutes, the `nbf` case became valid, and every other case was being rejected for expiry rather than its own reason. Claims are now built when each test runs, and each case first checks that a baseline token is valid.
 
 ## Known issues / limitations
+- **Blank titles (found in 6.1, pre-existing):** a task title of only spaces passes validation and is stored empty (`Title` in `app/schemas/workflows.py` strips after the length check). To fix with a non-blank check like the 6.1 answers.
+- **Requests do not expire yet:** that is Step 6.3, and `expires_at` is reserved for it.
 - **OD-20:** a non-superuser schema owner for migrations, before any hosted deployment.
 - **OD-21:** token counts LiteLLM estimates for providers that don't report usage (e.g. Ollama) look like reported ones. Phase 7 pricing must treat them as unverified.
 - **Live provider path unverified:** Step 3.3 was verified offline only, by owner decision.
@@ -874,6 +943,6 @@
 None.
 
 ## Next exact action
-1. **Push Step 5.5** on the owner's go-ahead, and confirm CI on GitHub.
-2. **Phase 6, Step 6.1 (clarification and approval request model/API):** present a short plan and get the owner's go-ahead.
+1. **Push Step 6.1** on the owner's go-ahead, and confirm CI on GitHub.
+2. **Step 6.2 (workflow pause/resume):** present a short plan and get the owner's go-ahead.
 3. **Before any hosted deployment:** settle OD-14, OD-19 and OD-20.

@@ -272,6 +272,16 @@ def _task_events(admin: Factory, task_id: uuid.UUID) -> list[WorkflowEvent]:
         )
 
 
+def _escalation(admin: Factory, task_id: uuid.UUID) -> WorkflowEvent:
+    """The task's escalation event; the platform then opens a request for people (ADR-0035)."""
+    events = _task_events(admin, task_id)
+    *_, escalated, opened = events
+    assert escalated.payload["to"] == "ESCALATED"
+    assert opened.event_type == WorkflowEventType.INTERVENTION_OPENED
+    assert opened.payload["subject"] == "task_escalation"
+    return escalated
+
+
 def test_a_submission_requests_verification_in_the_same_transaction(
     admin_factory: Factory, worker_factory: Factory
 ) -> None:
@@ -532,7 +542,7 @@ def test_an_evaluation_that_cannot_complete_escalates_without_costing_an_attempt
 
     assert _status(admin_factory, world.task_id) == TaskStatus.ESCALATED
     assert [r.verifier for r in _results(admin_factory)] == ["deterministic/v1"]
-    escalated = _task_events(admin_factory, world.task_id)[-1]
+    escalated = _escalation(admin_factory, world.task_id)
     assert escalated.payload["reason"] == "EVALUATION_UNAVAILABLE"
     assert escalated.payload["error_code"] == "MODEL_OUTPUT_INVALID"
     with session_scope(admin_factory) as s:
@@ -653,7 +663,7 @@ def test_recovery_resends_lost_evaluations_and_escalates_interrupted_ones(
     assert len(_events(admin_factory, outbox.TASK_EVALUATE, lost_world.task_id)) == 2
     assert _evaluate(admin_factory, worker_factory, lost_world) == "passed"
     assert _status(admin_factory, interrupted_world.task_id) == TaskStatus.ESCALATED
-    escalated = _task_events(admin_factory, interrupted_world.task_id)[-1]
+    escalated = _escalation(admin_factory, interrupted_world.task_id)
     assert escalated.payload["reason"] == "EVALUATION_UNAVAILABLE"
     assert escalated.payload["error_code"] == "EVALUATION_INTERRUPTED"
 
@@ -705,7 +715,7 @@ def test_a_failed_verification_is_retried_with_corrective_instructions(
     assert claim.attempt_number == 2 and claim.rework_instructions == expected
     configuration = AgentConfiguration.model_validate(CONFIG)
     contract = runner.build_contract(claim, configuration)
-    assert contract.contract_version == 2 and contract.rework_instructions == expected
+    assert contract.contract_version == 3 and contract.rework_instructions == expected
     with session_scope(admin_factory) as s:
         stored = s.execute(
             select(AgentExecution.attempt_number, AgentExecution.rework_instructions).order_by(
@@ -773,7 +783,7 @@ def test_policy_failures_are_escalated_to_people(
 
     # Step 5.5 (ADR-0034): not retried, and escalated instead of waiting in rework.
     assert _status(admin_factory, world.task_id) == TaskStatus.ESCALATED
-    escalated = _task_events(admin_factory, world.task_id)[-1]
+    escalated = _escalation(admin_factory, world.task_id)
     assert escalated.payload["reason"] == "POLICY_FAILURE"
     assert escalated.payload["failure_codes"] == [code]
     assert len(_events(admin_factory, outbox.TASK_DISPATCH, world.task_id)) == 1

@@ -23,7 +23,8 @@ from langgraph.graph.state import CompiledStateGraph
 # v2 (ADR-0028): assigned tasks waiting for a free slot are counted apart from running ones.
 # v3 (ADR-0030): submitted tasks are verified by the platform, no longer "in Phase 5".
 # v4 (ADR-0033): a blocked workflow names its blocking tasks and suggests replanning.
-GRAPH_VERSION = "orchestration/v4"
+# v5 (ADR-0035): tasks waiting for a person's approval are their own step.
+GRAPH_VERSION = "orchestration/v5"
 
 # LangGraph depends on LangSmith, which can send traces to an external service when tracing
 # environment variables are set. Disabled here for the whole process, whatever the environment.
@@ -40,6 +41,7 @@ NextStepKind = Literal[
     "awaiting_verification",
     "blocked",
     "unblock",
+    "approve_actions",
     "finished",
 ]
 
@@ -134,7 +136,8 @@ def count_tasks(state: OrchestrationState) -> dict[str, Any]:
             # Assigned but not yet claimed: just dispatched, or waiting for a free slot.
             "waiting_for_slot": statuses["ASSIGNED"],
             "awaiting_verification": sum(statuses[s] for s in _AWAITING_VERIFICATION),
-            "blocked": statuses["BLOCKED"] + statuses["WAITING_APPROVAL"],
+            "blocked": statuses["BLOCKED"],
+            "waiting_approval": statuses["WAITING_APPROVAL"],
             "pending": statuses["PENDING"],
         }
     }
@@ -155,6 +158,8 @@ def route(state: OrchestrationState) -> str:
         return "running"
     if counts["awaiting_verification"]:
         return "awaiting_verification"
+    if counts["waiting_approval"]:
+        return "approve_actions"
     return "blocked"
 
 
@@ -243,7 +248,22 @@ def blocked(state: OrchestrationState) -> dict[str, Any]:
             kind="blocked",
             actor="people",
             summary=summary,
-            task_ids=_ids(state, {"BLOCKED", "WAITING_APPROVAL", "PENDING"}),
+            task_ids=_ids(state, {"BLOCKED", "PENDING"}),
+        )
+    }
+
+
+def approve_actions(state: OrchestrationState) -> dict[str, Any]:
+    count = state["counts"]["waiting_approval"]
+    return {
+        "next_step": NextStep(
+            kind="approve_actions",
+            actor="people",
+            summary=(
+                f"{_plural(count, 'task')} waiting for an admin to approve or reject an agent's "
+                "request."
+            ),
+            task_ids=_ids(state, {"WAITING_APPROVAL"}),
         )
     }
 
@@ -275,6 +295,7 @@ _TERMINALS = {
     "awaiting_verification": awaiting_verification,
     "blocked": blocked,
     "unblock": unblock,
+    "approve_actions": approve_actions,
 }
 
 

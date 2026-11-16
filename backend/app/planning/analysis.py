@@ -13,7 +13,8 @@ transaction stays open while the model works:
 
 The prompt is untrusted user data: it is wrapped in delimiters and the model is told to treat
 it as data. The model's output is untrusted until it validates against PromptAnalysis.
-Ambiguities are recorded and shown; clarification requests that pause a workflow are Phase 6.
+Each ambiguity becomes a CLARIFICATION request people can answer (ADR-0035); a newer analysis
+withdraws the open questions of the one it replaces. Answers reach the planner.
 """
 
 import json
@@ -35,7 +36,14 @@ from app.execution import outbox
 from app.llm.gateway import ModelGateway, ModelGatewayError
 from app.llm.mock import register_default
 from app.llm.types import CallContext, ChatMessage, ModelRequest
-from app.models import AnalysisStatus, Workflow, WorkflowEventType
+from app.models import (
+    AnalysisStatus,
+    InterventionStatus,
+    InterventionSubject,
+    InterventionType,
+    Workflow,
+    WorkflowEventType,
+)
 from app.schemas.agents import Capability, SafeText, Slug
 from app.workflows import engine
 from app.workflows.state_machine import Actor
@@ -331,6 +339,27 @@ def finish(session: Session, job: AnalysisJob, outcome: PromptAnalysis | Analysi
                 "ambiguities": len(outcome.ambiguities),
             },
         )
+        engine.close_interventions(
+            session,
+            workflow,
+            status=InterventionStatus.WITHDRAWN,
+            resolution={"outcome": "superseded by a newer analysis"},
+            subject=InterventionSubject.ANALYSIS_QUESTION,
+        )
+        for ambiguity in outcome.ambiguities:
+            engine.open_intervention(
+                session,
+                workflow,
+                type=InterventionType.CLARIFICATION,
+                subject=InterventionSubject.ANALYSIS_QUESTION,
+                requested_action=ambiguity.question,
+                context={
+                    "impact": ambiguity.impact,
+                    "ambiguity_id": ambiguity.id,
+                    "analysis_request_id": str(job.request_id),
+                },
+                source_key=f"clarification:{job.request_id}:{ambiguity.id}",
+            )
         # A ready analysis is the planner's input (Step 2.3).
         engine.request_plan(session, workflow, actor=Actor.SYSTEM)
         result = "ready"

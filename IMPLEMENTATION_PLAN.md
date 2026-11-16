@@ -167,13 +167,13 @@ Acceptance (phase): deterministic tests with mock model responses; invalid plans
 | 5.2 | Semantic evaluation with structured evidence | DONE (ADR-0031) — `7f7805a` |
 | 5.3 | Rework instructions, bounded retries and reassignment | DONE (ADR-0032) — `7ec5310` |
 | 5.4 | Replan with DAG validation | DONE (ADR-0033) — `0012bb7` |
-| 5.5 | Escalation policies; only platform verification accepts tasks | DONE (ADR-0034) — see `progress.md` |
+| 5.5 | Escalation policies; only platform verification accepts tasks | DONE (ADR-0034) — `f51f77f` |
 
 ## Phase 6 — Human intervention
 
 | Step | Title | Status |
 |---|---|---|
-| 6.1 | Clarification and approval request model/API | NOT_STARTED |
+| 6.1 | Clarification and approval request model/API | DONE (ADR-0035) — see `progress.md` |
 | 6.2 | Workflow pause/resume | NOT_STARTED |
 | 6.3 | Expiration and rejection behaviour | NOT_STARTED |
 | 6.4 | Approval audit records and per-action authorization | NOT_STARTED |

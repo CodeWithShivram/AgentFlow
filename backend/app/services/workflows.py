@@ -15,6 +15,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import AppError
 from app.models import (
     AnalysisStatus,
+    InterventionStatus,
+    InterventionSubject,
     PlanStatus,
     Workflow,
     WorkflowEvent,
@@ -36,6 +38,7 @@ from app.services.transitions import (
     request_plan,
     transition_workflow,
 )
+from app.workflows import engine
 from app.workflows.state_machine import Actor
 
 logger = logging.getLogger("agentflow.workflows")
@@ -43,6 +46,10 @@ logger = logging.getLogger("agentflow.workflows")
 CREATE_OPERATION = "workflows.create"
 W = WorkflowStatus
 _ADMIN_TRANSITIONS = frozenset({(W.AWAITING_APPROVAL, W.READY), (W.BLOCKED, W.RUNNING)})
+_PLAN_DECISIONS = {
+    (W.AWAITING_APPROVAL, W.READY): "approve",
+    (W.AWAITING_APPROVAL, W.PLANNING): "reject",
+}
 
 
 class WorkflowNotFoundError(AppError):
@@ -221,6 +228,19 @@ async def user_transition(
         access.role, WorkspaceRole.ADMIN
     ):
         raise InsufficientRoleError()
+    decision = _PLAN_DECISIONS.get((workflow.status, target))
+    if decision is not None:
+        # The same decision as on the plan's approval request (ADR-0035), so it is attributed.
+        await session.run_sync(
+            lambda sync: engine.close_interventions(
+                sync,
+                workflow,
+                status=InterventionStatus.RESOLVED,
+                resolution={"decision": decision},
+                subject=InterventionSubject.PLAN_APPROVAL,
+                resolved_by_user_id=access.user_id,
+            )
+        )
     await transition_workflow(session, workflow, target, actor=Actor.USER, reason=reason)
     await session.commit()
     return workflow

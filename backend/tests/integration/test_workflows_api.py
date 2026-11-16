@@ -991,7 +991,7 @@ def test_a_blocked_workflow_is_replanned_keeping_its_completed_work(
     version = _draft_replan(owner, workspace, workflow, worker_factory, api_settings)
 
     preview = owner.get(wf_url(workspace, f"/{workflow}/plan-drafts/{version}")).json()
-    assert preview["kind"] == "replan" and preview["prompt_version"] == "replan/v1"
+    assert preview["kind"] == "replan" and preview["prompt_version"] == "replan/v2"
     assert preview["basis"] == [{"key": "done-1", "task_id": a, "title": "Collect facts"}]
     assert [i for i in preview["issues"] if i["severity"] == "error"] == []
     planned = preview["plan"]["tasks"]

@@ -2,6 +2,7 @@ import { Badge } from "@/components/ui/badge";
 import type {
   AgentStatus,
   ExecutionStatus,
+  InterventionStatus,
   ProposalStatus,
   TaskStatus,
   WorkflowStatus,
@@ -20,7 +21,13 @@ const TONE_CLASSES: Record<Tone, string> = {
   danger: "bg-red-100 text-red-900 dark:bg-red-950 dark:text-red-200",
 };
 
-type AnyStatus = WorkflowStatus | TaskStatus | ExecutionStatus | AgentStatus | ProposalStatus;
+type AnyStatus =
+  | WorkflowStatus
+  | TaskStatus
+  | ExecutionStatus
+  | AgentStatus
+  | ProposalStatus
+  | InterventionStatus;
 
 const TONES: Partial<Record<AnyStatus, Tone>> = {
   PLANNING: "info",
@@ -44,6 +51,8 @@ const TONES: Partial<Record<AnyStatus, Tone>> = {
   ACTIVE: "success",
   APPROVED: "success",
   REJECTED: "danger",
+  OPEN: "warning",
+  RESOLVED: "success",
 };
 
 export function statusTone(status: AnyStatus): Tone {

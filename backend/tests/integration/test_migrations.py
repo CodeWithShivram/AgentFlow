@@ -37,6 +37,7 @@ EXPECTED_TABLES = {
     "workflow_plans",
     "tool_invocations",
     "agent_selections",
+    "human_interventions",
     "verification_results",
     "checkpoint_migrations",
     "checkpoints",

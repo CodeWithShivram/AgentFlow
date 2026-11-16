@@ -128,7 +128,10 @@ function AnalysisView({ analysis }: { analysis: PromptAnalysis }) {
                 </li>
               ))}
             </ul>
-            <p className="mt-2 text-xs">Answering these as clarification requests arrives in a later phase.</p>
+            <p className="mt-2 text-xs">
+              Answer them under &ldquo;Needs your input&rdquo; or on the Requests page; answers reach the next plan
+              draft.
+            </p>
           </AlertDescription>
         </Alert>
       ) : null}

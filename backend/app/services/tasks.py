@@ -220,7 +220,12 @@ async def _add_dependency(
 
 
 async def _remove_from_plan(
-    session: AsyncSession, workflow: Workflow, task: WorkflowTask, *, reason: str
+    session: AsyncSession,
+    access: WorkspaceAccess,
+    workflow: Workflow,
+    task: WorkflowTask,
+    *,
+    reason: str,
 ) -> None:
     """Removes a task from the plan, keeping it as CANCELLED history without dependency edges."""
     removed_edges = await repository.delete_edges_touching(
@@ -235,7 +240,7 @@ async def _remove_from_plan(
         actor=Actor.USER,
         reason=reason,
         event_type=WorkflowEventType.TASK_REMOVED,
-        extra={"removed_dependency_edges": removed_edges},
+        extra={"removed_dependency_edges": removed_edges, "user_id": str(access.user_id)},
         reconcile=False,
     )
 
@@ -363,7 +368,7 @@ async def remove_task(
     if task.removed_at is not None:
         raise TaskNotFoundError()
     await _open_plan_for_edit(session, workflow)
-    await _remove_from_plan(session, workflow, task, reason="removed from plan")
+    await _remove_from_plan(session, access, workflow, task, reason="removed from plan")
     workflow.revision += 1
     await session.commit()
 
@@ -472,6 +477,7 @@ async def assign_agent(
         "attempt_count": task.attempt_count,
         "selection_id": str(selection.id),
         "selection_rank": selection.rank,
+        "user_id": str(access.user_id),
     }
     if task.status == T.PENDING:
         if workflow.status in WORKFLOW_TERMINAL:
@@ -538,7 +544,15 @@ async def cancel_task(
     task = await _get_task(session, workflow, task_id, revision)
     if workflow.status in PLAN_EDITABLE:
         raise PlanNotEditableError("Remove the task from the plan instead.")
-    await transition_task(session, workflow, task, T.CANCELLED, actor=Actor.USER, reason=reason)
+    await transition_task(
+        session,
+        workflow,
+        task,
+        T.CANCELLED,
+        actor=Actor.USER,
+        reason=reason,
+        extra={"user_id": str(access.user_id)},
+    )
     await session.commit()
     return task
 
@@ -586,7 +600,9 @@ async def confirm_plan_draft(
     removed = 0
     if active and existing_tasks == "replace":
         for task in active:
-            await _remove_from_plan(session, workflow, task, reason="replaced by plan draft")
+            await _remove_from_plan(
+                session, access, workflow, task, reason="replaced by plan draft"
+            )
             removed += 1
     total = await repository.count_tasks(session, workflow.id) + len(proposal.tasks)
     if total > MAX_TASKS_PER_WORKFLOW:
@@ -758,7 +774,7 @@ async def _confirm_replan(
                 },
             )
         else:
-            await _remove_from_plan(session, workflow, task, reason="replaced by replan")
+            await _remove_from_plan(session, access, workflow, task, reason="replaced by replan")
     total = await repository.count_tasks(session, workflow.id) + len(proposal.tasks)
     if total > MAX_TASKS_PER_WORKFLOW:
         raise PlanLimitError(f"A workflow may have at most {MAX_TASKS_PER_WORKFLOW} tasks.")

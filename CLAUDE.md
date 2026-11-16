@@ -144,6 +144,12 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   deadline is paused once by the recovery sweep (DEADLINE_PASSED). COMPLETED needs PASSED deterministic and
   semantic results on the latest successful attempt: the engine checks it and a trigger (migration 0023) enforces
   it for any write, so tests complete tasks only through the real verification jobs (flush results first).
+- Interventions (ADR-0035, `human_interventions`): only the engine opens/closes requests (`open_intervention`,
+  `close_interventions`, hooks in the transition functions), once per `source_key`, with events carrying ids only;
+  requested actions and contexts may be model/agent text (plain text, never logged). Members answer CLARIFICATIONs,
+  ADMINs decide APPROVALs (`app/services/interventions.py`); escalations resolve by acting on the task (pass `user_id`
+  in `extra`). Answers reach the planner only inside `<clarifications>`; approved agent actions only inside the
+  contract (`approved_actions`). An agent's request counts as an attempt; the limit lives in `state_machine.py`.
 - Workflow events are append-only.
 
 ## Security

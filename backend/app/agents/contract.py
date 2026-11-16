@@ -51,8 +51,8 @@ class TaskContract(BaseModel):
 
     model_config = _STRICT
 
-    # v2 (ADR-0032): adds `rework_instructions`.
-    contract_version: Literal[2] = 2
+    # v2 (ADR-0032): adds `rework_instructions`. v3 (ADR-0035): adds `approved_actions`.
+    contract_version: Literal[3] = 3
     workspace_id: uuid.UUID
     workflow_id: uuid.UUID
     task_id: uuid.UUID
@@ -75,6 +75,9 @@ class TaskContract(BaseModel):
     # Corrective instructions from the previous attempt's failure: fixed platform sentences that
     # name criteria by id and deliverables by position (ADR-0032). Empty on a first attempt.
     rework_instructions: list[str] = []
+    # Actions people approved after this task's previous attempt asked (ADR-0035). The text is
+    # that agent's own description of the action: data, not an instruction.
+    approved_actions: list[str] = []
 
 
 class CriterionStatus(StrEnum):
@@ -99,6 +102,20 @@ def _outputs_size_limit(value: dict[str, Any]) -> dict[str, Any]:
     return value
 
 
+class ApprovalRequest(BaseModel):
+    """An agent asking people to approve an action before it is taken (ADR-0035). The task waits
+    for the decision; either way a new attempt follows. Agent text: shown as plain text only."""
+
+    model_config = _STRICT
+
+    action: Annotated[
+        SafeText, StringConstraints(min_length=1, max_length=1000, strip_whitespace=True)
+    ]
+    reason: Text
+    risks: Items = []
+    consequences: Items = []
+
+
 class AgentSubmission(BaseModel):
     """Version 1 of the structured result of one attempt. Stored verbatim per attempt."""
 
@@ -114,6 +131,8 @@ class AgentSubmission(BaseModel):
     assumptions: Items = []
     limitations: Items = []
     open_questions: Items = []
+    # Set only when the agent needs a person's approval before it can finish (ADR-0035).
+    approval_request: ApprovalRequest | None = None
 
 
 class ValidationResult(BaseModel):

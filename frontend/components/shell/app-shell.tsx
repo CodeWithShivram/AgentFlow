@@ -93,6 +93,7 @@ export function PlainShell({ children }: { children: React.ReactNode }) {
 const SECTION_LABELS: Record<string, string> = {
   dashboard: "Dashboard",
   workflows: "Workflows",
+  requests: "Requests",
   agents: "Agents",
   proposals: "Agent proposals",
   activity: "Activity",

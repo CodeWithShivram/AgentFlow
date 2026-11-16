@@ -32,6 +32,7 @@ import { type TaskAction, TaskList } from "./task-list";
 import { TaskFormDialog } from "./task-form-dialog";
 import { useWorkflow, workflowKeys } from "./use-workflow";
 import { FailedJobs } from "./failed-jobs";
+import { NeedsInput } from "./needs-input";
 import { NextStepBanner } from "./next-step-banner";
 import { WorkflowActions } from "./workflow-actions";
 
@@ -115,6 +116,7 @@ export function WorkflowDetailView() {
       </header>
 
       <NextStepBanner nextStep={wf.next_step} />
+      <NeedsInput workflowId={wf.id} version={`${wf.revision}:${events.data?.at(-1)?.sequence ?? 0}`} />
       <FailedJobs workflowId={wf.id} tasks={tasks.data ?? []} />
 
       {planEditable && PLAN_EDIT_REOPENS.has(wf.status) ? (

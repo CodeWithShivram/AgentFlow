@@ -124,6 +124,8 @@ class WorkflowEventType(StrEnum):
     PLAN_CONFIRMED = "PLAN_CONFIRMED"
     # Added in Step 4.3: an admin requeued a failed background job (ADR-0027).
     BACKGROUND_JOB_RETRIED = "BACKGROUND_JOB_RETRIED"
+    INTERVENTION_OPENED = "INTERVENTION_OPENED"
+    INTERVENTION_RESOLVED = "INTERVENTION_RESOLVED"
 
 
 class Workflow(Base):

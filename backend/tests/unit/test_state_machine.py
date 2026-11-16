@@ -57,7 +57,7 @@ APPROVED_TASK_EDGES = {
         T.CANCELLED,
     },
     T.REWORK_REQUIRED: {T.ASSIGNED, T.ESCALATED, T.FAILED, T.CANCELLED},
-    T.WAITING_APPROVAL: {T.QUEUED, T.FAILED, T.CANCELLED},
+    T.WAITING_APPROVAL: {T.QUEUED, T.ASSIGNED, T.ESCALATED, T.FAILED, T.CANCELLED},
     T.BLOCKED: {T.READY, T.PENDING, T.FAILED, T.CANCELLED},
     T.ESCALATED: {T.ASSIGNED, T.FAILED, T.CANCELLED},
     T.COMPLETED: set(),
@@ -118,6 +118,14 @@ def test_users_can_cancel_every_unfinished_workflow_and_task() -> None:
         assert workflow_transition_allowed(status, W.CANCELLED, Actor.USER), status
     for task_status in set(T) - TASK_TERMINAL:
         assert task_transition_allowed(task_status, T.CANCELLED, Actor.USER), task_status
+
+
+def test_a_decision_on_an_agents_request_is_a_person_s_and_its_limit_the_platform_s() -> None:
+    # ADR-0035: people's decision starts a new attempt; only the platform escalates.
+    assert task_transition_allowed(T.WAITING_APPROVAL, T.ASSIGNED, Actor.USER)
+    assert not task_transition_allowed(T.WAITING_APPROVAL, T.ASSIGNED, Actor.WORKER)
+    assert task_transition_allowed(T.WAITING_APPROVAL, T.ESCALATED, Actor.SYSTEM)
+    assert not task_transition_allowed(T.WAITING_APPROVAL, T.ESCALATED, Actor.USER)
 
 
 def test_plan_approval_is_a_user_decision() -> None:

@@ -180,3 +180,25 @@ def test_submissions_round_trip_through_storage() -> None:
     submission = AgentSubmission.model_validate(_submission(open_questions=["Which region?"]))
     stored = submission.model_dump(mode="json")
     assert AgentSubmission.model_validate(stored) == submission
+
+
+def test_an_agent_may_ask_for_approval_with_reasons_risks_and_consequences() -> None:
+    # ADR-0035: optional; strict like the rest of the submission.
+    request = {
+        "action": "Email the customer list",
+        "reason": "The brief asks for outreach.",
+        "risks": ["Customers may be contacted twice."],
+        "consequences": ["Emails cannot be recalled."],
+    }
+    submission = AgentSubmission.model_validate(_submission(approval_request=request))
+    assert submission.approval_request is not None
+    assert submission.approval_request.action == "Email the customer list"
+    assert AgentSubmission.model_validate(_submission()).approval_request is None
+    for bad in (
+        {**request, "action": ""},
+        {**request, "action": "x" * 1001},
+        {**request, "tool": "shell"},
+        {k: v for k, v in request.items() if k != "reason"},
+    ):
+        with pytest.raises(ValueError):
+            AgentSubmission.model_validate(_submission(approval_request=bad))

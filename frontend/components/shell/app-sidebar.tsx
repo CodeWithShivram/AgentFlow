@@ -6,6 +6,7 @@ import {
   CheckIcon,
   ChevronsUpDownIcon,
   ClipboardCheckIcon,
+  InboxIcon,
   LayoutDashboardIcon,
   SettingsIcon,
   UsersIcon,
@@ -44,6 +45,7 @@ import { useWorkspace } from "@/lib/workspace";
 const MAIN_NAV = [
   { section: "dashboard", label: "Dashboard", icon: LayoutDashboardIcon },
   { section: "workflows", label: "Workflows", icon: WorkflowIcon },
+  { section: "requests", label: "Requests", icon: InboxIcon },
   { section: "agents", label: "Agents", icon: BotIcon },
   { section: "proposals", label: "Agent proposals", icon: ClipboardCheckIcon },
   { section: "activity", label: "Activity", icon: ActivityIcon },

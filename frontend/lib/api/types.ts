@@ -301,6 +301,37 @@ export interface FailedJob {
   failed_at: IsoDateTime;
 }
 
+// --- requests for people (ADR-0035) --------------------------------------------------------
+
+export type InterventionType = "CLARIFICATION" | "APPROVAL" | "REJECTION" | "MANUAL_RECOVERY";
+export type InterventionStatus = "OPEN" | "RESOLVED" | "WITHDRAWN";
+export type InterventionSubject = "analysis_question" | "plan_approval" | "agent_action" | "task_escalation";
+
+/**
+ * A request that needs a person. `requested_action` and `context` can hold model or agent text
+ * (an analysis question, an agent's proposed action): shown as plain text only.
+ */
+export interface Intervention {
+  id: Uuid;
+  workflow_id: Uuid;
+  task_id: Uuid | null;
+  type: InterventionType;
+  subject: InterventionSubject;
+  status: InterventionStatus;
+  requested_action: string;
+  context: Record<string, unknown>;
+  requested_by: "SYSTEM" | "AGENT" | "USER";
+  requested_by_agent_id: Uuid | null;
+  resolved_by_user_id: Uuid | null;
+  /** {answer}, {decision} or, when the work moved on, {outcome}. */
+  resolution: Record<string, unknown> | null;
+  resolved_at: IsoDateTime | null;
+  expires_at: IsoDateTime | null;
+  created_at: IsoDateTime;
+  /** The start of the workflow's prompt. */
+  workflow_prompt: string;
+}
+
 export interface NextStep {
   kind: string;
   actor: "people" | "agents" | "platform" | "none";

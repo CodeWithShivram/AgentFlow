@@ -8,6 +8,8 @@ import type {
   AgentCatalog,
   AgentSuggestionList,
   FailedJob,
+  Intervention,
+  InterventionStatus,
   AgentInput,
   AgentStatus,
   AgentUpdate,
@@ -158,6 +160,21 @@ export function createEndpoints(client: ApiClient) {
         client.post<Workflow>(`${wf(workspaceId, workflowId)}/cancel`, { revision, reason }),
       events: (workspaceId: Uuid, workflowId: Uuid, query: { after?: number; limit?: number } = {}) =>
         client.get<EventPage>(`${wf(workspaceId, workflowId)}/events`, { query: { ...query } }),
+    },
+
+    /** Requests that need a person (ADR-0035). */
+    interventions: {
+      list: (
+        workspaceId: Uuid,
+        query: PageQuery & { status?: InterventionStatus; workflow_id?: Uuid } = {},
+      ) => client.get<Page<Intervention>>(`${ws(workspaceId)}/interventions`, { query: { ...query } }),
+      /** Answers a clarification (MEMBER); the answer reaches the next plan or replan draft. */
+      answer: (workspaceId: Uuid, interventionId: Uuid, answer: string) =>
+        client.post<Intervention>(`${ws(workspaceId)}/interventions/${enc(interventionId)}/answer`, { answer }),
+      approve: (workspaceId: Uuid, interventionId: Uuid) =>
+        client.post<Intervention>(`${ws(workspaceId)}/interventions/${enc(interventionId)}/approve`),
+      reject: (workspaceId: Uuid, interventionId: Uuid) =>
+        client.post<Intervention>(`${ws(workspaceId)}/interventions/${enc(interventionId)}/reject`),
     },
 
     tasks: {

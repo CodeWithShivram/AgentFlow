@@ -47,6 +47,8 @@ from app.models import (
     AgentExecution,
     AgentVersion,
     ExecutionStatus,
+    InterventionSubject,
+    InterventionType,
     TaskDependency,
     TaskStatus,
     Workflow,
@@ -59,16 +61,18 @@ from app.tools.gateway import InvocationRecord, InvocationRecorder, ToolGateway
 from app.tools.registry import REGISTRY, ToolCallContext, ToolDefinition, usable_grants
 from app.verification import rework
 from app.workflows import engine
+from app.workflows.state_machine import MAX_ATTEMPTS_PER_TASK as MAX_ATTEMPTS_PER_TASK
 from app.workflows.state_machine import Actor
 
 logger = logging.getLogger("agentflow.execution")
 
 CONSUMER = "execute_task"
-# Handoff section 6: at most 3 attempts per task.
-MAX_ATTEMPTS_PER_TASK = 3
 # The worker's soft time limit for one attempt (handoff section 6 default). A contract never
 # promises an agent more time than the worker enforces.
 AGENT_TIME_LIMIT_SECONDS = 600
+# What a decision on an agent's approval request leads to (ADR-0035), shown with the request.
+APPROVED_NEXT = "A new attempt by the same agent, told the action is approved."
+REJECTED_NEXT = "A new attempt by the same agent, told to finish without that action."
 # The worker kills an attempt after this long: the soft limit plus time to record the outcome.
 AGENT_HARD_TIME_LIMIT_SECONDS = AGENT_TIME_LIMIT_SECONDS + 60
 
@@ -104,6 +108,8 @@ class Claim:
     dependencies: list[uuid.UUID]
     # From the previous attempt's failure (ADR-0032); empty on a first attempt.
     rework_instructions: list[str] = field(default_factory=list)
+    # Approved after the previous attempt asked (ADR-0035).
+    approved_actions: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -257,6 +263,8 @@ def claim(
         extra={"attempt_number": attempt_number},
     )
     instructions = rework.previous_attempt_instructions(session, task, attempt_number)
+    approved, rejected = rework.previous_attempt_approvals(session, task, attempt_number)
+    instructions = [*rejected, *instructions]
     execution = AgentExecution(
         id=uuid.uuid4(),
         workspace_id=workflow.workspace_id,
@@ -295,6 +303,7 @@ def claim(
         acceptance_criteria=list(task.acceptance_criteria),
         dependencies=list(dependencies),
         rework_instructions=instructions,
+        approved_actions=approved,
     )
     session.commit()
     return claimed
@@ -326,6 +335,7 @@ def build_contract(
                 max_attempts=MAX_ATTEMPTS_PER_TASK, attempt_number=claim.attempt_number
             ),
             "rework_instructions": claim.rework_instructions,
+            "approved_actions": claim.approved_actions,
         }
     )
 
@@ -411,7 +421,42 @@ def finish(session: Session, claim: Claim, outcome: AgentSubmission | Failure) -
         session.commit()
         return "cancelled"
     context = {"execution_id": str(execution.id), "attempt_number": claim.attempt_number}
-    if isinstance(outcome, AgentSubmission):
+    if isinstance(outcome, AgentSubmission) and outcome.approval_request is not None:
+        # The agent asks people first (ADR-0035): no verification until a decision.
+        execution.status = ExecutionStatus.SUCCEEDED
+        execution.submission = outcome.model_dump(mode="json")
+        execution.result_summary = outcome.summary
+        engine.transition_task(
+            session,
+            workflow,
+            task,
+            TaskStatus.WAITING_APPROVAL,
+            actor=Actor.WORKER,
+            extra=context,
+        )
+        request = outcome.approval_request
+        engine.open_intervention(
+            session,
+            workflow,
+            type=InterventionType.APPROVAL,
+            subject=InterventionSubject.AGENT_ACTION,
+            requested_action=request.action,
+            context={
+                "reason": request.reason,
+                "risks": list(request.risks),
+                "consequences": list(request.consequences),
+                "execution_id": str(execution.id),
+                "attempt_number": claim.attempt_number,
+                "if_approved": APPROVED_NEXT,
+                "if_rejected": REJECTED_NEXT,
+            },
+            source_key=f"agent_action:{execution.id}",
+            task_id=task.id,
+            requested_by="AGENT",
+            requested_by_agent_id=claim.agent_id,
+        )
+        result = "waiting_approval"
+    elif isinstance(outcome, AgentSubmission):
         execution.status = ExecutionStatus.SUCCEEDED
         execution.submission = outcome.model_dump(mode="json")
         execution.result_summary = outcome.summary

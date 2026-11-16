@@ -64,6 +64,7 @@ def _contract_json(contract: TaskContract) -> str:
             "acceptance_criteria",
             "allowed_tools",
             "security_classification",
+            "approved_actions",
         },
     )
     data["dependencies_completed"] = len(contract.dependencies)
@@ -97,6 +98,17 @@ def build_request(
             role="user", content=f"<task_contract>\n{_contract_json(contract)}\n</task_contract>"
         ),
     ]
+    if contract.approved_actions:
+        # Platform text; the actions themselves stay inside the delimited contract (ADR-0035).
+        messages.append(
+            ChatMessage(
+                role="user",
+                content=(
+                    "People approved the action your previous attempt asked approval for; it is "
+                    "listed under approved_actions in the contract."
+                ),
+            )
+        )
     if contract.rework_instructions:
         # Platform text, outside the delimited contract so it reads as an instruction (ADR-0032).
         points = "\n".join(f"- {item}" for item in contract.rework_instructions)
