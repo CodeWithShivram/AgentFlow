@@ -26,7 +26,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.errors import AppError
@@ -53,6 +53,7 @@ from app.models import (
     WorkflowTask,
 )
 from app.workflows.state_machine import (
+    MAX_ATTEMPTS_PER_TASK,
     TASK_STATUSES_NEEDING_RUNNING_WORKFLOW,
     TASK_TERMINAL,
     WORKFLOW_EXECUTING,
@@ -122,6 +123,9 @@ def record_event(
     )
 
 
+# Reasons recorded when an agent's request is rejected and stopped, or expires (ADR-0037).
+APPROVAL_REJECTED = "APPROVAL_REJECTED"
+APPROVAL_EXPIRED = "APPROVAL_EXPIRED"
 # Reasons recorded with the platform's own pause and resume (ADR-0036).
 AWAITING_DECISION = "AWAITING_DECISION"
 DECISIONS_MADE = "DECISIONS_MADE"
@@ -148,6 +152,7 @@ def open_intervention(
     context: dict[str, Any],
     source_key: str,
     task_id: uuid.UUID | None = None,
+    expires_at: datetime | None = None,
     requested_by: str = "SYSTEM",
     requested_by_agent_id: uuid.UUID | None = None,
 ) -> HumanIntervention | None:
@@ -171,6 +176,7 @@ def open_intervention(
         status=InterventionStatus.OPEN,
         requested_action=requested_action,
         context=context,
+        expires_at=expires_at,
         requested_by=requested_by,
         requested_by_agent_id=requested_by_agent_id,
         source_key=source_key,
@@ -206,7 +212,8 @@ def resolve_intervention(
     row.resolved_by_user_id = resolved_by_user_id
     row.resolved_at = datetime.now(UTC)
     payload: dict[str, Any] = {"intervention_id": str(row.id), "status": status.value}
-    for key in ("decision", "outcome"):
+    # Fixed values only; a person's note stays on the request, never in events.
+    for key in ("decision", "outcome", "then"):
         if key in resolution:
             payload[key] = resolution[key]
     if resolved_by_user_id is not None:
@@ -253,6 +260,86 @@ def close_interventions(
             resolved_by_user_id=resolved_by_user_id,
         )
     return len(rows)
+
+
+def decide_agent_action(
+    session: Session,
+    workflow: Workflow,
+    row: HumanIntervention,
+    task: WorkflowTask,
+    *,
+    decision: str,
+    stop: bool = False,
+    note: str | None = None,
+    user_id: uuid.UUID | None = None,
+    expired: bool = False,
+) -> None:
+    """Applies a decision on an agent's approval request (ADR-0035, ADR-0037), for a person or,
+    when it expired, as a rejection by the platform. The attempt that asked counts: the next
+    attempt follows it, by the same agent, unless that was the last one allowed or the admin
+    stopped the task; both escalate it to people. A note is for people and never reaches agents.
+    """
+    resolution: dict[str, Any] = {"decision": decision}
+    if stop:
+        resolution["then"] = "stop"
+    if note:
+        resolution["note"] = note
+    if expired:
+        resolution["outcome"] = "expired"
+    resolve_intervention(
+        session,
+        workflow,
+        row,
+        status=InterventionStatus.EXPIRED if expired else InterventionStatus.RESOLVED,
+        resolution=resolution,
+        resolved_by_user_id=user_id,
+    )
+    recorded = session.execute(
+        select(func.max(AgentExecution.attempt_number)).where(
+            AgentExecution.task_id == task.id,
+            AgentExecution.workflow_id == workflow.id,
+            AgentExecution.workspace_id == workflow.workspace_id,
+        )
+    ).scalar_one()
+    task.attempt_count = max(task.attempt_count, int(recorded or 0))
+    actor = Actor.USER if user_id is not None else Actor.SYSTEM
+    details: dict[str, Any] = {"decision": decision, "attempt_count": task.attempt_count}
+    if user_id is not None:
+        details["user_id"] = str(user_id)
+    if stop:
+        transition_task(
+            session,
+            workflow,
+            task,
+            T.ESCALATED,
+            actor=actor,
+            reason=APPROVAL_REJECTED,
+            extra={**details, "attempt_number": task.attempt_count},
+        )
+    elif task.attempt_count >= MAX_ATTEMPTS_PER_TASK:
+        transition_task(
+            session,
+            workflow,
+            task,
+            T.ESCALATED,
+            actor=Actor.SYSTEM,
+            reason="ATTEMPTS_EXHAUSTED",
+            extra={**details, "attempt_number": task.attempt_count},
+        )
+    else:
+        transition_task(
+            session,
+            workflow,
+            task,
+            T.ASSIGNED,
+            actor=actor,
+            reason=APPROVAL_EXPIRED if expired else f"approval request: {decision}",
+            extra={
+                **details,
+                "agent_id": str(task.assigned_agent_id),
+                "agent_version_id": str(task.assigned_agent_version_id),
+            },
+        )
 
 
 def _on_task_change(

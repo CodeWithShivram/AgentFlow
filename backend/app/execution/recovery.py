@@ -23,6 +23,9 @@ engine, so every status change writes its event:
   people resumed after that pause is not paused again.
 - Interrupted planning jobs: an analysis or plan request still PENDING `INTERRUPTED_JOB_AFTER`
   after its job claimed it is marked FAILED, so the user can retry it.
+- Expired requests (ADR-0037): an agent's approval request still OPEN after its `expires_at` is
+  EXPIRED and handled as a rejection (the agent finishes without the action), as the engine
+  handles an admin's rejection; a workflow paused for it then resumes (ADR-0036).
 
 A slow worker whose attempt was recovered finds it no longer current: its agent stops at the
 next model or tool call, and `finish` discards its result.
@@ -43,7 +46,10 @@ from app.models import (
     AgentExecution,
     AnalysisStatus,
     ExecutionStatus,
+    HumanIntervention,
     InboxMessage,
+    InterventionStatus,
+    InterventionSubject,
     OutboxEvent,
     OutboxStatus,
     PauseReason,
@@ -87,6 +93,7 @@ class RecoveryReport:
     interrupted_evaluations: int = 0
     paused_at_deadline: int = 0
     interrupted_jobs: int = 0
+    expired_requests: int = 0
 
 
 def recover_once(
@@ -145,6 +152,14 @@ def recover_once(
         with session_scope(factory) as session:
             report.interrupted_jobs += fail_interrupted_job(
                 session, kind, workspace_id, workflow_id, request_id
+            )
+
+    with session_scope(factory) as session:
+        expired = _expired_requests(session, now, batch_size)
+    for workspace_id, workflow_id, intervention_id in expired:
+        with session_scope(factory) as session:
+            report.expired_requests += expire_request(
+                session, workspace_id, workflow_id, intervention_id, now=now
             )
     return report
 
@@ -535,6 +550,78 @@ def pause_at_deadline(
     )
     session.commit()
     logger.warning("workflow paused at its deadline", extra={"workflow_id": str(workflow_id)})
+    return 1
+
+
+# --- expired requests --------------------------------------------------------------------------
+
+
+def _expired_requests(
+    session: Session, now: datetime, limit: int
+) -> list[tuple[uuid.UUID, uuid.UUID, uuid.UUID]]:
+    rows = session.execute(
+        select(HumanIntervention.workspace_id, HumanIntervention.workflow_id, HumanIntervention.id)
+        .where(
+            HumanIntervention.status == InterventionStatus.OPEN,
+            HumanIntervention.subject == InterventionSubject.AGENT_ACTION.value,
+            HumanIntervention.expires_at < now,
+        )
+        .order_by(HumanIntervention.expires_at)
+        .limit(limit)
+    )
+    return [(row[0], row[1], row[2]) for row in rows]
+
+
+def expire_request(
+    session: Session,
+    workspace_id: uuid.UUID,
+    workflow_id: uuid.UUID,
+    intervention_id: uuid.UUID,
+    *,
+    now: datetime,
+) -> int:
+    workflow = _lock_workflow(session, workspace_id, workflow_id)
+    row = (
+        session.execute(
+            select(HumanIntervention)
+            .where(
+                HumanIntervention.id == intervention_id,
+                HumanIntervention.workflow_id == workflow_id,
+                HumanIntervention.workspace_id == workspace_id,
+            )
+            .with_for_update()
+        ).scalar_one_or_none()
+        if workflow
+        else None
+    )
+    task = (
+        session.execute(
+            select(WorkflowTask).where(
+                WorkflowTask.id == row.task_id,
+                WorkflowTask.workflow_id == workflow_id,
+                WorkflowTask.workspace_id == workspace_id,
+            )
+        ).scalar_one_or_none()
+        if workflow is not None and row is not None and row.task_id is not None
+        else None
+    )
+    if (
+        workflow is None
+        or row is None
+        or task is None
+        or row.status != InterventionStatus.OPEN
+        or row.expires_at is None
+        or row.expires_at >= now
+        or task.status != TaskStatus.WAITING_APPROVAL
+    ):
+        session.rollback()  # decided or withdrawn meanwhile
+        return 0
+    engine.decide_agent_action(session, workflow, row, task, decision="reject", expired=True)
+    session.commit()
+    logger.info(
+        "approval request expired",
+        extra={"workflow_id": str(workflow_id), "intervention_id": str(intervention_id)},
+    )
     return 1
 
 

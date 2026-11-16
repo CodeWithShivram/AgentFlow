@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     health_check_timeout_seconds: float = Field(default=2.0, gt=0, le=30)
     # How long an idempotency key is remembered (default 24 h, max 30 days).
     idempotency_key_ttl_seconds: int = Field(default=86_400, ge=60, le=2_592_000)
+    # How long an agent's approval request waits for an admin before it expires and counts as
+    # a rejection (ADR-0037; default 24 h, max 30 days).
+    intervention_approval_ttl_hours: int = Field(default=24, ge=1, le=720)
 
     # --- Authentication (ADR-0007) ---
     # Key ring as JSON: {"<key id>": "<secret>"}. Tokens are signed with the active key and

@@ -25,7 +25,7 @@ export function RequestsView() {
   const raw = params.get("status");
   // Open requests are the default view; "all" shows every status.
   const status: InterventionStatus | undefined =
-    raw === "all" ? undefined : raw === "RESOLVED" || raw === "WITHDRAWN" ? raw : "OPEN";
+    raw === "all" ? undefined : raw === "RESOLVED" || raw === "WITHDRAWN" || raw === "EXPIRED" ? raw : "OPEN";
   const offset = Math.max(0, Number.parseInt(params.get("offset") ?? "0", 10) || 0);
 
   const navigate = (next: { status: string; offset?: number }) => {
@@ -53,6 +53,7 @@ export function RequestsView() {
           <TabsTrigger value="OPEN">Open</TabsTrigger>
           <TabsTrigger value="RESOLVED">Resolved</TabsTrigger>
           <TabsTrigger value="WITHDRAWN">Withdrawn</TabsTrigger>
+          <TabsTrigger value="EXPIRED">Expired</TabsTrigger>
           <TabsTrigger value="all">All</TabsTrigger>
         </TabsList>
       </Tabs>

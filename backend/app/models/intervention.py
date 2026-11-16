@@ -39,6 +39,7 @@ class InterventionStatus(StrEnum):
     OPEN = "OPEN"
     RESOLVED = "RESOLVED"  # a person answered, approved or rejected, or acted on it
     WITHDRAWN = "WITHDRAWN"  # the platform closed it: superseded, or the work moved on
+    EXPIRED = "EXPIRED"  # nobody decided in time; handled as a rejection (ADR-0037)
 
 
 class InterventionSubject(StrEnum):

@@ -294,6 +294,14 @@ In a workflow whose plan needs approval, an agent's approval request pauses the 
 
 The platform never lifts a person's or the deadline's pause. Resuming dispatches waiting tasks by priority, within the parallel task limit.
 
+**Expiry and rejection** ([ADR-0037](docs/ADR/0037-expiry-and-rejection.md)). An agent's approval request expires after 24 hours (`INTERVENTION_APPROVAL_TTL_HOURS`). Expiry counts as a rejection: the action is not taken, and the agent finishes without it. Plan approvals, questions and escalations wait for people.
+
+When rejecting an agent's request, an admin chooses one of two outcomes:
+- the agent finishes without the action;
+- the task stops for people to reassign, cancel or replan.
+
+A rejection can carry a note. Only people see it; it is never sent to agents.
+
 **Replanning** ([ADR-0033](docs/ADR/0033-replanning.md)). A paused or blocked workflow can be replanned: "Replan remaining work" asks the planner to draft only what remains, building on the completed tasks it keeps. The draft is validated like any plan. Confirming it replaces the unfinished tasks (they stay as history, and failed ones stay as they are), once nothing is running or being verified. Workflows that require plan approval need an admin to confirm a replan. Confirming never resumes work. A blocked workflow's Next step banner suggests replanning; the platform never starts one by itself.
 
 **Cancellation and recovery** ([ADR-0029](docs/ADR/0029-cancellation-and-restart-recovery.md)). Cancelling a task or workflow stops a running agent at its next model or tool call; pausing lets running attempts finish. Every minute, a recovery sweep picks up work a lost worker or message left behind:

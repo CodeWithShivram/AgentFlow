@@ -4,6 +4,7 @@ import logging
 import os
 import time
 import uuid
+from datetime import timedelta
 from typing import Any
 
 from celery.exceptions import SoftTimeLimitExceeded
@@ -172,7 +173,12 @@ def execute_task(
     for attempt in range(1, _FINISH_ATTEMPTS + 1):
         try:
             with session_scope(factory) as session:
-                outcome = runner.finish(session, claimed, result)
+                outcome = runner.finish(
+                    session,
+                    claimed,
+                    result,
+                    approval_ttl=timedelta(hours=settings.intervention_approval_ttl_hours),
+                )
             break
         except OperationalError:
             if attempt == _FINISH_ATTEMPTS:

@@ -8,7 +8,7 @@ workflow lock, with an event, in the same transaction as its effect.
 """
 
 import uuid
-from typing import Literal
+from typing import Any, Literal
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,13 +24,12 @@ from app.models import (
     WorkflowStatus,
     WorkflowTask,
 )
-from app.repositories import workflows as workflow_repository
 from app.schemas.interventions import InterventionResponse
 from app.services.authorization import WorkspaceAccess
-from app.services.transitions import transition_task, transition_workflow
+from app.services.transitions import transition_workflow
 from app.services.workflows import lock_for_change
 from app.workflows import engine
-from app.workflows.state_machine import MAX_ATTEMPTS_PER_TASK, Actor
+from app.workflows.state_machine import Actor
 
 PROMPT_PREVIEW = 200
 
@@ -170,7 +169,7 @@ async def _resolve(
     access: WorkspaceAccess,
     workflow: Workflow,
     row: HumanIntervention,
-    resolution: dict[str, str],
+    resolution: dict[str, Any],
 ) -> None:
     await session.run_sync(
         lambda sync: engine.resolve_intervention(
@@ -202,15 +201,22 @@ async def decide(
     access: WorkspaceAccess,
     intervention_id: uuid.UUID,
     decision: Literal["approve", "reject"],
+    *,
+    stop: bool = False,
+    note: str | None = None,
 ) -> InterventionResponse:
     """Approves or rejects (ADMIN, checked by the route). A plan approval moves the workflow
-    to READY or back to PLANNING. An agent's request starts a new attempt by the same agent
-    either way, told the decision; the attempt that asked counts, so its limit still applies."""
+    to READY or back to PLANNING. An agent's request starts a new attempt by the same agent,
+    told the decision, unless a rejection `stop`s the task for people (ADR-0037); the attempt
+    that asked counts, so its limit still applies. A rejection's `note` is for people only."""
     workflow, row = await _lock_open(session, access, intervention_id, InterventionType.APPROVAL)
     if row.subject == InterventionSubject.PLAN_APPROVAL:
         if workflow.status != WorkflowStatus.AWAITING_APPROVAL:  # closed by the engine otherwise
             raise InterventionClosedError()
-        await _resolve(session, access, workflow, row, {"decision": decision})
+        if stop:
+            raise InterventionTypeMismatchError()
+        resolution = {"decision": decision, **({"note": note} if note else {})}
+        await _resolve(session, access, workflow, row, resolution)
         target = WorkflowStatus.READY if decision == "approve" else WorkflowStatus.PLANNING
         await transition_workflow(
             session,
@@ -232,37 +238,20 @@ async def decide(
         ).scalar_one()
         if task.status != TaskStatus.WAITING_APPROVAL:
             raise InterventionClosedError()
-        await _resolve(session, access, workflow, row, {"decision": decision})
-        task.attempt_count = max(
-            task.attempt_count,
-            await workflow_repository.max_attempt_number(session, workflow, task.id),
+        if stop and decision != "reject":
+            raise InterventionTypeMismatchError()
+        await session.run_sync(
+            lambda sync: engine.decide_agent_action(
+                sync,
+                workflow,
+                row,
+                task,
+                decision=decision,
+                stop=stop,
+                note=note,
+                user_id=access.user_id,
+            )
         )
-        if task.attempt_count >= MAX_ATTEMPTS_PER_TASK:
-            await transition_task(
-                session,
-                workflow,
-                task,
-                TaskStatus.ESCALATED,
-                actor=Actor.SYSTEM,
-                reason="ATTEMPTS_EXHAUSTED",
-                extra={"attempt_number": task.attempt_count, "decision": decision},
-            )
-        else:
-            await transition_task(
-                session,
-                workflow,
-                task,
-                TaskStatus.ASSIGNED,
-                actor=Actor.USER,
-                reason=f"approval request: {decision}",
-                extra={
-                    "user_id": str(access.user_id),
-                    "decision": decision,
-                    "attempt_count": task.attempt_count,
-                    "agent_id": str(task.assigned_agent_id),
-                    "agent_version_id": str(task.assigned_agent_version_id),
-                },
-            )
     else:
         raise InterventionTypeMismatchError()
     await session.commit()

@@ -304,7 +304,7 @@ export interface FailedJob {
 // --- requests for people (ADR-0035) --------------------------------------------------------
 
 export type InterventionType = "CLARIFICATION" | "APPROVAL" | "REJECTION" | "MANUAL_RECOVERY";
-export type InterventionStatus = "OPEN" | "RESOLVED" | "WITHDRAWN";
+export type InterventionStatus = "OPEN" | "RESOLVED" | "WITHDRAWN" | "EXPIRED";
 export type InterventionSubject = "analysis_question" | "plan_approval" | "agent_action" | "task_escalation";
 
 /**
@@ -323,7 +323,7 @@ export interface Intervention {
   requested_by: "SYSTEM" | "AGENT" | "USER";
   requested_by_agent_id: Uuid | null;
   resolved_by_user_id: Uuid | null;
-  /** {answer}, {decision} or, when the work moved on, {outcome}. */
+  /** {answer}, {decision} (with `then` and a person's `note`), or {outcome} (e.g. expired). */
   resolution: Record<string, unknown> | null;
   resolved_at: IsoDateTime | null;
   expires_at: IsoDateTime | null;

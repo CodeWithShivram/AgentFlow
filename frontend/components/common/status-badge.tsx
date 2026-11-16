@@ -53,6 +53,7 @@ const TONES: Partial<Record<AnyStatus, Tone>> = {
   REJECTED: "danger",
   OPEN: "warning",
   RESOLVED: "success",
+  EXPIRED: "neutral",
 };
 
 export function statusTone(status: AnyStatus): Tone {

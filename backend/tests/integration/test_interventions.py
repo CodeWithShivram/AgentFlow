@@ -6,6 +6,7 @@ Worker-side code runs as the restricted worker role (`worker_factory`), as Celer
 
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import Any
 
@@ -19,7 +20,7 @@ from app.agents.contract import AgentSubmission, ApprovalRequest, TaskContract
 from app.agents.mock import MockAgent
 from app.core.config import Settings
 from app.db.sync_session import session_scope
-from app.execution import outbox, runner
+from app.execution import outbox, recovery, runner
 from app.llm.gateway import ModelGateway
 from app.llm.mock import MockModelAdapter
 from app.models import (
@@ -477,6 +478,9 @@ def test_an_approved_action_reaches_the_next_attempt_of_the_same_agent(
     assert request["context"]["risks"] == ["Customers may be contacted twice."]
     assert request["context"]["if_approved"] == runner.APPROVED_NEXT
     assert request["context"]["execution_id"] == str(first.execution_id)
+    # ADR-0037: an agent's request expires after the default 24 hours.
+    expires = datetime.fromisoformat(request["expires_at"])
+    assert timedelta(hours=23) < expires - datetime.now(UTC) <= timedelta(hours=24)
     step = owner.get(_wf_url(owner, f"/{world.workflow_id}")).json()["next_step"]
     assert step is None or step["kind"] in {"approve_actions", "running"}
 
@@ -684,3 +688,101 @@ def test_cancelling_the_waiting_task_also_resumes_the_workflow(
     workflow = _workflow(admin_factory, world)
     assert workflow.pause_reason is None
     assert workflow.status in {WorkflowStatus.RUNNING, WorkflowStatus.BLOCKED}
+
+
+# --- expiry and rejection choices (Step 6.3, ADR-0037) --------------------------------------
+
+
+def _expire(admin: Factory, world: World) -> None:
+    with session_scope(admin) as s:
+        row = s.scalars(
+            select(HumanIntervention).where(HumanIntervention.task_id == world.task_id)
+        ).one()
+        row.expires_at = datetime.now(UTC) - timedelta(minutes=1)
+        s.commit()
+
+
+def test_an_expired_request_counts_as_a_rejection_and_resumes_the_workflow(
+    owner: TestClient, admin_factory: Factory, worker_factory: Factory
+) -> None:
+    world = _running(admin_factory, owner, policy=AutonomyPolicy.APPROVAL_REQUIRED)
+    _ask(admin_factory, worker_factory, world)
+    assert recovery.recover_once(worker_factory).expired_requests == 0  # not due yet
+    assert _workflow(admin_factory, world).pause_reason == PauseReason.AWAITING_DECISION
+
+    _expire(admin_factory, world)
+    assert recovery.recover_once(worker_factory) == recovery.RecoveryReport(expired_requests=1)
+    assert recovery.recover_once(worker_factory).expired_requests == 0
+
+    expired = _intervention(admin_factory, world, "agent_action")
+    assert expired.status == InterventionStatus.EXPIRED and expired.resolved_by_user_id is None
+    assert expired.resolution == {"decision": "reject", "outcome": "expired"}
+    assert _workflow(admin_factory, world).status == WorkflowStatus.RUNNING
+    second = _claim(admin_factory, worker_factory, world)
+    assert second.attempt_number == 2 and second.approved_actions == []
+    assert second.rework_instructions == [rework.REJECTED_INSTRUCTION]
+    listed = _requests(owner, status="EXPIRED")
+    assert [r["id"] for r in listed] == [str(expired.id)]
+
+
+def test_a_request_decided_in_time_does_not_expire(
+    owner: TestClient, admin_factory: Factory, worker_factory: Factory
+) -> None:
+    world = _running(admin_factory, owner)
+    _ask(admin_factory, worker_factory, world)
+    request = _intervention(admin_factory, world, "agent_action")
+    assert owner.post(_url(owner, f"/{request.id}/approve"), headers=csrf(owner)).status_code == 200
+    _expire(admin_factory, world)
+
+    assert recovery.recover_once(worker_factory).expired_requests == 0
+    assert _intervention(admin_factory, world, "agent_action").status == InterventionStatus.RESOLVED
+
+
+def test_an_admin_can_reject_and_stop_the_task_with_a_note_for_people(
+    owner: TestClient, new_client: ClientFactory, admin_factory: Factory, worker_factory: Factory
+) -> None:
+    world = _running(admin_factory, owner)
+    _ask(admin_factory, worker_factory, world)
+    request = _intervention(admin_factory, world, "agent_action")
+    reject_url = _url(owner, f"/{request.id}/reject")
+    editor = member(new_client, owner, "MEMBER")
+    assert editor.post(reject_url, json={"then": "stop"}, headers=csrf(editor)).status_code == 403
+    bad = owner.post(reject_url, json={"then": "cancel"}, headers=csrf(owner))
+    assert bad.status_code == 422
+
+    note = "Not with customer data; use the anonymised list."
+    rejected = owner.post(reject_url, json={"then": "stop", "note": note}, headers=csrf(owner))
+    assert rejected.status_code == 200, rejected.text
+    assert rejected.json()["resolution"] == {"decision": "reject", "then": "stop", "note": note}
+
+    task = _task(admin_factory, world)
+    assert task.status == TaskStatus.ESCALATED and task.attempt_count == 1
+    escalation = _intervention(admin_factory, world, "task_escalation")
+    assert escalation.status == InterventionStatus.OPEN
+    assert escalation.context["reason"] == engine.APPROVAL_REJECTED
+    assert _dispatches(admin_factory, world) == 1  # nothing runs until people decide
+    events = str(_events(owner, str(world.workflow_id)))
+    assert "anonymised" not in events  # the note stays on the request
+    resolved = [
+        e
+        for e in _events(owner, str(world.workflow_id))
+        if e["event_type"] == "INTERVENTION_RESOLVED"
+    ]
+    assert resolved[-1]["payload"]["then"] == "stop"
+
+
+def test_plan_rejections_take_a_note_but_cannot_stop_a_task(owner: TestClient) -> None:
+    workflow_id = _awaiting_approval(owner)
+    (request,) = _requests(owner, workflow_id=workflow_id, status="OPEN")
+    url = _url(owner, f"/{request['id']}/reject")
+
+    stopped = owner.post(url, json={"then": "stop"}, headers=csrf(owner))
+    assert stopped.status_code == 409
+    assert stopped.json()["error"]["code"] == "INTERVENTION_TYPE_MISMATCH"
+    rejected = owner.post(url, json={"note": "Split the research task."}, headers=csrf(owner))
+    assert rejected.status_code == 200, rejected.text
+    assert rejected.json()["resolution"] == {
+        "decision": "reject",
+        "note": "Split the research task.",
+    }
+    assert owner.get(_wf_url(owner, f"/{workflow_id}")).json()["status"] == "PLANNING"

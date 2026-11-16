@@ -154,6 +154,10 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   constraint, migration 0025); platform pauses pass `pause_reason=` to `transition_workflow`, people's transitions
   pass `user_id=`. Only `engine.resume_after_decisions` resumes automatically, and only AWAITING_DECISION pauses
   with no open agent request; never lift a person's or the deadline's pause.
+- Expiry and rejection (ADR-0037): only agents' approval requests expire (`expires_at` from
+  `Settings.intervention_approval_ttl_hours`, passed to `runner.finish`); the recovery sweep makes them EXPIRED and
+  applies a rejection. Every decision on an agent request goes through `engine.decide_agent_action` (`stop` escalates).
+  Rejection notes are for people: keep them out of events, logs, contracts and prompts.
 - Workflow events are append-only.
 
 ## Security

@@ -2,8 +2,8 @@
 
 ## Current position
 - Phase: 6 — Human intervention, in progress (Phases 2–5 complete; Phase 1 released as `v0.1.0`, pushed with its tag)
-- Last completed step: 6.2 — Workflow pause/resume
-- Next step: 6.3 — Expiration and rejection behaviour, which needs a short plan and the owner's go-ahead
+- Last completed step: 6.3 — Expiration and rejection behaviour
+- Next step: 6.4 — Approval audit records and per-action authorization, which needs a short plan and the owner's go-ahead
 
 ## Completed steps
 | Step | Commit message | Hash |
@@ -46,16 +46,17 @@
 | 5.4 | `feat(planning): replan the remaining work of paused or blocked workflows` | `0012bb7` (pushed, CI ✔) |
 | 5.5 | `feat(verification): escalate exhausted work and let only platform verification accept tasks` | `f51f77f` (pushed, CI ✔) |
 | 6.1 | `feat(interventions): add clarification and approval requests` | `92e5327` (pushed, CI ✔) |
-| 6.2 | `feat(workflows): pause for decisions and resume safely` | latest commit touching `docs/ADR/0036-pause-and-resume.md` |
+| 6.2 | `feat(workflows): pause for decisions and resume safely` | `4ba0be9` (pushed, CI ✔) |
+| 6.3 | `feat(interventions): expire approval requests and offer rejection choices` | latest commit touching `docs/ADR/0037-expiry-and-rejection.md` |
 
 ## Environment snapshot (2026-11-14)
 | Item | Value |
 |---|---|
-| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `92e5327` plus tag `v0.1.0` (owner-authorized) |
+| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `4ba0be9` plus tag `v0.1.0` (owner-authorized) |
 | Python / uv / Node / npm | 3.12.14 via uv 0.12.9 / Node 24.13.0 / npm 11.6.2 |
 | Celery / kombu | 5.7.0 / 5.7.0 |
 | Docker | 29.9.3 — `agentflow` stack healthy (Docker Desktop must be started first; it had stopped and was restarted in Steps 3.1 and 3.4) |
-| Dev database | `agentflow` at `0025 (head)`; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
+| Dev database | `agentflow` at `0026 (head)`; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
 | Local `.env` | holds generated `WORKER_DB_PASSWORD` and (new) `API_DB_PASSWORD` (gitignored) |
 | Port 8000 | Used by another local project (`easa`); smoke tests used 8010 |
 | E2E | API :8011 (as `agentflow_api`), frontend :3100, database `agentflow_e2e` (reset each run), Redis DBs 2/3, installed Google Chrome |
@@ -63,6 +64,44 @@
 | Test HTTP client | `httpx2` 2.16.0 (replaces `httpx`, OD-10); `httpx` is back only as a LiteLLM dependency |
 | LiteLLM | 1.109.1, imported by workers only when `MODEL_PROVIDER=litellm`; `.env` keeps the mock |
 | LangGraph | 1.2.22 (with langchain-core 1.8.0 and langsmith 0.14.17), imported by workers only; LangSmith tracing disabled; checkpoints via `langgraph-checkpoint-postgres` 3.2.1 |
+
+## Step 6.3 — expiring approval requests and rejection choices (ADR-0037)
+- **Owner decisions (2026-11-16):**
+  - agents' approval requests expire after 24 h;
+  - expiry counts as a rejection;
+  - admins may reject with "finish without it" or "stop the task";
+  - an optional rejection note that only people see.
+- **Expiry:**
+  - `Settings.intervention_approval_ttl_hours` (`INTERVENTION_APPROVAL_TTL_HOURS`, default 24, in `.env.example`); the worker passes it to `runner.finish(approval_ttl=)`, which sets `expires_at`;
+  - the recovery sweep's new `expire_request` (report field `expired_requests`) re-checks under the workflow lock and applies the rejection through the engine;
+  - the request becomes EXPIRED (migration `0026` extends the status check; its downgrade turns EXPIRED into WITHDRAWN), the next attempt gets `REJECTED_INSTRUCTION`, and a decision pause resumes.
+- **Rejection choices:**
+  - `POST …/reject` takes `{then: "retry" | "stop", note}`; `stop` escalates the task (USER, `APPROVAL_REJECTED`) and opens MANUAL_RECOVERY;
+  - plan approvals take a note but refuse `stop` (409);
+  - notes stay in `resolution`: not in events (which gained only the fixed `then`), not sent to agents.
+- **One decision path:** `engine.decide_agent_action`, used by the service and the sweep.
+- **New edges:** WAITING_APPROVAL → ASSIGNED (SYSTEM) and → ESCALATED (USER).
+- **Frontend:**
+  - open requests show when they expire and what expiry does;
+  - "Reject…" opens a dialog: then-choice for agent requests, and an optional note "shown on the request; never sent to agents";
+  - expired and stopped requests and notes are shown;
+  - Requests page gains an Expired tab.
+- **Tests:**
+  - 4 integration tests (expiry through the sweep resumes a paused workflow and retries without the action; a decided request does not expire; reject-and-stop with a note kept out of events; plan rejections take a note but cannot stop);
+  - the 24 h expiry asserted on new requests;
+  - 3 component tests.
+- **Test changed (intended):** the state machine test, for the two new edges.
+- **Not covered by E2E:** expiry needs a clock in the past, so it is tested through the sweep only.
+
+## Checks last executed (Step 6.3)
+- **Full gate (`check.ps1 -E2E`) ✔, exit 0, on the first run:**
+  - backend: ruff format, ruff check, mypy (196 files), alembic check;
+  - pytest **1123 passed**;
+  - frontend: eslint, typecheck, Vitest **131**, Playwright **17 passed**, build.
+- **Deliberate-bug check** (restored byte-for-byte): making the sweep ignore `expires_at` expires a request that is not yet due, and the expiry test fails.
+- **Environment:**
+  - the dev DB is at `0026` and the roles are re-provisioned;
+  - no servers were left running after E2E.
 
 ## Step 6.2 — pausing for decisions and resuming safely (ADR-0036)
 - **Owner decisions (2026-11-16):**
@@ -92,7 +131,7 @@
   - E2E journey 14 (pause with a reason, see the banner, resume).
 - **Test changed (intended):** the events test expects `user_id` on a person's workflow transition.
 
-## Checks last executed (Step 6.2)
+## Checks (Step 6.2)
 - **Full gate (`check.ps1 -E2E`) ✔, exit 0, on the first run:**
   - backend: ruff format, ruff check, mypy (195 files), alembic check;
   - pytest **1119 passed**;
@@ -967,7 +1006,6 @@
 
 ## Known issues / limitations
 - **Blank titles (found in 6.1, pre-existing):** a task title of only spaces passes validation and is stored empty (`Title` in `app/schemas/workflows.py` strips after the length check). To fix with a non-blank check like the 6.1 answers.
-- **Requests do not expire yet:** that is Step 6.3, and `expires_at` is reserved for it. Until then, a request nobody decides keeps an approval-required workflow paused.
 - **OD-20:** a non-superuser schema owner for migrations, before any hosted deployment.
 - **OD-21:** token counts LiteLLM estimates for providers that don't report usage (e.g. Ollama) look like reported ones. Phase 7 pricing must treat them as unverified.
 - **Live provider path unverified:** Step 3.3 was verified offline only, by owner decision.
@@ -983,6 +1021,6 @@
 None.
 
 ## Next exact action
-1. **Push Step 6.2** on the owner's go-ahead, and confirm CI on GitHub.
-2. **Step 6.3 (expiration and rejection behaviour):** present a short plan and get the owner's go-ahead.
+1. **Push Step 6.3** on the owner's go-ahead, and confirm CI on GitHub.
+2. **Step 6.4 (approval audit records and per-action authorization):** present a short plan and get the owner's go-ahead.
 3. **Before any hosted deployment:** settle OD-14, OD-19 and OD-20.

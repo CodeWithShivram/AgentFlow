@@ -126,6 +126,67 @@ describe("RequestList", () => {
     );
   });
 
+  it("lets admins reject and stop the task with a note for people", async () => {
+    document.cookie = "agentflow_csrf=t-1";
+    const fetchMock = vi.fn<(input: string, init?: RequestInit) => Promise<Response>>(async () =>
+      json({ ...AGENT_ACTION, status: "RESOLVED", resolution: { decision: "reject", then: "stop" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    renderWith("ADMIN", <RequestList items={[AGENT_ACTION]} showWorkflow={false} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Reject…" }));
+    const dialog = screen.getByRole("dialog", { name: "Reject this request" });
+    expect(within(dialog).getByRole("radio", { name: /Finish without it/ })).toBeChecked();
+    await userEvent.click(within(dialog).getByRole("radio", { name: /Stop the task/ }));
+    await userEvent.click(within(dialog).getByLabelText("Note for people (optional)"));
+    await userEvent.paste("  Use the anonymised list.  ");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Reject" }));
+
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toMatch(/\/interventions\/i-2\/reject$/);
+    expect(JSON.parse(String(init?.body))).toEqual({ then: "stop", note: "Use the anonymised list." });
+  });
+
+  it("offers no stop choice when rejecting a plan", async () => {
+    const plan: Intervention = { ...BASE, id: "i-3", type: "APPROVAL", subject: "plan_approval" };
+    renderWith("ADMIN", <RequestList items={[plan]} showWorkflow={false} />);
+    await userEvent.click(screen.getByRole("button", { name: "Reject…" }));
+    const dialog = screen.getByRole("dialog", { name: "Reject this request" });
+    expect(within(dialog).queryByRole("radio")).not.toBeInTheDocument();
+    expect(dialog).toHaveTextContent("The plan goes back to planning.");
+  });
+
+  it("shows when an open request expires and how expired or stopped ones ended", () => {
+    const soon = new Date(Date.now() + 3 * 3600_000).toISOString();
+    renderWith("MEMBER", (
+      <RequestList
+        items={[
+          { ...AGENT_ACTION, expires_at: soon },
+          {
+            ...AGENT_ACTION,
+            id: "i-4",
+            status: "EXPIRED",
+            resolution: { decision: "reject", outcome: "expired" },
+          },
+          {
+            ...AGENT_ACTION,
+            id: "i-5",
+            status: "RESOLVED",
+            resolution: { decision: "reject", then: "stop", note: "<b>Not now</b>" },
+          },
+        ]}
+        showWorkflow={false}
+      />
+    ));
+    const [open, expired, stopped] = screen.getAllByRole("article", { name: "Agent asks for approval" });
+    expect(open).toHaveTextContent(/expires in 3 hours/);
+    expect(expired).toHaveTextContent("Expired: nobody decided in time, so it was handled as a rejection");
+    expect(stopped).toHaveTextContent("Rejected; the task was stopped for people to decide");
+    expect(stopped).toHaveTextContent("Note: <b>Not now</b>");
+    expect(stopped!.querySelector("b")).toBeNull();
+  });
+
   it("shows how a closed request ended", () => {
     renderWith("MEMBER", (
       <RequestList

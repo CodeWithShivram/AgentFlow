@@ -10,6 +10,14 @@ import { RelativeTime } from "@/components/common/relative-time";
 import { StatusBadge } from "@/components/common/status-badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
@@ -72,6 +80,12 @@ function RequestItem({ item, showWorkflow }: { item: Intervention; showWorkflow:
         <Badge variant="outline">{humanize(item.type)}</Badge>
         <span className="text-xs text-muted-foreground">
           <RelativeTime value={item.created_at} />
+          {open && item.expires_at ? (
+            <>
+              {" "}
+              · expires <RelativeTime value={item.expires_at} />
+            </>
+          ) : null}
         </span>
       </header>
       {showWorkflow ? (
@@ -134,6 +148,7 @@ function Context({ item }: { item: Intervention }) {
         <div className="text-muted-foreground">
           <p>If approved: {text(c.if_approved)}</p>
           <p>If rejected: {text(c.if_rejected)}</p>
+          {text(c.if_expired) ? <p>If nobody decides in time: {text(c.if_expired)}</p> : null}
         </div>
       </dl>
     );
@@ -145,32 +160,48 @@ function Context({ item }: { item: Intervention }) {
   return null;
 }
 
+function decisionText(decision: string, then: string | null): string {
+  if (decision === "approve") return "Approved";
+  return then === "stop" ? "Rejected; the task was stopped for people to decide" : "Rejected";
+}
+
 function Resolution({ item }: { item: Intervention }) {
   const r = item.resolution ?? {};
   const answer = text(r.answer);
   const decision = text(r.decision);
   const outcome = text(r.outcome);
+  const note = text(r.note);
   return (
-    <p className="text-muted-foreground">
-      {answer ? (
-        <>
-          <span className="font-medium text-foreground">Answer: </span>
-          <span className="whitespace-pre-wrap break-words">{answer}</span>
-        </>
-      ) : decision ? (
-        decision === "approve" ? "Approved" : "Rejected"
-      ) : item.status === "WITHDRAWN" ? (
+    <div className="space-y-1 text-muted-foreground">
+      <p>
+        {answer ? (
+          <>
+            <span className="font-medium text-foreground">Answer: </span>
+            <span className="whitespace-pre-wrap break-words">{answer}</span>
+          </>
+        ) : item.status === "EXPIRED" ? (
+          "Expired: nobody decided in time, so it was handled as a rejection"
+        ) : decision ? (
+          decisionText(decision, text(r.then))
+        ) : item.status === "WITHDRAWN" ? (
         `Withdrawn${outcome ? `: ${humanize(outcome)}` : ""}`
-      ) : (
-        `Resolved${outcome ? `: ${humanize(outcome)}` : ""}`
-      )}
-      {item.resolved_at ? (
-        <>
-          {" "}
-          · <RelativeTime value={item.resolved_at} />
-        </>
+        ) : (
+          `Resolved${outcome ? `: ${humanize(outcome)}` : ""}`
+        )}
+        {item.resolved_at ? (
+          <>
+            {" "}
+            · <RelativeTime value={item.resolved_at} />
+          </>
+        ) : null}
+      </p>
+      {note ? (
+        <p className="whitespace-pre-wrap break-words">
+          <span className="font-medium text-foreground">Note: </span>
+          {note}
+        </p>
       ) : null}
-    </p>
+    </div>
   );
 }
 
@@ -236,33 +267,99 @@ function AnswerForm({ item }: { item: Intervention }) {
   );
 }
 
+type Then = "retry" | "stop";
+
+const THEN_CHOICES: readonly (readonly [Then, string, string])[] = [
+  ["retry", "Finish without it", "The same agent makes a new attempt without that action."],
+  ["stop", "Stop the task", "The task is escalated for people to reassign, cancel or replan."],
+];
+
 function Decision({ item }: { item: Intervention }) {
   const workspace = useWorkspace();
   const isAdmin = useCan("ADMIN");
   const refresh = useRefresh(item.workflow_id);
+  const [rejecting, setRejecting] = useState(false);
+  const [then, setThen] = useState<Then>("retry");
+  const [note, setNote] = useState("");
+  const agentAction = item.subject === "agent_action";
   const decide = useMutation({
-    mutationFn: (decision: "approve" | "reject") =>
-      decision === "approve"
-        ? api.interventions.approve(workspace.id, item.id)
-        : api.interventions.reject(workspace.id, item.id),
+    mutationFn: (decision: "approve" | "reject") => {
+      if (decision === "approve") return api.interventions.approve(workspace.id, item.id);
+      const trimmed = note.trim();
+      return api.interventions.reject(workspace.id, item.id, {
+        ...(agentAction ? { then } : {}),
+        ...(trimmed ? { note: trimmed } : {}),
+      });
+    },
     onSuccess: (_, decision) => {
       toast.success(decision === "approve" ? "Approved" : "Rejected");
+      setRejecting(false);
       refresh();
     },
     onError: (error) => {
       toast.error(describeError(error));
+      setRejecting(false);
       refresh();
     },
   });
   if (!isAdmin) return <p className="text-muted-foreground">An admin approves or rejects this request.</p>;
+  const noteId = `reject-note-${item.id}`;
   return (
-    <div className="flex gap-2">
-      <Button size="sm" disabled={decide.isPending} onClick={() => decide.mutate("approve")}>
-        Approve
-      </Button>
-      <Button size="sm" variant="outline" disabled={decide.isPending} onClick={() => decide.mutate("reject")}>
-        Reject
-      </Button>
-    </div>
+    <>
+      <div className="flex gap-2">
+        <Button size="sm" disabled={decide.isPending} onClick={() => decide.mutate("approve")}>
+          Approve
+        </Button>
+        <Button size="sm" variant="outline" disabled={decide.isPending} onClick={() => setRejecting(true)}>
+          Reject…
+        </Button>
+      </div>
+      <Dialog open={rejecting} onOpenChange={(next) => !decide.isPending && setRejecting(next)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Reject this request</DialogTitle>
+            <DialogDescription>
+              {agentAction
+                ? "The action is not taken. Choose what happens to the task."
+                : "The plan goes back to planning."}
+            </DialogDescription>
+          </DialogHeader>
+          {agentAction ? (
+            <fieldset className="grid gap-2">
+              <legend className="mb-1 text-sm font-medium">Then</legend>
+              {THEN_CHOICES.map(([value, label, hint]) => (
+                <label key={value} className="flex items-start gap-2 text-sm">
+                  <input
+                    type="radio"
+                    name={`then-${item.id}`}
+                    value={value}
+                    checked={then === value}
+                    onChange={() => setThen(value)}
+                    className="mt-1"
+                  />
+                  <span>
+                    <span className="font-medium">{label}</span>
+                    <span className="block text-muted-foreground">{hint}</span>
+                  </span>
+                </label>
+              ))}
+            </fieldset>
+          ) : null}
+          <div className="grid gap-1.5">
+            <Label htmlFor={noteId}>Note for people (optional)</Label>
+            <Textarea id={noteId} rows={3} maxLength={1000} value={note} onChange={(e) => setNote(e.target.value)} />
+            <p className="text-xs text-muted-foreground">Shown on the request; never sent to agents.</p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" disabled={decide.isPending} onClick={() => setRejecting(false)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" disabled={decide.isPending} onClick={() => decide.mutate("reject")}>
+              {decide.isPending ? "Saving…" : "Reject"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }

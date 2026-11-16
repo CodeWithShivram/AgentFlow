@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, Query
 
 from app.api.deps import DbSession, workspace_role
 from app.models import InterventionStatus, WorkspaceRole
-from app.schemas.interventions import AnswerRequest, InterventionResponse
+from app.schemas.interventions import AnswerRequest, InterventionResponse, RejectRequest
 from app.schemas.workspaces import Page
 from app.services import interventions as service
 from app.services.authorization import WorkspaceAccess
@@ -65,6 +65,13 @@ async def approve_intervention(
 
 @router.post("/{intervention_id}/reject")
 async def reject_intervention(
-    intervention_id: uuid.UUID, access: Admin, session: DbSession
+    intervention_id: uuid.UUID,
+    access: Admin,
+    session: DbSession,
+    body: RejectRequest | None = None,
 ) -> InterventionResponse:
-    return await service.decide(session, access, intervention_id, "reject")
+    """Rejects; for an agent's request, `then` chooses a retry without the action or a stop."""
+    body = body or RejectRequest()
+    return await service.decide(
+        session, access, intervention_id, "reject", stop=body.then == "stop", note=body.note or None
+    )

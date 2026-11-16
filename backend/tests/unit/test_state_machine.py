@@ -120,12 +120,16 @@ def test_users_can_cancel_every_unfinished_workflow_and_task() -> None:
         assert task_transition_allowed(task_status, T.CANCELLED, Actor.USER), task_status
 
 
-def test_a_decision_on_an_agents_request_is_a_person_s_and_its_limit_the_platform_s() -> None:
-    # ADR-0035: people's decision starts a new attempt; only the platform escalates.
+def test_a_decision_on_an_agents_request_belongs_to_people_or_its_expiry() -> None:
+    # ADR-0035: people's decision starts a new attempt. ADR-0037: an expired request is a
+    # rejection the platform applies, and an admin may reject and stop the task (escalate).
     assert task_transition_allowed(T.WAITING_APPROVAL, T.ASSIGNED, Actor.USER)
-    assert not task_transition_allowed(T.WAITING_APPROVAL, T.ASSIGNED, Actor.WORKER)
+    assert task_transition_allowed(T.WAITING_APPROVAL, T.ASSIGNED, Actor.SYSTEM)
     assert task_transition_allowed(T.WAITING_APPROVAL, T.ESCALATED, Actor.SYSTEM)
-    assert not task_transition_allowed(T.WAITING_APPROVAL, T.ESCALATED, Actor.USER)
+    assert task_transition_allowed(T.WAITING_APPROVAL, T.ESCALATED, Actor.USER)
+    for actor in (Actor.WORKER, Actor.SCHEDULER, Actor.VERIFIER):
+        assert not task_transition_allowed(T.WAITING_APPROVAL, T.ASSIGNED, actor)
+        assert not task_transition_allowed(T.WAITING_APPROVAL, T.ESCALATED, actor)
 
 
 def test_plan_approval_is_a_user_decision() -> None:

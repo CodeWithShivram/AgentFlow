@@ -43,6 +43,19 @@ def _not_blank(value: str) -> str:
     return value
 
 
+class RejectRequest(BaseModel):
+    """A rejection (ADR-0037). `then` applies to an agent's request: "retry" (the agent finishes
+    without the action) or "stop" (the task is escalated to people). The note is for people only
+    and never reaches agents or models."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    then: Literal["retry", "stop"] = "retry"
+    note: Annotated[SafeText, StringConstraints(max_length=1000, strip_whitespace=True)] | None = (
+        None
+    )
+
+
 class AnswerRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

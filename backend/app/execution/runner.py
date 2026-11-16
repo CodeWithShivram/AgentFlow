@@ -21,7 +21,7 @@ import logging
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from functools import partial
 from typing import Any
@@ -72,7 +72,13 @@ CONSUMER = "execute_task"
 AGENT_TIME_LIMIT_SECONDS = 600
 # What a decision on an agent's approval request leads to (ADR-0035), shown with the request.
 APPROVED_NEXT = "A new attempt by the same agent, told the action is approved."
-REJECTED_NEXT = "A new attempt by the same agent, told to finish without that action."
+REJECTED_NEXT = (
+    "A new attempt by the same agent, told to finish without that action; or, if the admin "
+    "chooses, the task stops for people to reassign, cancel or replan."
+)
+IF_EXPIRED = "Handled as a rejection: the agent finishes without that action."
+# An agent's approval request expires undecided after this long by default (ADR-0037).
+DEFAULT_APPROVAL_TTL = timedelta(hours=24)
 # The worker kills an attempt after this long: the soft limit plus time to record the outcome.
 AGENT_HARD_TIME_LIMIT_SECONDS = AGENT_TIME_LIMIT_SECONDS + 60
 
@@ -404,7 +410,15 @@ def run_agent(
     return validation.submission
 
 
-def finish(session: Session, claim: Claim, outcome: AgentSubmission | Failure) -> str:
+def finish(
+    session: Session,
+    claim: Claim,
+    outcome: AgentSubmission | Failure,
+    *,
+    approval_ttl: timedelta = DEFAULT_APPROVAL_TTL,
+) -> str:
+    """Records the attempt's outcome. An agent's approval request expires after `approval_ttl`
+    (the worker passes `Settings.intervention_approval_ttl_hours`, ADR-0037)."""
     workflow = _lock_workflow(session, claim.workspace_id, claim.workflow_id)
     execution = session.get(AgentExecution, claim.execution_id, with_for_update=True)
     task = _get_task(session, workflow, claim.task_id) if workflow else None
@@ -449,9 +463,11 @@ def finish(session: Session, claim: Claim, outcome: AgentSubmission | Failure) -
                 "attempt_number": claim.attempt_number,
                 "if_approved": APPROVED_NEXT,
                 "if_rejected": REJECTED_NEXT,
+                "if_expired": IF_EXPIRED,
             },
             source_key=f"agent_action:{execution.id}",
             task_id=task.id,
+            expires_at=datetime.now(UTC) + approval_ttl,
             requested_by="AGENT",
             requested_by_agent_id=claim.agent_id,
         )

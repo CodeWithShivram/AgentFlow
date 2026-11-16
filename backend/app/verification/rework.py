@@ -188,7 +188,8 @@ def previous_attempt_approvals(
             HumanIntervention.workflow_id == task.workflow_id,
             HumanIntervention.workspace_id == task.workspace_id,
             HumanIntervention.source_key == f"agent_action:{previous}",
-            HumanIntervention.status == InterventionStatus.RESOLVED,
+            # An expired request was handled as a rejection (ADR-0037).
+            HumanIntervention.status.in_([InterventionStatus.RESOLVED, InterventionStatus.EXPIRED]),
         )
     ).scalar_one_or_none()
     decision = (request.resolution or {}).get("decision") if request else None

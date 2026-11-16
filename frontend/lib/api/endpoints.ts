@@ -174,8 +174,9 @@ export function createEndpoints(client: ApiClient) {
         client.post<Intervention>(`${ws(workspaceId)}/interventions/${enc(interventionId)}/answer`, { answer }),
       approve: (workspaceId: Uuid, interventionId: Uuid) =>
         client.post<Intervention>(`${ws(workspaceId)}/interventions/${enc(interventionId)}/approve`),
-      reject: (workspaceId: Uuid, interventionId: Uuid) =>
-        client.post<Intervention>(`${ws(workspaceId)}/interventions/${enc(interventionId)}/reject`),
+      /** `then: "stop"` escalates an agent's task instead of retrying; the note is for people only. */
+      reject: (workspaceId: Uuid, interventionId: Uuid, body: { then?: "retry" | "stop"; note?: string } = {}) =>
+        client.post<Intervention>(`${ws(workspaceId)}/interventions/${enc(interventionId)}/reject`, body),
     },
 
     tasks: {
