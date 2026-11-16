@@ -18,6 +18,9 @@ engine, so every status change writes its event:
   a VERIFYING task's lost `task.evaluate` (ADR-0031).
 - Interrupted evaluations: a semantic evaluation still pending `INTERRUPTED_EVALUATION_AFTER`
   after its job claimed it escalates the task (EVALUATION_INTERRUPTED) for people to decide.
+- Deadlines (ADR-0034): a RUNNING workflow past its deadline is paused (SYSTEM, DEADLINE_PASSED)
+  once; running attempts finish, and people decide to resume, replan or cancel. A workflow that
+  people resumed after that pause is not paused again.
 - Interrupted planning jobs: an analysis or plan request still PENDING `INTERRUPTED_JOB_AFTER`
   after its job claimed it is marked FAILED, so the user can retry it.
 
@@ -29,6 +32,7 @@ import logging
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from sqlalchemy import and_, exists, select
 from sqlalchemy.orm import Session, aliased, sessionmaker
@@ -45,6 +49,8 @@ from app.models import (
     PlanStatus,
     TaskStatus,
     Workflow,
+    WorkflowEvent,
+    WorkflowEventType,
     WorkflowStatus,
     WorkflowTask,
 )
@@ -66,6 +72,7 @@ LOST_DISPATCH_AFTER = timedelta(minutes=15)
 INTERRUPTED_JOB_AFTER = timedelta(seconds=analysis.JOB_TIME_LIMIT_SECONDS) + GRACE
 INTERRUPTED_EVALUATION_AFTER = timedelta(seconds=semantic.JOB_TIME_LIMIT_SECONDS) + GRACE
 EVALUATION_INTERRUPTED = "EVALUATION_INTERRUPTED"
+DEADLINE_PASSED = "DEADLINE_PASSED"
 BATCH_SIZE = 100
 
 
@@ -77,6 +84,7 @@ class RecoveryReport:
     reverified: int = 0
     reevaluated: int = 0
     interrupted_evaluations: int = 0
+    paused_at_deadline: int = 0
     interrupted_jobs: int = 0
 
 
@@ -120,6 +128,14 @@ def recover_once(
         with session_scope(factory) as session:
             report.interrupted_evaluations += escalate_interrupted_evaluation(
                 session, workspace_id, workflow_id, task_id
+            )
+
+    with session_scope(factory) as session:
+        overdue = _overdue_workflows(session, now, batch_size)
+    for workspace_id, workflow_id in overdue:
+        with session_scope(factory) as session:
+            report.paused_at_deadline += pause_at_deadline(
+                session, workspace_id, workflow_id, now=now
             )
 
     with session_scope(factory) as session:
@@ -195,16 +211,17 @@ def recover_attempt(
     execution.error_summary = "The worker running this attempt stopped before it finished."
     context = {"execution_id": str(execution.id), "attempt_number": execution.attempt_number}
     if execution.attempt_number >= runner.MAX_ATTEMPTS_PER_TASK:
+        # Attempts exhausted: people decide (ADR-0034).
         engine.transition_task(
             session,
             workflow,
             task,
-            TaskStatus.FAILED,
+            TaskStatus.ESCALATED,
             actor=Actor.SYSTEM,
             reason=WORKER_LOST,
             extra=context,
         )
-        outcome = "failed"
+        outcome = "escalated"
     else:
         engine.transition_task(
             session,
@@ -461,6 +478,57 @@ def escalate_interrupted_evaluation(
     )
     session.commit()
     logger.warning("interrupted evaluation escalated", extra={"task_id": str(task_id)})
+    return 1
+
+
+# --- deadlines ----------------------------------------------------------------------------------
+
+
+def _paused_for_deadline(workflow_id: Any) -> Any:
+    """Whether the workflow was already paused for its deadline; workflow_id is an id or the
+    workflows.id column (in a correlated query)."""
+    return exists().where(
+        WorkflowEvent.workflow_id == workflow_id,
+        WorkflowEvent.event_type == WorkflowEventType.WORKFLOW_STATUS_CHANGED,
+        WorkflowEvent.payload["reason"].astext == DEADLINE_PASSED,
+    )
+
+
+def _overdue_workflows(
+    session: Session, now: datetime, limit: int
+) -> list[tuple[uuid.UUID, uuid.UUID]]:
+    rows = session.execute(
+        select(Workflow.workspace_id, Workflow.id)
+        .where(
+            Workflow.status == WorkflowStatus.RUNNING,
+            Workflow.deadline.is_not(None),
+            Workflow.deadline < now,
+            ~_paused_for_deadline(Workflow.id),
+        )
+        .order_by(Workflow.deadline)
+        .limit(limit)
+    )
+    return [(row[0], row[1]) for row in rows]
+
+
+def pause_at_deadline(
+    session: Session, workspace_id: uuid.UUID, workflow_id: uuid.UUID, *, now: datetime
+) -> int:
+    workflow = _lock_workflow(session, workspace_id, workflow_id)
+    if (
+        workflow is None
+        or workflow.status != WorkflowStatus.RUNNING
+        or workflow.deadline is None
+        or workflow.deadline >= now
+        or session.execute(select(_paused_for_deadline(workflow.id))).scalar_one()
+    ):
+        session.rollback()
+        return 0
+    engine.transition_workflow(
+        session, workflow, WorkflowStatus.PAUSED, actor=Actor.SYSTEM, reason=DEADLINE_PASSED
+    )
+    session.commit()
+    logger.warning("workflow paused at its deadline", extra={"workflow_id": str(workflow_id)})
     return 1
 
 

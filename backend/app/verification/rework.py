@@ -4,7 +4,7 @@ After an attempt fails (its execution failed, or verification rejected it), `sch
 decides what happens next, in the same transaction as the failure and under the workflow lock:
 
 - policy failures (a tool-policy violation, a version without a runtime, a task schema that cannot
-  be applied) wait for people: retrying would repeat them;
+  be applied) are escalated to people (ADR-0034): retrying would repeat them;
 - otherwise the scheduler starts the next attempt itself (REWORK_REQUIRED -> ASSIGNED), within the
   task's three attempts; the third one goes to another agent once (`MAX_REASSIGNMENTS`) when the
   same agent failed twice and another eligible agent exists (the platform decides and stores
@@ -226,13 +226,22 @@ def schedule_rework(
     session: Session, workflow: Workflow, task: WorkflowTask, *, failure_codes: Sequence[str]
 ) -> str:
     """Called right after a task moved to REWORK_REQUIRED, in that transaction (ADR-0032).
-    Returns "waiting" (people decide), "retried" or "reassigned"."""
-    if (
-        task.status != TaskStatus.REWORK_REQUIRED
-        or workflow.status not in WORKFLOW_EXECUTING
-        or NOT_RETRIED & set(failure_codes)
-    ):
+    Returns "waiting" (the workflow is not executing), "escalated", "retried" or
+    "reassigned"."""
+    if task.status != TaskStatus.REWORK_REQUIRED or workflow.status not in WORKFLOW_EXECUTING:
         return "waiting"
+    if NOT_RETRIED & set(failure_codes):
+        # A retry would repeat it: people decide (ADR-0034).
+        engine.transition_task(
+            session,
+            workflow,
+            task,
+            TaskStatus.ESCALATED,
+            actor=Actor.SYSTEM,
+            reason="POLICY_FAILURE",
+            extra={"failure_codes": sorted(NOT_RETRIED & set(failure_codes))},
+        )
+        return "escalated"
     attempts = list(
         session.execute(
             select(AgentExecution)

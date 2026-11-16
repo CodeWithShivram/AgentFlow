@@ -837,8 +837,73 @@ ANALYSIS = {
 }
 
 
+def _complete_through_verification(
+    owner: TestClient,
+    workspace: str,
+    workflow: str,
+    task_id: str,
+    settings: Settings,
+    worker_factory: Any,
+) -> None:
+    """Assigns the built-in Writer and runs one attempt, its checks and its evaluation with the
+    mock model provider, as the worker would."""
+    from app.agents.mock import MockAgent
+    from app.db.sync_session import session_scope
+    from app.execution import outbox, runner
+    from app.llm.gateway import ModelGateway
+    from app.llm.mock import MockModelAdapter
+    from app.verification import job, semantic
+    from tests.conftest import make_settings
+
+    task = task_of(owner, workspace, workflow, task_id)
+    assigned = owner.post(
+        wf_url(workspace, f"/{workflow}/tasks/{task_id}/assign"),
+        json={"agent_id": builtin_id(owner, workspace, "Writer"), "revision": task["revision"]},
+        headers=csrf(owner),
+    )
+    assert assigned.status_code == 200
+
+    def latest(event_type: str) -> tuple[uuid.UUID, dict[str, Any]]:
+        row = sql(
+            settings,
+            "SELECT id, payload FROM outbox_events WHERE task_id = :id AND event_type = :type "
+            "ORDER BY created_at DESC LIMIT 1",
+            id=task_id,
+            type=event_type,
+        )[0]
+        return row[0], row[1]
+
+    ids = {
+        "workspace_id": uuid.UUID(workspace),
+        "workflow_id": uuid.UUID(workflow),
+        "task_id": uuid.UUID(task_id),
+    }
+    event_id, payload = latest(outbox.TASK_DISPATCH)
+    with session_scope(worker_factory) as s:
+        claim = runner.claim(
+            s, event_id=event_id, agent_version_id=uuid.UUID(payload["agent_version_id"]), **ids
+        )
+    assert isinstance(claim, runner.Claim)
+    no_model = ModelGateway(make_settings(), MockModelAdapter(), lambda record: uuid.uuid4())
+    submission = runner.run_agent(claim, MockAgent, models=no_model, is_current=lambda: True)
+    with session_scope(worker_factory) as s:
+        assert runner.finish(s, claim, submission) == "submitted"
+    with session_scope(worker_factory) as s:
+        assert job.run(s, event_id=latest(outbox.TASK_VERIFY)[0], **ids) == "passed"
+    with session_scope(worker_factory) as s:
+        claimed = semantic.claim(s, event_id=latest(outbox.TASK_EVALUATE)[0], **ids)
+    assert isinstance(claimed, semantic.EvaluationJob)
+    outcome = semantic.evaluate(no_model, claimed, sleep=lambda _: None)
+    with session_scope(worker_factory) as s:
+        assert semantic.finish(s, claimed, outcome) == "passed"
+
+
 def _blocked_workflow(
-    owner: TestClient, workspace: str, settings: Settings, policy: str = "autonomous"
+    owner: TestClient,
+    workspace: str,
+    settings: Settings,
+    worker_factory: Any,
+    policy: str = "autonomous",
 ) -> tuple[str, str, str, str]:
     """OD-16: task A completed, task B (needs A) cancelled, optional C idle: the workflow is
     BLOCKED by a cancelled required task. Returns (workflow, a, b, c)."""
@@ -852,8 +917,8 @@ def _blocked_workflow(
     path = ["PLANNING", "READY"] if policy == "autonomous" else ["PLANNING", "AWAITING_APPROVAL"]
     for status in [*path, *(["READY"] if policy != "autonomous" else []), "RUNNING"]:
         assert move(owner, workspace, workflow, status).status_code == 200, status
-    # Test setup outside the API: a ready analysis (normally from the worker) and A completed
-    # (normally through execution and verification).
+    # Test setup outside the API: a ready analysis (normally from the worker). A then completes
+    # the only way a task can (ADR-0034): an attempt, verification and evaluation.
     sql(
         settings,
         "UPDATE workflows SET analysis_status = 'READY', "
@@ -861,11 +926,7 @@ def _blocked_workflow(
         analysis=json.dumps(ANALYSIS),
         id=workflow,
     )
-    sql(
-        settings,
-        "UPDATE workflow_tasks SET status = 'COMPLETED', completed_at = now() WHERE id = :id",
-        id=a,
-    )
+    _complete_through_verification(owner, workspace, workflow, a, settings, worker_factory)
     cancelled = owner.post(
         wf_url(workspace, f"/{workflow}/tasks/{b}/cancel"),
         json={"revision": task_of(owner, workspace, workflow, b)["revision"]},
@@ -923,7 +984,7 @@ def _confirm(client: TestClient, workspace: str, workflow: str, version: int) ->
 def test_a_blocked_workflow_is_replanned_keeping_its_completed_work(
     owner: TestClient, workspace: str, api_settings: Settings, worker_factory: Any
 ) -> None:
-    workflow, a, b, c = _blocked_workflow(owner, workspace, api_settings)
+    workflow, a, b, c = _blocked_workflow(owner, workspace, api_settings, worker_factory)
     # The optional task failed for good meanwhile: a failure is final history and stays.
     sql(api_settings, "UPDATE workflow_tasks SET status = 'FAILED' WHERE id = :id", id=c)
 
@@ -980,7 +1041,7 @@ def test_replanning_is_refused_while_running_or_with_work_in_flight(
     refused = owner.post(wf_url(workspace, f"/{running}/replan"), headers=csrf(owner))
     assert refused.status_code == 409 and refused.json()["error"]["code"] == "REPLAN_NOT_ALLOWED"
 
-    workflow, _, _, c = _blocked_workflow(owner, workspace, api_settings)
+    workflow, _, _, c = _blocked_workflow(owner, workspace, api_settings, worker_factory)
     version = _draft_replan(owner, workspace, workflow, worker_factory, api_settings)
     sql(api_settings, "UPDATE workflow_tasks SET status = 'IN_PROGRESS' WHERE id = :id", id=c)
 
@@ -998,7 +1059,9 @@ def test_a_replan_of_an_approval_workflow_needs_an_admin_to_confirm(
     api_settings: Settings,
     worker_factory: Any,
 ) -> None:
-    workflow, *_ = _blocked_workflow(owner, workspace, api_settings, "approval_required")
+    workflow, *_ = _blocked_workflow(
+        owner, workspace, api_settings, worker_factory, "approval_required"
+    )
     teammate = member(new_client, owner, "MEMBER")
     version = _draft_replan(
         teammate, workspace, workflow, worker_factory, api_settings
@@ -1015,7 +1078,7 @@ def test_a_replan_of_an_approval_workflow_needs_an_admin_to_confirm(
 def test_a_replan_whose_completed_work_changed_is_refused(
     owner: TestClient, workspace: str, api_settings: Settings, worker_factory: Any
 ) -> None:
-    workflow, a, *_ = _blocked_workflow(owner, workspace, api_settings)
+    workflow, a, *_ = _blocked_workflow(owner, workspace, api_settings, worker_factory)
     version = _draft_replan(owner, workspace, workflow, worker_factory, api_settings)
     # The kept task was removed meanwhile (setup outside the API).
     sql(
@@ -1027,3 +1090,67 @@ def test_a_replan_whose_completed_work_changed_is_refused(
     stale = _confirm(owner, workspace, workflow, version)
 
     assert stale.status_code == 409 and stale.json()["error"]["code"] == "PLAN_DRAFT_STALE"
+
+
+# --- escalation (Step 5.5, ADR-0034) -------------------------------------------------------------
+
+
+def test_reassigning_an_escalated_task_starts_a_new_attempt_number(
+    owner: TestClient, workspace: str, workflow: str, api_settings: Settings, worker_factory: Any
+) -> None:
+    from app.agents.mock import MockAgent
+    from app.db.sync_session import session_scope
+    from app.execution import outbox, runner
+    from app.llm.gateway import ModelGateway
+    from app.llm.mock import MockModelAdapter
+    from tests.conftest import make_settings
+
+    task = add_task(owner, workspace, workflow).json()
+    for status in ("PLANNING", "READY", "RUNNING"):
+        move(owner, workspace, workflow, status)
+    writer = builtin_id(owner, workspace, "Writer")
+
+    def assign() -> None:
+        current = task_of(owner, workspace, workflow, task["id"])
+        assigned = owner.post(
+            wf_url(workspace, f"/{workflow}/tasks/{task['id']}/assign"),
+            json={"agent_id": writer, "revision": current["revision"]},
+            headers=csrf(owner),
+        )
+        assert assigned.status_code == 200
+
+    def claim_latest() -> Any:
+        event_id, payload = sql(
+            api_settings,
+            "SELECT id, payload FROM outbox_events WHERE task_id = :id AND event_type = :type "
+            "ORDER BY created_at DESC LIMIT 1",
+            id=task["id"],
+            type=outbox.TASK_DISPATCH,
+        )[0]
+        with session_scope(worker_factory) as s:
+            return runner.claim(
+                s,
+                event_id=event_id,
+                workspace_id=uuid.UUID(workspace),
+                workflow_id=uuid.UUID(workflow),
+                task_id=uuid.UUID(task["id"]),
+                agent_version_id=uuid.UUID(payload["agent_version_id"]),
+            )
+
+    assign()
+    first = claim_latest()
+    assert isinstance(first, runner.Claim) and first.attempt_number == 1
+    no_model = ModelGateway(make_settings(), MockModelAdapter(), lambda record: uuid.uuid4())
+    submission = runner.run_agent(first, MockAgent, models=no_model, is_current=lambda: True)
+    with session_scope(worker_factory) as s:
+        runner.finish(s, first, submission)
+    # Escalated with that attempt uncounted, as when its evaluation was unavailable (ADR-0031);
+    # setup outside the API.
+    sql(
+        api_settings, "UPDATE workflow_tasks SET status = 'ESCALATED' WHERE id = :id", id=task["id"]
+    )
+
+    assign()  # a member reassigns the escalated task
+
+    second = claim_latest()
+    assert isinstance(second, runner.Claim) and second.attempt_number == 2

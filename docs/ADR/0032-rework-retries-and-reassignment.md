@@ -55,3 +55,6 @@ The worker may now INSERT into `agent_selections` (append-only, platform RLS pol
 - **More model cost.** Automatic retries spend model calls without a person deciding. They are bounded by the three attempts, and every call is recorded.
 - **Instructions are generic by design.** They tell the agent what failed, not how to fix it. The semantic evaluator's reasons stay in the attempt's verification for people to read.
 - **Follow-up.** The selection rules' "history" factor is still not scored (`selection/v1`). Scoring it from verification outcomes needs a new rules version.
+
+## Amendment (Step 5.5, 2026-11-15)
+Policy failures no longer wait in REWORK_REQUIRED, and a third failed attempt no longer ends FAILED: both escalate the task to people (ADR-0034).

@@ -204,6 +204,18 @@ async def list_verifications(
     return list(rows.scalars())
 
 
+async def max_attempt_number(session: AsyncSession, workflow: Workflow, task_id: uuid.UUID) -> int:
+    """The highest attempt number of a task's executions (0 when it has none)."""
+    value = await session.execute(
+        select(func.max(AgentExecution.attempt_number)).where(
+            AgentExecution.task_id == task_id,
+            AgentExecution.workflow_id == workflow.id,
+            AgentExecution.workspace_id == workflow.workspace_id,
+        )
+    )
+    return int(value.scalar_one() or 0)
+
+
 async def list_tool_invocations(
     session: AsyncSession, workflow: Workflow, task_id: uuid.UUID
 ) -> list[ToolInvocation]:

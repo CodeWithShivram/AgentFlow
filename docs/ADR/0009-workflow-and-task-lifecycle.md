@@ -122,3 +122,6 @@ Status payloads are `{from, to, actor, reason?}`. **Prompts are never copied int
 
 ## Amendment (Step 5.2, 2026-11-15)
 VERIFYING → CANCELLED is allowed for people and the system (ADR-0031): VERIFYING now lasts while the semantic evaluation's model call runs, so it must be cancellable like SUBMITTED.
+
+## Amendment (Step 5.5, 2026-11-15)
+VERIFYING → COMPLETED additionally requires PASSED results from both verifiers on the task's latest successful attempt, checked by the engine and by a database trigger (ADR-0034).

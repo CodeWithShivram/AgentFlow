@@ -452,11 +452,16 @@ async def assign_agent(
         user_id=access.user_id,
     )
     previous = (task.assigned_agent_id, task.assigned_agent_version_id)
-    retry = task.status == T.REWORK_REQUIRED
     task.assigned_agent_id = agent_id
     task.assigned_agent_version_id = version.id
-    if retry:
-        task.attempt_count += 1
+    if task.status in (T.REWORK_REQUIRED, T.ESCALATED):
+        # The next attempt follows the last one that exists. An escalated task's last attempt
+        # may not have been counted (e.g. evaluation unavailable, ADR-0031), so counting from
+        # the attempts themselves avoids reusing an attempt number (ADR-0034).
+        counted = task.attempt_count + (1 if task.status == T.REWORK_REQUIRED else 0)
+        task.attempt_count = max(
+            counted, await repository.max_attempt_number(session, workflow, task.id)
+        )
     reassigned = previous[0] is not None
     details = {
         "agent_id": str(agent_id),

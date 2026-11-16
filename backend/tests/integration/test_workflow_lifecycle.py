@@ -5,7 +5,7 @@ import asyncio
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -15,9 +15,13 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from app.agents.seed import seed_builtin_agents
 from app.models import (
     Agent,
+    AgentExecution,
     AutonomyPolicy,
+    ExecutionStatus,
     TaskStatus,
     User,
+    VerificationOutcome,
+    VerificationResult,
     Workflow,
     WorkflowEvent,
     WorkflowEventType,
@@ -161,6 +165,51 @@ async def _assign(
     )
 
 
+async def _record_accepted_attempt(
+    engine: AsyncEngine, world: World, workflow_id: uuid.UUID, task_id: uuid.UUID
+) -> None:
+    """What the runner and the verification jobs store for an accepted attempt: a successful
+    execution with PASSED results from both verifiers. Completing a task requires them (ADR-0034,
+    checked by the engine and a database trigger); these lifecycle tests walk the statuses by
+    hand instead of running an agent."""
+    async with AsyncSession(engine, expire_on_commit=False, autoflush=False) as session:
+        workflow = await repository.lock_workflow(
+            session, workspace_id=world.owner.workspace_id, workflow_id=workflow_id
+        )
+        assert workflow is not None
+        task = await repository.get_task(session, workflow, task_id)
+        assert task is not None and task.assigned_agent_id and task.assigned_agent_version_id
+        attempt = await repository.max_attempt_number(session, workflow, task_id) + 1
+        execution = AgentExecution(
+            id=uuid.uuid4(),
+            workspace_id=workflow.workspace_id,
+            workflow_id=workflow.id,
+            task_id=task.id,
+            agent_id=task.assigned_agent_id,
+            agent_version_id=task.assigned_agent_version_id,
+            attempt_number=attempt,
+            status=ExecutionStatus.SUCCEEDED,
+            dispatch_event_id=uuid.uuid4(),
+            completed_at=datetime.now(UTC),
+        )
+        session.add(execution)
+        await session.flush()
+        session.add_all(
+            VerificationResult(
+                workspace_id=workflow.workspace_id,
+                workflow_id=workflow.id,
+                task_id=task.id,
+                execution_id=execution.id,
+                verifier=verifier,
+                outcome=VerificationOutcome.PASSED,
+                checks=[],
+                issues=[],
+            )
+            for verifier in ("deterministic/v1", "semantic/v1")
+        )
+        await session.commit()
+
+
 async def _execute_to_completion(
     engine: AsyncEngine, world: World, workflow_id: uuid.UUID, task_id: uuid.UUID
 ) -> None:
@@ -172,6 +221,8 @@ async def _execute_to_completion(
         (T.VERIFYING, Actor.VERIFIER),
         (T.COMPLETED, Actor.VERIFIER),
     ):
+        if target == T.COMPLETED:
+            await _record_accepted_attempt(engine, world, workflow_id, task_id)
         await _task_step(engine, world, workflow_id, task_id, target, actor)
 
 

@@ -32,11 +32,15 @@ from sqlalchemy.orm import Session
 from app.core.errors import AppError
 from app.execution import outbox
 from app.models import (
+    AgentExecution,
     AnalysisStatus,
     AutonomyPolicy,
+    ExecutionStatus,
     PlanStatus,
     TaskDependency,
     TaskStatus,
+    VerificationOutcome,
+    VerificationResult,
     Workflow,
     WorkflowEvent,
     WorkflowEventType,
@@ -438,6 +442,8 @@ def transition_task(
             )
     if target == T.READY:
         _require_dependencies_completed(session, workflow, task)
+    if target == T.COMPLETED:
+        _require_platform_acceptance(session, workflow, task)
     if target == T.ASSIGNED and task.assigned_agent_version_id is None:
         raise TransitionPreconditionError("Assign an agent version first.")
 
@@ -472,6 +478,43 @@ def transition_task(
         _dispatch_waiting(session, workflow)
     if reconcile:
         reconcile_workflow(session, workflow)
+
+
+# Every verifier whose PASSED result a task's latest successful attempt needs (ADR-0034); the
+# database trigger of migration 0023 enforces the same rule for any write.
+ACCEPTING_VERIFIERS = frozenset({"deterministic", "semantic"})
+
+
+def _require_platform_acceptance(session: Session, workflow: Workflow, task: WorkflowTask) -> None:
+    latest = session.execute(
+        select(AgentExecution.id)
+        .where(
+            AgentExecution.task_id == task.id,
+            AgentExecution.workflow_id == workflow.id,
+            AgentExecution.workspace_id == workflow.workspace_id,
+            AgentExecution.status == ExecutionStatus.SUCCEEDED,
+        )
+        .order_by(AgentExecution.attempt_number.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    passed = (
+        {
+            verifier.split("/")[0]
+            for verifier in session.execute(
+                select(VerificationResult.verifier).where(
+                    VerificationResult.execution_id == latest,
+                    VerificationResult.workspace_id == workflow.workspace_id,
+                    VerificationResult.outcome == VerificationOutcome.PASSED,
+                )
+            ).scalars()
+        }
+        if latest is not None
+        else set()
+    )
+    if not ACCEPTING_VERIFIERS <= passed:
+        raise TransitionPreconditionError(
+            "Only platform verification can accept a task: its latest attempt has not passed."
+        )
 
 
 def _require_dependencies_completed(

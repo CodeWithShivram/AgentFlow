@@ -447,6 +447,8 @@ def finish(session: Session, job: EvaluationJob, outcome: Evaluation | Evaluatio
         findings=outcome.model_dump(mode="json"),
     )
     session.add(result)
+    # Flushed first: the engine's acceptance check (ADR-0034) reads it before completing the task.
+    session.flush()
     context = {
         "execution_id": str(execution.id),
         "attempt_number": execution.attempt_number,
@@ -462,7 +464,7 @@ def finish(session: Session, job: EvaluationJob, outcome: Evaluation | Evaluatio
         target = (
             TaskStatus.REWORK_REQUIRED
             if execution.attempt_number < MAX_ATTEMPTS_PER_TASK
-            else TaskStatus.FAILED
+            else TaskStatus.ESCALATED  # attempts exhausted: people decide (ADR-0034)
         )
         engine.transition_task(
             session,

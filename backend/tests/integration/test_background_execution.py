@@ -65,6 +65,8 @@ from app.schemas.agents import AgentConfiguration
 from app.services.usage import record_model_call, record_tool_invocation
 from app.tools.gateway import ToolError, ToolPermissionDeniedError
 from app.tools.registry import ToolCallContext, ToolDefinition, ToolImplementation
+from app.verification import job as verification_job
+from app.verification import semantic
 from app.workflows import engine
 from app.workflows.state_machine import Actor
 from tests.conftest import make_settings
@@ -456,7 +458,8 @@ def test_failed_attempts_are_kept_and_bounded(
         claim = _claim(worker_factory, event)
         assert isinstance(claim, runner.Claim) and claim.attempt_number == attempt
         outcome = _finish(worker_factory, claim, failure)
-        assert outcome == ("rework_required" if attempt < 3 else "failed")
+        # Step 5.5 (ADR-0034): the third failure escalates to people instead of failing.
+        assert outcome == ("rework_required" if attempt < 3 else "escalated")
 
     with session_scope(admin_factory) as s:
         attempts = s.execute(
@@ -470,7 +473,7 @@ def test_failed_attempts_are_kept_and_bounded(
         (2, ExecutionStatus.FAILED),
         (3, ExecutionStatus.FAILED),
     ]
-    assert workflow_status == WorkflowStatus.FAILED  # a required task failed for good
+    assert workflow_status == WorkflowStatus.BLOCKED  # a required task needs people
 
 
 def test_parallel_limit_defers_and_a_finished_task_dispatches_the_next(
@@ -1122,12 +1125,30 @@ def _set_priorities(admin: Factory, world: World, priorities: list[int]) -> None
         s.commit()
 
 
-def _verify(admin: Factory, world: World, task_id: uuid.UUID) -> None:
-    """Stands in for platform verification (Phase 5): SUBMITTED -> VERIFYING -> COMPLETED."""
+def _verify(admin: Factory, worker: Factory, world: World, task_id: uuid.UUID) -> None:
+    """Runs platform verification on the task's requests, as a worker would: the deterministic
+    checks, then the semantic evaluation (mock provider). Only these accept a task (ADR-0034)."""
+
+    def latest(event_type: str) -> OutboxEvent:
+        with session_scope(admin) as s:
+            return s.execute(
+                select(OutboxEvent)
+                .where(OutboxEvent.task_id == task_id, OutboxEvent.event_type == event_type)
+                .order_by(OutboxEvent.created_at.desc())
+                .limit(1)
+            ).scalar_one()
+
+    ids = {"workspace_id": world.workspace_id, "workflow_id": world.workflow_id, "task_id": task_id}
+    with session_scope(worker) as s:
+        assert verification_job.run(s, event_id=latest(outbox.TASK_VERIFY).id, **ids) == "passed"
+    with session_scope(worker) as s:
+        claimed = semantic.claim(s, event_id=latest(outbox.TASK_EVALUATE).id, **ids)
+    assert isinstance(claimed, semantic.EvaluationJob)
+    gateway = ModelGateway(make_settings(), MockModelAdapter(), lambda record: uuid.uuid4())
+    evaluation = semantic.evaluate(gateway, claimed, sleep=lambda _: None)
+    with session_scope(worker) as s:
+        assert semantic.finish(s, claimed, evaluation) == "passed"
     with session_scope(admin) as s:
-        workflow, task = _locked(s, world), _task(s, task_id)
-        engine.transition_task(s, workflow, task, TaskStatus.VERIFYING, actor=Actor.VERIFIER)
-        engine.transition_task(s, workflow, task, TaskStatus.COMPLETED, actor=Actor.VERIFIER)
         _drop_orchestration_requests(s)
         s.commit()
 
@@ -1216,7 +1237,7 @@ def test_a_pre_assigned_task_is_dispatched_when_its_dependencies_complete(
     assert _status(admin_factory, dependent) == TaskStatus.PENDING  # never runs early
     assert _dispatch_events(admin_factory, dependent) == []
 
-    _verify(admin_factory, world, prerequisite)
+    _verify(admin_factory, worker_factory, world, prerequisite)
 
     assert _status(admin_factory, dependent) == TaskStatus.ASSIGNED
     (dispatch,) = _dispatch_events(admin_factory, dependent)
@@ -1297,7 +1318,7 @@ def test_a_lost_worker_does_not_lose_the_committed_task(
     assert recovery.recover_once(worker_factory) == recovery.RecoveryReport()
 
 
-def test_a_lost_last_attempt_fails_the_task(
+def test_a_lost_last_attempt_escalates_the_task(
     admin_factory: Factory, worker_factory: Factory
 ) -> None:
     world = _world(admin_factory)
@@ -1312,8 +1333,8 @@ def test_a_lost_last_attempt_fails_the_task(
 
     assert recovery.recover_once(worker_factory) == recovery.RecoveryReport(lost_attempts=1)
 
-    assert _status(admin_factory, world.task_ids[0]) == TaskStatus.FAILED
-    assert _scalar(admin_factory, select(Workflow.status)) == WorkflowStatus.FAILED
+    assert _status(admin_factory, world.task_ids[0]) == TaskStatus.ESCALATED  # ADR-0034
+    assert _scalar(admin_factory, select(Workflow.status)) == WorkflowStatus.BLOCKED
     assert len(_dispatch_events(admin_factory)) == 1  # never retried beyond the limit
 
 

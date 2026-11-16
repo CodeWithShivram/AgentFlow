@@ -139,6 +139,11 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   `basis` of completed tasks (`done-N` keys, `depends_on_completed`). Confirming keeps COMPLETED (and FAILED)
   tasks, removes the other unfinished ones as history, refuses in-flight work and stale bases, needs ADMIN for
   approval-required workflows, and never resumes work.
+- Escalation and acceptance (ADR-0034): exhausted attempts and `NOT_RETRIED` policy failures go to ESCALATED,
+  never FAILED; reassigning takes `attempt_count` past the highest recorded attempt. A RUNNING workflow past its
+  deadline is paused once by the recovery sweep (DEADLINE_PASSED). COMPLETED needs PASSED deterministic and
+  semantic results on the latest successful attempt: the engine checks it and a trigger (migration 0023) enforces
+  it for any write, so tests complete tasks only through the real verification jobs (flush results first).
 - Workflow events are append-only.
 
 ## Security

@@ -135,7 +135,7 @@ def run(
         target = (
             TaskStatus.REWORK_REQUIRED
             if execution.attempt_number < MAX_ATTEMPTS_PER_TASK
-            else TaskStatus.FAILED
+            else TaskStatus.ESCALATED  # attempts exhausted: people decide (ADR-0034)
         )
         engine.transition_task(
             session,

@@ -358,21 +358,22 @@ def test_a_failing_submission_goes_back_for_rework_with_its_issues(
     assert _status(admin_factory, world.dependent_id) == TaskStatus.PENDING
 
 
-def test_a_failing_last_attempt_fails_the_task_and_the_workflow(
+def test_a_failing_last_attempt_escalates_the_task_and_blocks_the_workflow(
     admin_factory: Factory, worker_factory: Factory
 ) -> None:
     world = _world(admin_factory, attempt_count=runner.MAX_ATTEMPTS_PER_TASK - 1)
     _submit(admin_factory, worker_factory, world, _HonestAgent)
     (event,) = _events(admin_factory, outbox.TASK_VERIFY, world.task_id)
 
-    assert _verify(worker_factory, world, event) == "failed"
+    # Step 5.5 (ADR-0034): exhausted attempts escalate to people instead of failing.
+    assert _verify(worker_factory, world, event) == "escalated"
 
-    assert _status(admin_factory, world.task_id) == TaskStatus.FAILED
+    assert _status(admin_factory, world.task_id) == TaskStatus.ESCALATED
     with session_scope(admin_factory) as s:
         status = s.execute(
             select(Workflow.status).where(Workflow.id == world.workflow_id)
         ).scalar_one()
-    assert status == WorkflowStatus.FAILED
+    assert status == WorkflowStatus.BLOCKED
 
 
 def test_duplicate_and_stale_verification_requests_change_nothing(
@@ -762,7 +763,7 @@ def test_with_no_other_eligible_agent_the_same_agent_retries(
 
 
 @pytest.mark.parametrize("code", ["TOOL_PERMISSION_DENIED", "AGENT_RUNTIME_UNAVAILABLE"])
-def test_policy_failures_wait_for_people(
+def test_policy_failures_are_escalated_to_people(
     admin_factory: Factory, worker_factory: Factory, code: str
 ) -> None:
     world = _world(admin_factory)
@@ -770,5 +771,76 @@ def test_policy_failures_wait_for_people(
     with session_scope(worker_factory) as s:
         assert runner.finish(s, claim, runner.Failure(code, "Refused.")) == "rework_required"
 
-    assert _status(admin_factory, world.task_id) == TaskStatus.REWORK_REQUIRED
+    # Step 5.5 (ADR-0034): not retried, and escalated instead of waiting in rework.
+    assert _status(admin_factory, world.task_id) == TaskStatus.ESCALATED
+    escalated = _task_events(admin_factory, world.task_id)[-1]
+    assert escalated.payload["reason"] == "POLICY_FAILURE"
+    assert escalated.payload["failure_codes"] == [code]
     assert len(_events(admin_factory, outbox.TASK_DISPATCH, world.task_id)) == 1
+
+
+# --- escalation and platform acceptance (Step 5.5, ADR-0034) -----------------------------------
+
+
+def test_only_platform_verification_can_complete_a_task(
+    admin_factory: Factory, worker_factory: Factory
+) -> None:
+    world = _world(admin_factory)
+    _evaluating(admin_factory, worker_factory, world)  # checks passed, evaluation pending
+
+    # The engine refuses, even for the VERIFIER actor, while the evaluation has not passed.
+    with session_scope(admin_factory) as s:
+        workflow = s.execute(
+            select(Workflow).where(Workflow.id == world.workflow_id).with_for_update()
+        ).scalar_one()
+        task = s.get(WorkflowTask, world.task_id)
+        assert task is not None
+        with pytest.raises(engine.TransitionPreconditionError):
+            engine.transition_task(s, workflow, task, TaskStatus.COMPLETED, actor=Actor.VERIFIER)
+    # The database refuses any other write too, whatever the role.
+    with (
+        pytest.raises(DBAPIError, match="only platform verification"),
+        session_scope(admin_factory) as s,
+    ):
+        s.execute(
+            update(WorkflowTask)
+            .where(WorkflowTask.id == world.task_id)
+            .values(status=TaskStatus.COMPLETED)
+        )
+    assert _status(admin_factory, world.task_id) == TaskStatus.VERIFYING
+
+    assert _evaluate(admin_factory, worker_factory, world) == "passed"  # the platform's way
+    assert _status(admin_factory, world.task_id) == TaskStatus.COMPLETED
+
+
+def test_a_workflow_is_paused_once_when_its_deadline_passes(
+    admin_factory: Factory, worker_factory: Factory
+) -> None:
+    world = _world(admin_factory)
+    assert recovery.recover_once(worker_factory) == recovery.RecoveryReport()
+    with session_scope(admin_factory) as s:
+        s.execute(
+            update(Workflow)
+            .where(Workflow.id == world.workflow_id)
+            .values(deadline=datetime.now(UTC) - timedelta(minutes=1))
+        )
+        s.commit()
+
+    assert recovery.recover_once(worker_factory) == recovery.RecoveryReport(paused_at_deadline=1)
+
+    with session_scope(admin_factory) as s:
+        workflow = s.execute(
+            select(Workflow).where(Workflow.id == world.workflow_id).with_for_update()
+        ).scalar_one()
+        assert workflow.status == WorkflowStatus.PAUSED
+        paused = s.execute(
+            select(WorkflowEvent)
+            .where(WorkflowEvent.workflow_id == world.workflow_id, WorkflowEvent.task_id.is_(None))
+            .order_by(WorkflowEvent.sequence.desc())
+            .limit(1)
+        ).scalar_one()
+        assert paused.payload["reason"] == "DEADLINE_PASSED" and paused.payload["actor"] == "SYSTEM"
+        # People decided to carry on: the deadline does not pause it again.
+        engine.transition_workflow(s, workflow, WorkflowStatus.RUNNING, actor=Actor.USER)
+        s.commit()
+    assert recovery.recover_once(worker_factory) == recovery.RecoveryReport()

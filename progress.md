@@ -1,9 +1,9 @@
 # AgentFlow Progress
 
 ## Current position
-- Phase: 5 — Verification and recovery (Phases 2–4 complete; Phase 1 released as `v0.1.0`, pushed with its tag)
-- Last completed step: 5.4 — Replan with DAG validation
-- Next step: 5.5 — Escalation policies; only platform verification accepts tasks, which needs a short plan and the owner's go-ahead
+- Phase: 5 — Verification and recovery, complete with Step 5.5 (Phases 2–4 complete; Phase 1 released as `v0.1.0`, pushed with its tag)
+- Last completed step: 5.5 — Escalation policies; only platform verification accepts tasks
+- Next step: 6.1 — Clarification and approval request model/API (Phase 6), which needs a short plan and the owner's go-ahead
 
 ## Completed steps
 | Step | Commit message | Hash |
@@ -43,16 +43,17 @@
 | 5.1 | `feat(verification): verify submissions deterministically and accept passing tasks` | `fdda86b` (pushed, CI ✔) |
 | 5.2 | `feat(verification): add semantic evaluation with structured findings` | `7f7805a` (pushed, CI ✔) |
 | 5.3 | `feat(verification): retry failed attempts with corrective instructions and reassign once` | `7ec5310` (pushed, CI ✔) |
-| 5.4 | `feat(planning): replan the remaining work of paused or blocked workflows` | latest commit touching `docs/ADR/0033-replanning.md` |
+| 5.4 | `feat(planning): replan the remaining work of paused or blocked workflows` | `0012bb7` (pushed, CI ✔) |
+| 5.5 | `feat(verification): escalate exhausted work and let only platform verification accept tasks` | latest commit touching `docs/ADR/0034-escalation-and-platform-acceptance.md` |
 
 ## Environment snapshot (2026-11-14)
 | Item | Value |
 |---|---|
-| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `7ec5310` plus tag `v0.1.0` (owner-authorized) |
+| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `0012bb7` plus tag `v0.1.0` (owner-authorized) |
 | Python / uv / Node / npm | 3.12.14 via uv 0.12.9 / Node 24.13.0 / npm 11.6.2 |
 | Celery / kombu | 5.7.0 / 5.7.0 |
 | Docker | 29.9.3 — `agentflow` stack healthy (Docker Desktop must be started first; it had stopped and was restarted in Steps 3.1 and 3.4) |
-| Dev database | `agentflow` at `0022 (head)`; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
+| Dev database | `agentflow` at `0023 (head)`; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
 | Local `.env` | holds generated `WORKER_DB_PASSWORD` and (new) `API_DB_PASSWORD` (gitignored) |
 | Port 8000 | Used by another local project (`easa`); smoke tests used 8010 |
 | E2E | API :8011 (as `agentflow_api`), frontend :3100, database `agentflow_e2e` (reset each run), Redis DBs 2/3, installed Google Chrome |
@@ -60,6 +61,44 @@
 | Test HTTP client | `httpx2` 2.16.0 (replaces `httpx`, OD-10); `httpx` is back only as a LiteLLM dependency |
 | LiteLLM | 1.109.1, imported by workers only when `MODEL_PROVIDER=litellm`; `.env` keeps the mock |
 | LangGraph | 1.2.22 (with langchain-core 1.8.0 and langsmith 0.14.17), imported by workers only; LangSmith tracing disabled; checkpoints via `langgraph-checkpoint-postgres` 3.2.1 |
+
+## Step 5.5 — escalation and platform-only acceptance (ADR-0034)
+- **Owner decisions (2026-11-15):**
+  - exhausted attempts escalate;
+  - policy failures escalate;
+  - pause at the deadline;
+  - acceptance is enforced by the engine and the database.
+- **Escalation:**
+  - the third failure (runner, deterministic checks, semantic evaluation) and a lost worker's last attempt (recovery) now go to ESCALATED instead of FAILED;
+  - `schedule_rework` escalates `NOT_RETRIED` failures (reason `POLICY_FAILURE`, with the codes);
+  - attempts people add beyond three escalate again when they fail.
+- **Bug fixed:** reassigning an ESCALATED task did not advance `attempt_count` (only REWORK_REQUIRED retries did). An escalated task whose attempt was not counted (evaluation unavailable, Step 5.2) would therefore have reused an attempt number at the next claim, breaking the unique constraint. `assign_agent` now takes the larger of the counted attempts (plus one for a rework retry) and `repository.max_attempt_number`. A new API test proves attempt 2 follows, and the existing retry test still holds.
+- **Deadlines:** the recovery sweep pauses an overdue RUNNING workflow once (SYSTEM, `DEADLINE_PASSED`, `paused_at_deadline` in the report), and never again after people resume it.
+- **Acceptance:**
+  - `engine._require_platform_acceptance` refuses COMPLETED unless the latest successful attempt has PASSED `deterministic` and `semantic` results;
+  - migration `0023` adds the trigger `workflow_tasks_platform_acceptance`, enforcing the same for every write;
+  - the semantic job flushes its result before completing the task, which the new guard found missing.
+- **Tests changed (intended behaviour changes):**
+  - the exhausted-attempt tests (bounded attempts, lost last attempt, failing last attempt) expect ESCALATED and a BLOCKED workflow;
+  - the policy-failure test expects ESCALATED;
+  - the Step 4.4 test's engine stand-in now runs the real verification and evaluation;
+  - the replan tests complete task A through a real attempt and verification instead of SQL;
+  - the Step 1.7 lifecycle tests, which walk statuses by hand, now record the successful attempt and both verifiers' PASSED results before the final step, as the platform would store them.
+- **Frontend:** none needed; escalated tasks already offer "Assign agent".
+
+## Checks last executed (Step 5.5)
+- **Full gate (`check.ps1 -E2E`) ✔, exit 0:**
+  - backend: ruff format, ruff check, mypy (188 files), alembic check;
+  - pytest **1098 passed**: 1095 plus 3 new integration tests (the engine and trigger refusing an unverified completion, the deadline pause once, the escalated reassignment's attempt number), plus the updated escalation tests;
+  - frontend: eslint, typecheck, Vitest **115**, Playwright **15 passed**, build.
+- **An earlier gate run failed** on the Step 1.7 lifecycle tests, whose hand-walked completions the new guards rightly refused. Their setup now records the accepted attempt.
+
+  A first version of the attempt-count fix also broke the existing retry test (a rework retry with no recorded attempt). The rule now takes the larger of the counted and recorded attempts.
+- **Deliberate-bug check** (restored byte-for-byte): skipping the engine's acceptance check fails the acceptance test. The trigger then refuses at the database instead, which the test distinguishes.
+- **Environment:**
+  - Docker Desktop stopped once and was restarted;
+  - the dev DB is at `0023`;
+  - no servers were left running after E2E.
 
 ## Step 5.4 — replanning (ADR-0033; resolves OD-16)
 - **Owner decisions (2026-11-15):**
@@ -93,7 +132,7 @@
   - the graph version pins moved to v4;
   - the generic blocked-step test now assesses a RUNNING workflow, since BLOCKED workflows get `unblock`.
 
-## Checks last executed (Step 5.4)
+## Checks (Step 5.4)
 - **Full gate (`check.ps1 -E2E`) ✔, exit 0, on the third run:**
   - backend: ruff format, ruff check, mypy (187 files), alembic check;
   - pytest **1095 passed** (1084 plus 11 new):
@@ -835,6 +874,6 @@
 None.
 
 ## Next exact action
-1. **Push Step 5.4** on the owner's go-ahead, and confirm CI on GitHub.
-2. **Step 5.5 (escalation policies; only platform verification accepts tasks):** present a short plan and get the owner's go-ahead.
+1. **Push Step 5.5** on the owner's go-ahead, and confirm CI on GitHub.
+2. **Phase 6, Step 6.1 (clarification and approval request model/API):** present a short plan and get the owner's go-ahead.
 3. **Before any hosted deployment:** settle OD-14, OD-19 and OD-20.

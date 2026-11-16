@@ -428,7 +428,7 @@ def finish(session: Session, claim: Claim, outcome: AgentSubmission | Failure) -
         target = (
             TaskStatus.REWORK_REQUIRED
             if claim.attempt_number < MAX_ATTEMPTS_PER_TASK
-            else TaskStatus.FAILED
+            else TaskStatus.ESCALATED  # attempts exhausted: people decide (ADR-0034)
         )
         engine.transition_task(
             session, workflow, task, target, actor=Actor.SYSTEM, reason=outcome.code, extra=context
