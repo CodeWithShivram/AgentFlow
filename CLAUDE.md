@@ -83,8 +83,8 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   attempt even if the agent catches them. Each call writes a `tool_invocations` row (own transaction) with an argument
   hash only, never arguments or output. Handlers scope everything to their `ToolCallContext`; errors use fixed messages.
 - All LLM calls go through `app/llm/gateway.py` (`get_model_gateway().complete(...)`, ADR-0013), in workers only; the
-  API never calls a model. Each call writes an `llm_usage` row (its own transaction) with provider-reported usage; costs
-  stay NULL until Phase 7 pricing. Validate structured output with a Pydantic `response_format`; never log prompts or
+  API never calls a model. Each call writes an `llm_usage` row (its own transaction) with provider-reported usage and
+  its cost (ADR-0040). Validate structured output with a Pydantic `response_format`; never log prompts or
   outputs. Tests use `MockModelAdapter.script(...)`; register schema-valid mock defaults for new purposes. Never label
   estimated cost/tokens as actual.
 - Real models (ADR-0020): `MODEL_PROVIDER=litellm` uses `app/llm/litellm_adapter.py`, the only module that imports
@@ -166,6 +166,10 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   `uv run python -m app.llm.pricing load` (change a price = new `version`; never fetch prices online, never invent
   real prices). `record_model_call` links each call to the price in force (`model_price_id`) and sets `usage_source`;
   counts are `reported` only for providers the list marks `reports_usage`. Applications only read price tables.
+- Costs and budgets (ADR-0040): `app.llm.costing` is the only cost arithmetic (decimals, 8 places, cached price or
+  input price); `cost_basis` is actual/estimated/mock and they are never summed together. Unpriced calls stay NULL.
+  Budgets count actual + estimated spend in the workflow's currency (no FX); `engine.pause_at_budget` pauses once
+  (BUDGET_REACHED), called by the runner after each attempt and by the recovery sweep.
 - Workflow events are append-only.
 
 ## Security

@@ -33,6 +33,7 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import AppError
 from app.execution import outbox
+from app.llm import costing
 from app.models import (
     AgentExecution,
     AnalysisStatus,
@@ -130,6 +131,8 @@ def record_event(
 # Reasons recorded when an agent's request is rejected and stopped, or expires (ADR-0037).
 APPROVAL_REJECTED = "APPROVAL_REJECTED"
 APPROVAL_EXPIRED = "APPROVAL_EXPIRED"
+# Recorded when spend reaches the workflow's budget (ADR-0040).
+BUDGET_REACHED = "BUDGET_REACHED"
 # Reasons recorded with the platform's own pause and resume (ADR-0036).
 AWAITING_DECISION = "AWAITING_DECISION"
 DECISIONS_MADE = "DECISIONS_MADE"
@@ -870,6 +873,39 @@ def transition_task(
 # A workflow whose plan needs approval also stops while an agent's request waits for an admin,
 # and the platform resumes it once every such request is closed. It never lifts a person's or
 # the deadline's pause.
+
+
+def pause_at_budget(session: Session, workflow: Workflow) -> bool:
+    """Pauses a RUNNING workflow once its actual plus estimated spend reaches its budget
+    (ADR-0040; handoff scenario 13). Only spend in the workflow's currency counts: a budget in
+    another currency than the prices is not comparable and never enforced. Like the deadline,
+    it pauses once: resuming past the budget is a person's deliberate choice."""
+    if workflow.status != W.RUNNING or workflow.budget_limit is None:
+        return False
+    already = session.execute(
+        select(WorkflowEvent.id)
+        .where(
+            WorkflowEvent.workflow_id == workflow.id,
+            WorkflowEvent.workspace_id == workflow.workspace_id,
+            WorkflowEvent.event_type == WorkflowEventType.WORKFLOW_STATUS_CHANGED,
+            WorkflowEvent.payload["reason"].astext == BUDGET_REACHED,
+        )
+        .limit(1)
+    ).first()
+    if already is not None:
+        return False
+    spend = costing.workflow_spend(session, workflow)
+    if spend <= 0 or spend < workflow.budget_limit:
+        return False
+    transition_workflow(
+        session,
+        workflow,
+        W.PAUSED,
+        actor=Actor.SYSTEM,
+        reason=BUDGET_REACHED,
+        pause_reason=PauseReason.BUDGET_REACHED,
+    )
+    return True
 
 
 def pause_for_decision(session: Session, workflow: Workflow) -> bool:

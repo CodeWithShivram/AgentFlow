@@ -510,5 +510,7 @@ def finish(
         result = target.value.lower()
         if target == TaskStatus.REWORK_REQUIRED:  # the next attempt, if the policy allows (5.3)
             rework.schedule_rework(session, workflow, task, failure_codes=[outcome.code])
+    # The attempt's model calls are recorded (and costed) by now: stop at the budget (ADR-0040).
+    engine.pause_at_budget(session, workflow)
     session.commit()
     return result

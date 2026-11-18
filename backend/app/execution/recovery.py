@@ -23,6 +23,9 @@ engine, so every status change writes its event:
   people resumed after that pause is not paused again.
 - Interrupted planning jobs: an analysis or plan request still PENDING `INTERRUPTED_JOB_AFTER`
   after its job claimed it is marked FAILED, so the user can retry it.
+- Budgets (ADR-0040): a RUNNING workflow whose actual plus estimated spend (in its currency)
+  reached its budget is paused (SYSTEM, BUDGET_REACHED) once, as the runner also checks after each
+  attempt; this catches spend from planning and evaluation calls.
 - Expired requests (ADR-0037): an agent's approval request still OPEN after its `expires_at` is
   EXPIRED and handled as a rejection (the agent finishes without the action), as the engine
   handles an admin's rejection; a workflow paused for it then resumes (ADR-0036).
@@ -37,11 +40,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import and_, exists, select
+from sqlalchemy import and_, exists, func, select
 from sqlalchemy.orm import Session, aliased, sessionmaker
 
 from app.db.sync_session import session_scope
 from app.execution import outbox, runner
+from app.llm import costing
 from app.models import (
     AgentExecution,
     AnalysisStatus,
@@ -50,6 +54,7 @@ from app.models import (
     InboxMessage,
     InterventionStatus,
     InterventionSubject,
+    LlmUsage,
     OutboxEvent,
     OutboxStatus,
     PauseReason,
@@ -92,6 +97,7 @@ class RecoveryReport:
     reevaluated: int = 0
     interrupted_evaluations: int = 0
     paused_at_deadline: int = 0
+    paused_at_budget: int = 0
     interrupted_jobs: int = 0
     expired_requests: int = 0
 
@@ -145,6 +151,12 @@ def recover_once(
             report.paused_at_deadline += pause_at_deadline(
                 session, workspace_id, workflow_id, now=now
             )
+
+    with session_scope(factory) as session:
+        over_budget = _over_budget_workflows(session, batch_size)
+    for workspace_id, workflow_id in over_budget:
+        with session_scope(factory) as session:
+            report.paused_at_budget += pause_at_budget(session, workspace_id, workflow_id)
 
     with session_scope(factory) as session:
         interrupted = _interrupted_jobs(session, now - INTERRUPTED_JOB_AFTER, batch_size)
@@ -550,6 +562,50 @@ def pause_at_deadline(
     )
     session.commit()
     logger.warning("workflow paused at its deadline", extra={"workflow_id": str(workflow_id)})
+    return 1
+
+
+# --- budgets ----------------------------------------------------------------------------------
+
+
+def _over_budget_workflows(session: Session, limit: int) -> list[tuple[uuid.UUID, uuid.UUID]]:
+    spend = (
+        select(func.coalesce(func.sum(LlmUsage.total_cost), 0))
+        .where(
+            LlmUsage.workflow_id == Workflow.id,
+            LlmUsage.cost_basis.in_(costing.COUNTED_BASES),
+            LlmUsage.currency == Workflow.currency,
+        )
+        .correlate(Workflow)
+        .scalar_subquery()
+    )
+    paused_before = exists().where(
+        WorkflowEvent.workflow_id == Workflow.id,
+        WorkflowEvent.event_type == WorkflowEventType.WORKFLOW_STATUS_CHANGED,
+        WorkflowEvent.payload["reason"].astext == engine.BUDGET_REACHED,
+    )
+    rows = session.execute(
+        select(Workflow.workspace_id, Workflow.id)
+        .where(
+            Workflow.status == WorkflowStatus.RUNNING,
+            Workflow.budget_limit.is_not(None),
+            spend > 0,
+            spend >= Workflow.budget_limit,
+            ~paused_before,
+        )
+        .order_by(Workflow.id)
+        .limit(limit)
+    )
+    return [(row[0], row[1]) for row in rows]
+
+
+def pause_at_budget(session: Session, workspace_id: uuid.UUID, workflow_id: uuid.UUID) -> int:
+    workflow = _lock_workflow(session, workspace_id, workflow_id)
+    if workflow is None or not engine.pause_at_budget(session, workflow):
+        session.rollback()
+        return 0
+    session.commit()
+    logger.warning("workflow paused at its budget", extra={"workflow_id": str(workflow_id)})
     return 1
 
 

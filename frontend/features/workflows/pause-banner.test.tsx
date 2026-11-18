@@ -50,6 +50,13 @@ describe("PauseBanner", () => {
 
     rerender(<PauseBanner workflow={{ ...WORKFLOW, pause_reason: "DEADLINE_PASSED", paused_by_user_id: null }} />);
     expect(screen.getByRole("region", { name: "Paused" })).toHaveTextContent("Paused at its deadline");
+
+    // Step 7.2 (ADR-0040).
+    rerender(<PauseBanner workflow={{ ...WORKFLOW, pause_reason: "BUDGET_REACHED", paused_by_user_id: null }} />);
+    expect(screen.getByRole("region", { name: "Paused" })).toHaveTextContent("Paused at its budget");
+    expect(screen.getByRole("region", { name: "Paused" })).toHaveTextContent(
+      "Actual plus estimated model spend reached the budget.",
+    );
   });
 
   it("shows nothing unless the workflow is paused", () => {

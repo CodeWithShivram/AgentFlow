@@ -419,7 +419,36 @@ export interface Workflow {
 }
 
 /** Why a workflow is paused. Only AWAITING_DECISION is lifted by the platform itself. */
-export type PauseReason = "USER" | "DEADLINE_PASSED" | "AWAITING_DECISION";
+export type PauseReason = "USER" | "DEADLINE_PASSED" | "AWAITING_DECISION" | "BUDGET_REACHED";
+
+/** A workflow's model costs (ADR-0040). Amounts are decimal strings. */
+export interface CostTotals {
+  currency: string;
+  actual: string;
+  estimated: string;
+  /** The mock provider's price: never a real charge. */
+  mock: string;
+}
+
+export interface WorkflowCosts {
+  calls: number;
+  calls_by_status: Record<string, number>;
+  unpriced_calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  cached_input_tokens: number;
+  totals: CostTotals[];
+  budget: {
+    limit: string;
+    currency: string;
+    comparable: boolean;
+    counted_spend: string;
+    reached: boolean;
+  } | null;
+  checked_calls: number;
+  mismatched_calls: number;
+  reconciled: boolean;
+}
 
 export interface AcceptanceCriterion {
   id: string;

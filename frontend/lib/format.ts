@@ -51,6 +51,22 @@ export function formatMoney(amount: string | null, currency: string): string {
   }
 }
 
+/** A computed cost (ADR-0040): up to 8 decimals, so tiny model costs never round to zero. */
+export function formatCost(amount: string, currency: string): string {
+  const value = Number(amount);
+  if (!Number.isFinite(value)) return `${amount} ${currency}`;
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency,
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 8,
+    }).format(value);
+  } catch {
+    return `${value.toLocaleString(undefined, { maximumFractionDigits: 8 })} ${currency}`;
+  }
+}
+
 export function shortId(id: string): string {
   return id.slice(0, 8);
 }

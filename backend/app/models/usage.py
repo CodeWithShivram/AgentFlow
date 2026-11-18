@@ -4,8 +4,9 @@ Token counts are what the provider reported; a missing count stays NULL rather t
 estimated. `usage_source` says whether the counts were reported by the provider, estimated (by
 LiteLLM, for providers that do not report usage: OD-21) or not reported at all. Each call links
 the pricing snapshot in force for its model (`model_price_id`, ADR-0039; NULL when no price is
-known). Cost columns stay NULL until Step 7.2 computes them, all together with the currency and
-pricing version used.
+known). Costs are computed from that price when the call is recorded (`app.llm.costing`,
+ADR-0040), all together with the currency, pricing version and `cost_basis`; a call without a
+price or without reported counts stays unpriced (all NULL).
 """
 
 import uuid
@@ -33,6 +34,13 @@ class UsageSource(StrEnum):
     REPORTED = "reported"  # the provider reported the counts
     ESTIMATED = "estimated"  # counts present, but the provider does not report usage (OD-21)
     NOT_REPORTED = "not_reported"  # no counts at all
+
+
+class CostBasis(StrEnum):
+    # What a computed cost is (ADR-0040); never present an estimate as an actual charge.
+    ACTUAL = "actual"  # provider-reported counts at a real price
+    ESTIMATED = "estimated"  # estimated counts (OD-21) at a real price
+    MOCK = "mock"  # the mock provider's price: never a real charge
 
 
 class LlmCallStatus(StrEnum):
@@ -69,6 +77,7 @@ class LlmUsage(Base):
             name="tokens_non_negative",
         ),
         CheckConstraint(f"({_ALL_NULL}) OR ({_ALL_SET})", name="costs_all_or_nothing"),
+        CheckConstraint("(cost_basis IS NULL) = (total_cost IS NULL)", name="cost_has_basis"),
         CheckConstraint(
             "(status = 'SUCCEEDED') = (error_code IS NULL)", name="error_code_iff_unsuccessful"
         ),
@@ -101,6 +110,8 @@ class LlmUsage(Base):
     pricing_version: Mapped[str | None] = mapped_column(String(100))
     provider_request_id: Mapped[str | None] = mapped_column(String(200))
     usage_source: Mapped[UsageSource] = mapped_column(str_enum(UsageSource, "usage_source"))
+    # Set with the costs (ADR-0040): actual, estimated or mock.
+    cost_basis: Mapped[CostBasis | None] = mapped_column(str_enum(CostBasis, "cost_basis"))
     # The price in force for this provider and model when the call was recorded (ADR-0039).
     model_price_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("model_prices.id", ondelete="RESTRICT"), index=True

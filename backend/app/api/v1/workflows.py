@@ -16,6 +16,7 @@ from app.agents.selection import RULES_VERSION
 from app.api.deps import DbSession, SettingsDep, workspace_role
 from app.models import VerificationResult, WorkflowStatus, WorkflowTask, WorkspaceRole
 from app.repositories import workflows as repository
+from app.schemas.costs import WorkflowCostsResponse
 from app.schemas.workflows import (
     AgentSelectionList,
     AgentSelectionResponse,
@@ -48,6 +49,7 @@ from app.schemas.workflows import (
 )
 from app.schemas.workspaces import Page
 from app.services import background_jobs
+from app.services import costs as cost_service
 from app.services import tasks as task_service
 from app.services import workflows as service
 from app.services.authorization import WorkspaceAccess
@@ -447,6 +449,16 @@ async def list_agent_selections(
             for s in rows
         ]
     )
+
+
+@router.get("/{workflow_id}/costs")
+async def workflow_costs(
+    workflow_id: uuid.UUID, access: Viewer, session: DbSession
+) -> WorkflowCostsResponse:
+    """The workflow's model calls, tokens and costs by basis (actual, estimated and mock are
+    never added together), its budget status, and whether every stored cost still matches its
+    price snapshot (ADR-0040)."""
+    return await cost_service.workflow_costs(session, access, workflow_id)
 
 
 @router.get("/{workflow_id}/failed-jobs")

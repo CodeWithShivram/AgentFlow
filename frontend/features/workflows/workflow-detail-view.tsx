@@ -22,6 +22,7 @@ import { useActionErrors } from "@/lib/hooks/use-action-errors";
 import { useCan, useWorkspace } from "@/lib/workspace";
 
 import { AssignAgentDialog } from "./assign-agent-dialog";
+import { BudgetSpent, CostSummary } from "./cost-summary";
 import { DependenciesDialog } from "./dependencies-dialog";
 import { DependencyGraph } from "./dependency-graph";
 import { EventTimeline } from "./event-timeline";
@@ -191,8 +192,9 @@ export function WorkflowDetailView() {
           )}
         </TabsContent>
 
-        <TabsContent value="details" className="pt-2">
+        <TabsContent value="details" className="space-y-4 pt-2">
           <WorkflowSettingsCard workflow={wf} />
+          <CostSummary workflowId={wf.id} />
         </TabsContent>
       </Tabs>
 
@@ -242,7 +244,7 @@ function WorkflowSettingsCard({ workflow: wf }: { workflow: Workflow }) {
   const rows: [string, React.ReactNode][] = [
     ["Plan approval", wf.autonomy_policy === "autonomous" ? "Autonomous" : "Approval required"],
     ["Budget limit", formatMoney(wf.budget_limit, wf.currency)],
-    ["Budget spent", "Not measured yet (Phase 2)"],
+    ["Budget spent", <BudgetSpent key="b" workflow={wf} />],
     ["Currency", wf.currency],
     ["Maximum parallel tasks", wf.max_parallel_tasks],
     ["Agent proposals during run", wf.allow_dynamic_agent_proposals ? "Allowed" : "Not allowed"],

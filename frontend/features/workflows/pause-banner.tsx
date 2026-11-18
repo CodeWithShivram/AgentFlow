@@ -11,6 +11,7 @@ const TITLES: Record<PauseReason, string> = {
   USER: "Paused by a member",
   DEADLINE_PASSED: "Paused at its deadline",
   AWAITING_DECISION: "Paused for a decision",
+  BUDGET_REACHED: "Paused at its budget",
 };
 
 const EXPLANATIONS: Record<PauseReason, string> = {
@@ -19,6 +20,8 @@ const EXPLANATIONS: Record<PauseReason, string> = {
     "The deadline passed. Resume to carry on past it (it does not pause again), replan the remaining work, or cancel.",
   AWAITING_DECISION:
     "An agent asked for approval and this workflow's plan needs approval, so it waits for an admin. It resumes by itself once every such request is decided. Resuming now carries on with other tasks while the request stays open.",
+  BUDGET_REACHED:
+    "Actual plus estimated model spend reached the budget. Running attempts finish. Resume to carry on past it (it does not pause again), replan the remaining work, or cancel.",
 };
 
 /** Why a paused workflow is paused, by whom and since when (ADR-0036). */

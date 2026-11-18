@@ -321,6 +321,17 @@ Admins see every record on the "Approval history" page (`GET /workspaces/{id}/ap
 
 `GET /pricing` shows the list in force to any signed-in user.
 
+**Costs and budgets** ([ADR-0040](docs/ADR/0040-cost-calculation-and-budgets.md)). Each model call is costed from its linked price when it is recorded. Cached input is billed at the cached price, or at the input price when the list has no cached price.
+
+Each cost is labelled:
+- **actual:** the provider reported the counts;
+- **estimated:** the counts were estimated;
+- **mock:** the mock provider, never a real charge.
+
+These are never added together. The workflow's Settings tab shows spend against the budget and a "Model costs" card. `GET …/workflows/{id}/costs` checks that every stored cost still matches its price snapshot.
+
+When actual plus estimated spend reaches the budget, the workflow pauses once. Running attempts finish, and resuming past the budget is a person's choice. A budget in another currency than the prices is shown as not comparable and is not enforced.
+
 **Replanning** ([ADR-0033](docs/ADR/0033-replanning.md)). A paused or blocked workflow can be replanned: "Replan remaining work" asks the planner to draft only what remains, building on the completed tasks it keeps. The draft is validated like any plan. Confirming it replaces the unfinished tasks (they stay as history, and failed ones stay as they are), once nothing is running or being verified. Workflows that require plan approval need an admin to confirm a replan. Confirming never resumes work. A blocked workflow's Next step banner suggests replanning; the platform never starts one by itself.
 
 **Cancellation and recovery** ([ADR-0029](docs/ADR/0029-cancellation-and-restart-recovery.md)). Cancelling a task or workflow stops a running agent at its next model or tool call; pausing lets running attempts finish. Every minute, a recovery sweep picks up work a lost worker or message left behind:

@@ -36,6 +36,8 @@ class PauseReason(StrEnum):
     USER = "USER"
     DEADLINE_PASSED = "DEADLINE_PASSED"
     AWAITING_DECISION = "AWAITING_DECISION"
+    # Actual plus estimated spend reached budget_limit (ADR-0040); paused once, like the deadline.
+    BUDGET_REACHED = "BUDGET_REACHED"
 
 
 class WorkflowStatus(StrEnum):

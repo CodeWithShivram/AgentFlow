@@ -2,8 +2,8 @@
 
 ## Current position
 - Phase: 7 — Observability and cost, in progress (Phases 2–6 complete; Phase 1 released as `v0.1.0`, pushed with its tag)
-- Last completed step: 7.1 — Centralized usage tracker and pricing snapshots
-- Next step: 7.2 — Cost calculation and reconciliation (actual vs estimated), which needs a short plan and the owner's go-ahead
+- Last completed step: 7.2 — Cost calculation and reconciliation (actual vs estimated), with budget enforcement
+- Next step: 7.3 — Per-workflow/agent/model breakdown and analytics API, which needs a short plan and the owner's go-ahead
 
 ## Completed steps
 | Step | Commit message | Hash |
@@ -49,16 +49,17 @@
 | 6.2 | `feat(workflows): pause for decisions and resume safely` | `4ba0be9` (pushed, CI ✔) |
 | 6.3 | `feat(interventions): expire approval requests and offer rejection choices` | `0386fba` (pushed, CI ✔) |
 | 6.4 | `feat(interventions): audit approval decisions and authorize them per action` | `abb273c` (pushed, CI ✔) |
-| 7.1 | `feat(usage): add pricing snapshots and link each model call to its price` | latest commit touching `docs/ADR/0039-pricing-snapshots.md` |
+| 7.1 | `feat(usage): add pricing snapshots and link each model call to its price` | `b3db0ee` (pushed, CI ✔) |
+| 7.2 | `feat(usage): compute and reconcile model costs and enforce budgets` | latest commit touching `docs/ADR/0040-cost-calculation-and-budgets.md` |
 
 ## Environment snapshot (2026-11-14)
 | Item | Value |
 |---|---|
-| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `abb273c` plus tag `v0.1.0` (owner-authorized) |
+| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `b3db0ee` plus tag `v0.1.0` (owner-authorized) |
 | Python / uv / Node / npm | 3.12.14 via uv 0.12.9 / Node 24.13.0 / npm 11.6.2 |
 | Celery / kombu | 5.7.0 / 5.7.0 |
 | Docker | 29.9.3 — `agentflow` stack healthy (Docker Desktop must be started first; it had stopped and was restarted in Steps 3.1 and 3.4) |
-| Dev database | `agentflow` at `0028 (head)`, price list `2026-11-16.1` loaded; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
+| Dev database | `agentflow` at `0029 (head)`, price list `2026-11-16.1` loaded; built-ins seeded; `agentflow_api` and `agentflow_worker` provisioned |
 | Local `.env` | holds generated `WORKER_DB_PASSWORD` and (new) `API_DB_PASSWORD` (gitignored) |
 | Port 8000 | Used by another local project (`easa`); smoke tests used 8010 |
 | E2E | API :8011 (as `agentflow_api`), frontend :3100, database `agentflow_e2e` (reset each run), Redis DBs 2/3, installed Google Chrome |
@@ -66,6 +67,54 @@
 | Test HTTP client | `httpx2` 2.16.0 (replaces `httpx`, OD-10); `httpx` is back only as a LiteLLM dependency |
 | LiteLLM | 1.109.1, imported by workers only when `MODEL_PROVIDER=litellm`; `.env` keeps the mock |
 | LangGraph | 1.2.22 (with langchain-core 1.8.0 and langsmith 0.14.17), imported by workers only; LangSmith tracing disabled; checkpoints via `langgraph-checkpoint-postgres` 3.2.1 |
+
+## Step 7.2 — cost calculation, reconciliation and budgets (ADR-0040)
+- **Owner decisions (2026-11-18):**
+  - cached input uses the cached price, or the input price without one;
+  - reaching the budget pauses once;
+  - a budget in another currency is not comparable and not enforced;
+  - actual plus estimated spend counts, and mock never does.
+- **Cost per call:**
+  - `app.llm.costing` (pure, API-safe) computes input, output and total cost in decimals, rounded half up to 8 places, only when both counts were reported;
+  - `cost_basis` is `actual`, `estimated` or `mock` (migration `0029`, with a check tying it to the costs);
+  - `record_model_call` writes the costs with currency, pricing version and basis when it records the call;
+  - failed or invalid-output calls with reported usage are costed (billed); calls without a price or counts stay unpriced;
+  - the migration costs usage already linked to a price, with the same rule in SQL.
+- **Reconciliation:** `costing.workflow_costs` recomputes every priced call from its own snapshot and compares costs, currency, version and basis. `GET …/workflows/{id}/costs` (VIEWER) returns:
+  - calls by status, unpriced calls and tokens;
+  - totals per currency and basis (never added together);
+  - the budget status;
+  - `checked_calls`, `mismatched_calls` and `reconciled`.
+- **Budgets** (handoff scenario 13, beyond the plan's wording by owner decision): `engine.pause_at_budget` pauses a RUNNING workflow once its counted spend (above zero, in its own currency) reaches `budget_limit`, with the new `PauseReason.BUDGET_REACHED`, once.
+  - The runner checks after each attempt.
+  - The recovery sweep checks every minute (`paused_at_budget`), which also catches planning and evaluation calls.
+- **Frontend:**
+  - "Budget spent" now shows counted spend against the budget, "not comparable" or "No budget set";
+  - a "Model costs" card (actual, estimated and mock apart, calls, unpriced, tokens, reconciliation);
+  - the pause banner explains budget pauses.
+- **Tests:**
+  - 5 integration tests: each basis and the exact amounts; totals and reconciliation, including a tampered cost; the budget pause once through the sweep, with mock not counting and estimates counting; a budget in another currency; the runner's check after an attempt;
+  - a migration backfill test;
+  - 5 unit tests (formula, cached tokens, rounding, missing counts, bases);
+  - 6 component tests, and the budget pause added to the pause-banner test;
+  - E2E journey 6 now checks "€0.00 of €125.50" and the empty cost card.
+- **Tests changed (intended):**
+  - the 7.1 placeholder "no cost yet" now asserts the computed cost;
+  - E2E journey 6's "Not measured yet (Phase 2)".
+
+## Checks last executed (Step 7.2)
+- **Full gate (`check.ps1 -E2E`) ✔, exit 0, on the second run:**
+  - backend: ruff format, ruff check, mypy (212 files), alembic check;
+  - pytest **1156 passed**;
+  - frontend: eslint, typecheck, Vitest **141**, Playwright **17 passed**, build.
+- **The first run** passed everything except E2E journey 5 (agent proposals, untouched by this step). It hit the 90 s test timeout after the proposal was saved, while the machine was at 100% CPU and E2E took 17 min instead of about 8.
+- **Deliberate-bug check:** counting mock spend toward budgets first went unnoticed, because the test price list priced the mock at zero. The test list now gives the mock model a non-zero (still mock) price, and the same change then fails the budget test (restored byte-for-byte).
+
+  That test-only change was re-checked with ruff format, ruff check, mypy (212 files) and the cost suite (5 passed). It came after the green gate, which it does not affect.
+- **Environment:**
+  - Docker Desktop had stopped and was restarted;
+  - the dev DB is at `0029`;
+  - no servers were left running after E2E.
 
 ## Step 7.1 — pricing snapshots and the usage tracker (ADR-0039; resolves OD-21)
 - **Owner decisions (2026-11-16):**
@@ -97,7 +146,7 @@
   - the table lists (migrations, RLS);
   - the price tables added to the workspace-scope exemptions, with their reason (the first gate run failed on that).
 
-## Checks last executed (Step 7.1)
+## Checks (Step 7.1)
 - **Full gate (`check.ps1 -E2E`) ✔, exit 0, on the third run:**
   - backend: ruff format, ruff check, mypy (206 files), alembic check;
   - pytest **1145 passed**;
@@ -1090,7 +1139,8 @@
 - **Blank titles (found in 6.1, pre-existing):** a task title of only spaces passes validation and is stored empty (`Title` in `app/schemas/workflows.py` strips after the length check). To fix with a non-blank check like the 6.1 answers.
 - **OD-20:** a non-superuser schema owner for migrations, before any hosted deployment.
 - **OD-21 (resolved in 7.1):** token counts are recorded with `usage_source`; counts from providers the price list does not mark as reporting usage are `estimated`.
-- **Prices:** only the mock provider is priced. Real providers need their published prices added to `app/llm/pricing.json` under a new version before their costs can be computed (7.2).
+- **Prices:** only the mock provider is priced. Real providers need their published prices added to `app/llm/pricing.json` under a new version; until then their calls stay unpriced and do not count toward budgets.
+- **Budget cap is soft:** attempts already running when the budget is reached finish (ADR-0040).
 - **Live provider path unverified:** Step 3.3 was verified offline only, by owner decision.
 - **OD-14:** trusted proxy IP handling, before hosted deployment.
 - **OD-19:** the hosted frontend must share a host with the API (CSRF cookie readability); a CSP with nonces is not set yet.
@@ -1104,6 +1154,6 @@
 None.
 
 ## Next exact action
-1. **Push Step 7.1** on the owner's go-ahead, and confirm CI on GitHub.
-2. **Step 7.2 (cost calculation and reconciliation):** present a short plan and get the owner's go-ahead.
+1. **Push Step 7.2** on the owner's go-ahead, and confirm CI on GitHub.
+2. **Step 7.3 (per-workflow/agent/model breakdown and analytics API):** present a short plan and get the owner's go-ahead.
 3. **Before any hosted deployment:** settle OD-14, OD-19 and OD-20.

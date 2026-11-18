@@ -15,9 +15,16 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.sync_session import session_scope
-from app.llm import pricing
+from app.llm import costing, pricing
 from app.llm.types import CallContext, ProviderUsage
-from app.models import LlmCallStatus, LlmUsage, ModelPrice, ToolInvocation, UsageSource
+from app.models import (
+    LlmCallStatus,
+    LlmUsage,
+    ModelPrice,
+    PricingVersion,
+    ToolInvocation,
+    UsageSource,
+)
 from app.tools.gateway import InvocationRecord
 
 
@@ -42,18 +49,20 @@ def usage_source(usage: ProviderUsage | None, *, provider_reports_usage: bool) -
     return UsageSource.REPORTED if provider_reports_usage else UsageSource.ESTIMATED
 
 
-def _price_in_force(session: Session, provider: str, model: str) -> tuple[uuid.UUID | None, bool]:
+def _price_in_force(
+    session: Session, provider: str, model: str
+) -> tuple[ModelPrice | None, PricingVersion | None, bool]:
     version = pricing.active_version(session, datetime.now(UTC))
     if version is None:
-        return None, False
-    price_id = session.execute(
-        select(ModelPrice.id).where(
+        return None, None, False
+    price = session.execute(
+        select(ModelPrice).where(
             ModelPrice.pricing_version_id == version.id,
             ModelPrice.provider == provider,
             ModelPrice.model == model,
         )
     ).scalar_one_or_none()
-    return price_id, pricing.reports_usage(version, provider)
+    return price, version, pricing.reports_usage(version, provider)
 
 
 def record_model_call(factory: sessionmaker[Session], record: CallRecord) -> uuid.UUID:
@@ -76,9 +85,11 @@ def record_model_call(factory: sessionmaker[Session], record: CallRecord) -> uui
         latency_ms=record.latency_ms,
     )
     with session_scope(factory) as session:
-        price_id, reports = _price_in_force(session, record.provider, record.model)
-        row.model_price_id = price_id
+        price, version, reports = _price_in_force(session, record.provider, record.model)
         row.usage_source = usage_source(usage, provider_reports_usage=reports)
+        if price is not None and version is not None:
+            row.model_price_id = price.id
+            costing.apply_cost(row, price, version)  # ADR-0040; unpriced stays NULL
         session.add(row)
         session.commit()
     return row.id

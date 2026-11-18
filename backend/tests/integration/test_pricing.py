@@ -3,6 +3,7 @@
 import json
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -161,8 +162,12 @@ def test_calls_are_linked_to_the_price_in_force_with_the_source_of_their_counts(
         assert estimated.usage_source == UsageSource.ESTIMATED and estimated.model_price_id is None
     silent = _record(worker_factory, admin_factory, "acme", "acme-large", None)
     assert silent.usage_source == UsageSource.NOT_REPORTED
-    # No cost yet: Step 7.2 computes it from these facts.
-    assert (priced.total_cost, priced.currency, priced.pricing_version) == (None, None, None)
+    # Step 7.2 (ADR-0040): costed from that price (10 in at 1.5 and 5 out at 6, per million).
+    assert (priced.total_cost, priced.currency, priced.pricing_version) == (
+        Decimal("0.000045"),
+        "USD",
+        "t-1",
+    )
 
     # A newer list applies to later calls only; earlier calls keep the price they were made at.
     _load(admin_factory, _file(tmp_path, "t-2", price="2"))

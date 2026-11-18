@@ -19,7 +19,9 @@ test("journey 6: create a workflow with a budget limit and currency", async ({ b
   await expect(visibleText(page, "Pending")).toBeVisible();
   await page.getByRole("tab", { name: "Settings" }).click();
   await expect(visibleText(page, "€125.50")).toBeVisible();
-  await expect(visibleText(page, "Not measured yet (Phase 2)")).toBeVisible();
+  // Step 7.2: spend against the budget, and the cost summary (no model calls yet).
+  await expect(visibleText(page, "€0.00 of €125.50")).toBeVisible();
+  await expect(page.getByRole("region", { name: "Model costs" }).getByText("No model calls yet.")).toBeVisible();
 
   await page.goto(workspaceUrl(user.workspaceId, "workflows?status=PENDING"));
   await expect(page.getByRole("link", { name: goal })).toBeVisible();
