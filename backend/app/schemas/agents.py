@@ -46,6 +46,15 @@ def _no_credentials(value: str) -> str:
 SafeText = Annotated[str, AfterValidator(_no_credentials)]
 
 
+def not_blank(value: str) -> str:
+    """For text that is stripped and must not be empty. `StringConstraints(strip_whitespace=True)`
+    strips only after its length check, so a value of only spaces would otherwise pass
+    `min_length` and be stored empty."""
+    if not value:
+        raise ValueError("must not be blank")
+    return value
+
+
 def _capability(value: str) -> str:
     if value not in CAPABILITIES:
         raise ValueError("unknown capability")
@@ -68,7 +77,9 @@ Capability = Annotated[Slug, AfterValidator(_capability)]
 ToolName = Annotated[Slug, AfterValidator(_tool)]
 Category = Annotated[Slug, AfterValidator(_category)]
 AgentName = Annotated[
-    SafeText, StringConstraints(min_length=1, max_length=100, strip_whitespace=True)
+    SafeText,
+    StringConstraints(min_length=1, max_length=100, strip_whitespace=True),
+    AfterValidator(not_blank),
 ]
 Description = Annotated[SafeText, StringConstraints(max_length=2000)]
 

@@ -50,12 +50,13 @@
 | 6.3 | `feat(interventions): expire approval requests and offer rejection choices` | `0386fba` (pushed, CI ✔) |
 | 6.4 | `feat(interventions): audit approval decisions and authorize them per action` | `abb273c` (pushed, CI ✔) |
 | 7.1 | `feat(usage): add pricing snapshots and link each model call to its price` | `b3db0ee` (pushed, CI ✔) |
-| 7.2 | `feat(usage): compute and reconcile model costs and enforce budgets` | latest commit touching `docs/ADR/0040-cost-calculation-and-budgets.md` |
+| 7.2 | `feat(usage): compute and reconcile model costs and enforce budgets` | `ef2599a` (pushed, CI ✔) |
+| — | `fix(validation): refuse text made only of whitespace` | the commit after `ef2599a` |
 
 ## Environment snapshot (2026-11-14)
 | Item | Value |
 |---|---|
-| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `b3db0ee` plus tag `v0.1.0` (owner-authorized) |
+| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `ef2599a` plus tag `v0.1.0` (owner-authorized) |
 | Python / uv / Node / npm | 3.12.14 via uv 0.12.9 / Node 24.13.0 / npm 11.6.2 |
 | Celery / kombu | 5.7.0 / 5.7.0 |
 | Docker | 29.9.3 — `agentflow` stack healthy (Docker Desktop must be started first; it had stopped and was restarted in Steps 3.1 and 3.4) |
@@ -67,6 +68,26 @@
 | Test HTTP client | `httpx2` 2.16.0 (replaces `httpx`, OD-10); `httpx` is back only as a LiteLLM dependency |
 | LiteLLM | 1.109.1, imported by workers only when `MODEL_PROVIDER=litellm`; `.env` keeps the mock |
 | LangGraph | 1.2.22 (with langchain-core 1.8.0 and langsmith 0.14.17), imported by workers only; LangSmith tracing disabled; checkpoints via `langgraph-checkpoint-postgres` 3.2.1 |
+
+## Fix — text made only of whitespace (owner request, 2026-11-18)
+- **The bug (pre-existing, found in 6.1):** fields declared with `StringConstraints(min_length=1, strip_whitespace=True)` accepted a value of only spaces or tabs and stored it empty, because the strip runs after the length check. The frontend's task form already refused blank titles; the API did not.
+- **Fix:** one shared check, `schemas.agents.not_blank`, runs after stripping on every such field:
+  - task titles (`Title`);
+  - task deliverables;
+  - agent names (`AgentName`);
+  - agent submission text: `summary`, every `Text` item (assumptions, limitations, open questions, approval reasons, risks, consequences) and the approval request's `action`.
+
+  Blank values are now refused (422 for the API; invalid output, so `INVALID_SUBMISSION`, for agents), and surrounding spaces are still trimmed. The 6.1 answer field already had its own check.
+- **Behaviour change (intended, owner-approved):** an agent reply with blank text in those fields is now an invalid submission, which a model runtime gets one corrective retry for, instead of being stored with empty text.
+- **Tests:**
+  - unit: blank titles refused on create and update and trimmed; blank agent names; blank submission summary and items; blank approval action and reason;
+  - integration: the API refuses blank titles on create and edit and keeps the stored title; blank deliverables are refused.
+- **Deliberate-bug check** (restored byte-for-byte): making `not_blank` accept everything fails 11 of these tests across every field.
+- **Environment:** a gate run I stopped part-way left two disposable test databases (`agentflow_test_*`) whose grants blocked the test roles' teardown. I confirmed they had no connections and dropped them, as the test fixture itself does.
+- **Checks:** full gate (`check.ps1 -E2E`) ✔, exit 0, on the first run:
+  - backend: ruff format, ruff check, mypy (212 files), alembic check;
+  - pytest **1168 passed**;
+  - frontend: eslint, typecheck, Vitest **141**, Playwright **17 passed**, build.
 
 ## Step 7.2 — cost calculation, reconciliation and budgets (ADR-0040)
 - **Owner decisions (2026-11-18):**
@@ -1136,7 +1157,6 @@
 - **Pre-existing flaky test fixed.** `test_tokens.py` built its claims at collection time. Once the suite passed 5 minutes, the `nbf` case became valid, and every other case was being rejected for expiry rather than its own reason. Claims are now built when each test runs, and each case first checks that a baseline token is valid.
 
 ## Known issues / limitations
-- **Blank titles (found in 6.1, pre-existing):** a task title of only spaces passes validation and is stored empty (`Title` in `app/schemas/workflows.py` strips after the length check). To fix with a non-blank check like the 6.1 answers.
 - **OD-20:** a non-superuser schema owner for migrations, before any hosted deployment.
 - **OD-21 (resolved in 7.1):** token counts are recorded with `usage_source`; counts from providers the price list does not mark as reporting usage are `estimated`.
 - **Prices:** only the mock provider is priced. Real providers need their published prices added to `app/llm/pricing.json` under a new version; until then their calls stay unpriced and do not count toward budgets.
@@ -1154,6 +1174,6 @@
 None.
 
 ## Next exact action
-1. **Push Step 7.2** on the owner's go-ahead, and confirm CI on GitHub.
+1. **Push the blank-text fix** on the owner's go-ahead, and confirm CI on GitHub.
 2. **Step 7.3 (per-workflow/agent/model breakdown and analytics API):** present a short plan and get the owner's go-ahead.
 3. **Before any hosted deployment:** settle OD-14, OD-19 and OD-20.

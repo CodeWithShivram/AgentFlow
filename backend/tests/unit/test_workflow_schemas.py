@@ -8,7 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.models import AutonomyPolicy
-from app.schemas.workflows import TaskCreateRequest, WorkflowCreateRequest
+from app.schemas.workflows import TaskCreateRequest, TaskUpdateRequest, WorkflowCreateRequest
 
 
 def _workflow(**settings: Any) -> WorkflowCreateRequest:
@@ -102,3 +102,21 @@ def test_invalid_prompts_are_rejected(prompt: str) -> None:
 def test_invalid_tasks_are_rejected(task: dict[str, Any]) -> None:
     with pytest.raises(ValidationError):
         TaskCreateRequest.model_validate(task)
+
+
+@pytest.mark.parametrize("title", ["", " ", "   ", "\t\n "])
+def test_blank_task_titles_are_rejected(title: str) -> None:
+    # Surrounding spaces are stripped after the length check, so a title of only spaces must be
+    # refused on its own rather than stored as an empty string.
+    with pytest.raises(ValidationError):
+        TaskCreateRequest.model_validate({"title": title})
+    with pytest.raises(ValidationError):
+        TaskUpdateRequest.model_validate({"revision": 1, "title": title})
+
+
+def test_task_titles_are_trimmed() -> None:
+    assert (
+        TaskCreateRequest.model_validate({"title": "  Draft the notes  "}).title
+        == "Draft the notes"
+    )
+    assert TaskUpdateRequest.model_validate({"revision": 1}).title is None

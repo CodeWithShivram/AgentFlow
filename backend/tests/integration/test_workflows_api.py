@@ -708,8 +708,24 @@ def test_task_deliverables_are_created_updated_and_validated(
     assert response.status_code == 200, response.text
     assert response.json()["deliverables"] == ["Chart", "Notes"]
 
-    for bad in ([""], ["x" * 2001], [f"d{i}" for i in range(21)], ["sk-" + "a" * 40]):
+    for bad in ([""], ["   "], ["x" * 2001], [f"d{i}" for i in range(21)], ["sk-" + "a" * 40]):
         assert add_task(owner, workspace, workflow, deliverables=bad).status_code == 422
+
+
+def test_blank_task_titles_are_refused_and_titles_are_trimmed(
+    owner: TestClient, workspace: str, workflow: str
+) -> None:
+    for blank in ("   ", "\t "):
+        assert add_task(owner, workspace, workflow, title=blank).status_code == 422
+    task = add_task(owner, workspace, workflow, title="  Draft the notes  ").json()
+    assert task["title"] == "Draft the notes"
+
+    url = wf_url(workspace, f"/{workflow}/tasks/{task['id']}")
+    refused = owner.patch(
+        url, json={"revision": task["revision"], "title": "  "}, headers=csrf(owner)
+    )
+    assert refused.status_code == 422
+    assert task_of(owner, workspace, workflow, task["id"])["title"] == "Draft the notes"
 
 
 # --- agent selection (Step 3.6, ADR-0023) --------------------------------------------------------

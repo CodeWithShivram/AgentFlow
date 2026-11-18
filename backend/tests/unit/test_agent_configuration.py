@@ -3,11 +3,16 @@
 from typing import Any
 
 import pytest
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from app.agents.catalog import CAPABILITIES, TOOLS, ToolRisk, highest_tool_risk
 from app.agents.seed import load_definitions
-from app.schemas.agents import AgentConfiguration, AgentCreateRequest, ProposalCreateRequest
+from app.schemas.agents import (
+    AgentConfiguration,
+    AgentCreateRequest,
+    AgentName,
+    ProposalCreateRequest,
+)
 
 VALID: dict[str, Any] = {
     "system_instruction_ref": "workspace://prompts/summarizer/v2",
@@ -139,3 +144,10 @@ def test_builtin_definitions_are_the_six_specialists_and_valid() -> None:
         assert set(definition.configuration.tool_names()) <= set(TOOLS)
         assert definition.configuration.model.credential_ref is None
         assert definition.configuration.system_instruction_ref.startswith("builtin://")
+
+
+@pytest.mark.parametrize("name", ["", "   ", "\t\n"])
+def test_blank_agent_names_are_refused(name: str) -> None:
+    with pytest.raises(ValidationError):
+        TypeAdapter(AgentName).validate_python(name)
+    assert TypeAdapter(AgentName).validate_python("  Writer  ") == "Writer"

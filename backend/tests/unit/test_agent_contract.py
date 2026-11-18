@@ -196,9 +196,21 @@ def test_an_agent_may_ask_for_approval_with_reasons_risks_and_consequences() -> 
     assert AgentSubmission.model_validate(_submission()).approval_request is None
     for bad in (
         {**request, "action": ""},
+        {**request, "action": "   "},
+        {**request, "reason": " "},
         {**request, "action": "x" * 1001},
         {**request, "tool": "shell"},
         {k: v for k, v in request.items() if k != "reason"},
     ):
         with pytest.raises(ValueError):
             AgentSubmission.model_validate(_submission(approval_request=bad))
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [{"summary": "   "}, {"limitations": ["  "]}, {"assumptions": ["ok", "\t"]}],
+)
+def test_blank_agent_text_is_invalid_output(changes: dict[str, Any]) -> None:
+    # Stripped text must not be empty: a value of only spaces is refused, not stored empty.
+    with pytest.raises(ValueError):
+        AgentSubmission.model_validate(_submission(**changes))

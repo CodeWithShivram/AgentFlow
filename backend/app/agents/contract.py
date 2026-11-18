@@ -12,7 +12,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints
 
-from app.schemas.agents import SafeText, Slug
+from app.schemas.agents import SafeText, Slug, not_blank
 from app.schemas.workflows import AcceptanceCriterion
 
 _STRICT = ConfigDict(extra="forbid", frozen=True)
@@ -20,7 +20,12 @@ _STRICT = ConfigDict(extra="forbid", frozen=True)
 # Stored per attempt in agent_executions.submission; generous, but bounded.
 MAX_OUTPUTS_CHARS = 100_000
 
-Text = Annotated[SafeText, StringConstraints(min_length=1, max_length=2000, strip_whitespace=True)]
+# Agent text is stripped and must not be blank: a value of only spaces is invalid output.
+Text = Annotated[
+    SafeText,
+    StringConstraints(min_length=1, max_length=2000, strip_whitespace=True),
+    AfterValidator(not_blank),
+]
 Items = Annotated[list[Text], Field(max_length=20)]
 
 
@@ -109,7 +114,9 @@ class ApprovalRequest(BaseModel):
     model_config = _STRICT
 
     action: Annotated[
-        SafeText, StringConstraints(min_length=1, max_length=1000, strip_whitespace=True)
+        SafeText,
+        StringConstraints(min_length=1, max_length=1000, strip_whitespace=True),
+        AfterValidator(not_blank),
     ]
     reason: Text
     risks: Items = []
@@ -123,7 +130,9 @@ class AgentSubmission(BaseModel):
 
     schema_version: Literal[1] = 1
     summary: Annotated[
-        SafeText, StringConstraints(min_length=1, max_length=4000, strip_whitespace=True)
+        SafeText,
+        StringConstraints(min_length=1, max_length=4000, strip_whitespace=True),
+        AfterValidator(not_blank),
     ]
     # Deliverable content keyed by name. JSON Schema conformance is checked by verification.
     outputs: Annotated[dict[str, Any], AfterValidator(_outputs_size_limit)] = {}

@@ -28,7 +28,7 @@ from app.models import (
     WorkflowEventType,
     WorkflowStatus,
 )
-from app.schemas.agents import Capability, SafeText, Slug
+from app.schemas.agents import Capability, SafeText, Slug, not_blank
 
 _FORBID = ConfigDict(extra="forbid")
 # Matches workflows.budget_limit NUMERIC(12, 4); the cap keeps values well inside it.
@@ -101,7 +101,11 @@ class AcceptanceCriterion(BaseModel):
     description: Annotated[SafeText, StringConstraints(min_length=1, max_length=2000)]
 
 
-Title = Annotated[SafeText, StringConstraints(min_length=1, max_length=300, strip_whitespace=True)]
+Title = Annotated[
+    SafeText,
+    StringConstraints(min_length=1, max_length=300, strip_whitespace=True),
+    AfterValidator(not_blank),
+]
 Description = Annotated[SafeText, StringConstraints(max_length=20_000)]
 Skills = Annotated[list[Capability], Field(max_length=20)]
 InputReferences = Annotated[
@@ -110,7 +114,11 @@ InputReferences = Annotated[
 Criteria = Annotated[list[AcceptanceCriterion], Field(max_length=50)]
 Deliverables = Annotated[
     list[
-        Annotated[SafeText, StringConstraints(min_length=1, max_length=2000, strip_whitespace=True)]
+        Annotated[
+            SafeText,
+            StringConstraints(min_length=1, max_length=2000, strip_whitespace=True),
+            AfterValidator(not_blank),
+        ]
     ],
     Field(max_length=20),
 ]
