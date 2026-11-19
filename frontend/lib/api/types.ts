@@ -468,6 +468,69 @@ export interface CostBreakdown {
   truncated: boolean;
 }
 
+// --- latency, retry and failure metrics (ADR-0043) -------------------------------------
+
+/** value = numerator / denominator; null when nothing was measured (never 0). */
+export interface MetricRate {
+  numerator: number;
+  denominator: number;
+  value: number | null;
+}
+
+export interface Distribution {
+  unit: "ms" | "s";
+  samples: number;
+  p50: number | null;
+  p95: number | null;
+  max: number | null;
+  mean: number | null;
+}
+
+export interface WorkspaceMetrics {
+  range: AnalyticsRange;
+  model_calls: {
+    calls: number;
+    by_status: Record<string, number>;
+    failure_rate: MetricRate;
+    latency: Distribution;
+    by_model: { key: string; label: string; calls: number; failure_rate: MetricRate; latency: Distribution }[];
+  };
+  attempts: {
+    finished: number;
+    by_status: Record<string, number>;
+    in_flight: number;
+    failure_rate: MetricRate;
+    retry_rate: MetricRate;
+    duration: Distribution;
+    by_agent: {
+      key: string;
+      label: string;
+      attempts: number;
+      failure_rate: MetricRate;
+      retry_rate: MetricRate;
+      duration: Distribution;
+    }[];
+  };
+  tasks: { completed: number; first_attempt: MetricRate };
+  verification: { deterministic_pass_rate: MetricRate; semantic_pass_rate: MetricRate };
+  tools: {
+    calls: number;
+    by_status: Record<string, number>;
+    failure_rate: MetricRate;
+    denial_rate: MetricRate;
+    duration: Distribution;
+    by_tool: {
+      key: string;
+      label: string;
+      calls: number;
+      failure_rate: MetricRate;
+      denial_rate: MetricRate;
+      duration: Distribution;
+    }[];
+  };
+  workflows: { finished: number; by_status: Record<string, number>; in_flight: number; duration: Distribution };
+}
+
 // --- execution report (ADR-0042) --------------------------------------------------------
 
 export interface ReportAttempt {

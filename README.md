@@ -350,6 +350,16 @@ Every figure comes from the stored usage records, and every breakdown adds up to
 
 It is marked "In progress" until the workflow finishes.
 
+**Reliability and latency** ([ADR-0043](docs/ADR/0043-latency-retry-and-failure-metrics.md)). The Analytics page also shows:
+- model call failure rate and latency, per model;
+- agent attempt failure and retry rates and durations, per agent;
+- tasks accepted on the first attempt;
+- verification pass rates;
+- tool failure and denial rates;
+- workflow run times.
+
+Every rate shows its counts ("25% (1 of 4)") and every percentile its sample size. Nothing measured reads "Not measured", never 0%. The API is `GET /workspaces/{id}/analytics/metrics`.
+
 **Replanning** ([ADR-0033](docs/ADR/0033-replanning.md)). A paused or blocked workflow can be replanned: "Replan remaining work" asks the planner to draft only what remains, building on the completed tasks it keeps. The draft is validated like any plan. Confirming it replaces the unfinished tasks (they stay as history, and failed ones stay as they are), once nothing is running or being verified. Workflows that require plan approval need an admin to confirm a replan. Confirming never resumes work. A blocked workflow's Next step banner suggests replanning; the platform never starts one by itself.
 
 **Cancellation and recovery** ([ADR-0029](docs/ADR/0029-cancellation-and-restart-recovery.md)). Cancelling a task or workflow stops a running agent at its next model or tool call; pausing lets running attempts finish. Every minute, a recovery sweep picks up work a lost worker or message left behind:

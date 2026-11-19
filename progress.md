@@ -1,9 +1,9 @@
 # AgentFlow Progress
 
 ## Current position
-- Phase: 7 — Observability and cost, in progress (Phases 2–6 complete; Phase 1 released as `v0.1.0`, pushed with its tag)
-- Last completed step: 7.4 — Event timeline and execution report
-- Next step: 7.5 — Latency, retry and failure metrics, which needs a short plan and the owner's go-ahead
+- Phase: 7 — Observability and cost, complete with Step 7.5 (Phases 2–7 complete; Phase 1 released as `v0.1.0`, pushed with its tag)
+- Last completed step: 7.5 — Latency, retry and failure metrics
+- Next step: 8.1 — Workflow DAG visualization (Phase 8), which needs a short plan and the owner's go-ahead
 
 ## Completed steps
 | Step | Commit message | Hash |
@@ -53,12 +53,13 @@
 | 7.2 | `feat(usage): compute and reconcile model costs and enforce budgets` | `ef2599a` (pushed, CI ✔) |
 | — | `fix(validation): refuse text made only of whitespace` | `e1b89e6` (pushed, CI ✔) |
 | 7.3 | `feat(analytics): break usage and costs down by workflow, agent and model` | `bbbaeb3` (pushed, CI ✔) |
-| 7.4 | `feat(report): add a filterable event timeline and the execution report` | latest commit touching `docs/ADR/0042-timeline-and-execution-report.md` |
+| 7.4 | `feat(report): add a filterable event timeline and the execution report` | `8646e45` (pushed, CI ✔) |
+| 7.5 | `feat(analytics): add latency, retry and failure metrics` | latest commit touching `docs/ADR/0043-latency-retry-and-failure-metrics.md` |
 
 ## Environment snapshot (2026-11-14)
 | Item | Value |
 |---|---|
-| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `bbbaeb3` plus tag `v0.1.0` (owner-authorized) |
+| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `8646e45` plus tag `v0.1.0` (owner-authorized) |
 | Python / uv / Node / npm | 3.12.14 via uv 0.12.9 / Node 24.13.0 / npm 11.6.2 |
 | Celery / kombu | 5.7.0 / 5.7.0 |
 | Docker | 29.9.3 — `agentflow` stack healthy (Docker Desktop must be started first; it had stopped and was restarted in Steps 3.1 and 3.4) |
@@ -70,6 +71,38 @@
 | Test HTTP client | `httpx2` 2.16.0 (replaces `httpx`, OD-10); `httpx` is back only as a LiteLLM dependency |
 | LiteLLM | 1.109.1, imported by workers only when `MODEL_PROVIDER=litellm`; `.env` keeps the mock |
 | LangGraph | 1.2.22 (with langchain-core 1.8.0 and langsmith 0.14.17), imported by workers only; LangSmith tracing disabled; checkpoints via `langgraph-checkpoint-postgres` 3.2.1 |
+
+## Step 7.5 — latency, retry and failure metrics (ADR-0043)
+- **Owner decisions (2026-11-19):**
+  - exact median, 95th percentile and maximum, plus the mean;
+  - the retry rate is attempts after a task's first, over all attempts;
+  - breakdowns by agent, model and tool;
+  - a measurement counts in the period it finished, and cancelled attempts are kept out of failure rates.
+- **API:** `GET /workspaces/{id}/analytics/metrics` (VIEWER+, ADR-0041 ranges), computed in SQL from stored records (`app/services/metrics.py`):
+  - model calls: by status, failure rate, latency, per model;
+  - agent attempts: finished by status, in flight, failure rate (cancelled excluded), retry rate, duration, per agent;
+  - tasks: completed, accepted on the first attempt;
+  - verification pass rates, deterministic and semantic;
+  - tool calls: failure and denial rates, duration, per tool;
+  - workflows: finished by status, in flight, run time.
+
+  Rates carry numerator and denominator, null when unmeasured. Distributions carry unit, samples and exact `percentile_cont` p50/p95, max and mean. No schema change.
+- **Frontend:** a "Reliability and latency" section on the Analytics page: rates as "25% (1 of 4)", distributions as "median · 95th · max (samples)", "Not measured" when empty, tables per agent and model.
+- **Tests:**
+  - 4 integration tests: known records with exact counts, rates and interpolated percentiles; null when nothing was measured; the range deciding what counts (including a 40-day-old attempt); roles and isolation;
+  - 2 unit tests;
+  - 1 new component test (the analytics page test answers `/metrics`).
+
+## Checks last executed (Step 7.5)
+- **Full gate (`check.ps1 -E2E`) ✔, exit 0, on the second run:**
+  - backend: ruff format, ruff check, mypy (226 files), alembic check;
+  - pytest **1198 passed**;
+  - frontend: eslint, typecheck, Vitest **151**, Playwright **17 passed**, build.
+- **The first run** failed only E2E journey 5 (agent proposals, untouched by this step). Its proposal was saved, but the refreshed list did not arrive within 15 s. Another local project's LLM container (`easa-llm-1`) held about 490% CPU. The owner idled it and the second run passed.
+
+  Seen meanwhile: while the proposals list refetches after a submission, it briefly shows the previous filter's "No proposals" under the success toast (a display nit; noted for Phase 8 UI work).
+- **Deliberate-bug check** (restored byte-for-byte): counting cancelled attempts in the attempt failure rate fails the exact-metrics test.
+- **Environment:** no servers were left running after E2E.
 
 ## Step 7.4 — event timeline and execution report (ADR-0042)
 - **Owner decisions (2026-11-19):**
@@ -100,7 +133,7 @@
   - E2E journeys 8–9 open the finished workflow's report.
 - **Test changed (intended):** none removed. The timeline keeps its list name and `describeEvent` output for existing cases.
 
-## Checks last executed (Step 7.4)
+## Checks (Step 7.4)
 - **Full gate (`check.ps1 -E2E`) ✔, exit 0, on the first run:**
   - backend: ruff format, ruff check, mypy (222 files), alembic check;
   - pytest **1192 passed**;
@@ -1232,6 +1265,8 @@
 - **OD-21 (resolved in 7.1):** token counts are recorded with `usage_source`; counts from providers the price list does not mark as reporting usage are `estimated`.
 - **Prices:** only the mock provider is priced. Real providers need their published prices added to `app/llm/pricing.json` under a new version; until then their calls stay unpriced and do not count toward budgets.
 - **Budget cap is soft:** attempts already running when the budget is reached finish (ADR-0040).
+- **Proposals list (display nit, found in 7.5):** right after submitting a proposal, the list can briefly show the previous filter's "No proposals" while it refetches. To tidy in Phase 8 (UI).
+- **Load-sensitive E2E:** under heavy CPU load from other local work, E2E journeys can exceed their timeouts (journey 5 twice). Run the gate with the machine otherwise idle.
 - **Live provider path unverified:** Step 3.3 was verified offline only, by owner decision.
 - **OD-14:** trusted proxy IP handling, before hosted deployment.
 - **OD-19:** the hosted frontend must share a host with the API (CSRF cookie readability); a CSP with nonces is not set yet.
@@ -1245,6 +1280,6 @@
 None.
 
 ## Next exact action
-1. **Push Step 7.4** on the owner's go-ahead, and confirm CI on GitHub.
-2. **Step 7.5 (latency, retry and failure metrics):** present a short plan and get the owner's go-ahead.
+1. **Push Step 7.5** on the owner's go-ahead, and confirm CI on GitHub. Phase 7 is then complete.
+2. **Phase 8, Step 8.1 (workflow DAG visualization):** present a short plan and get the owner's go-ahead.
 3. **Before any hosted deployment:** settle OD-14, OD-19 and OD-20.

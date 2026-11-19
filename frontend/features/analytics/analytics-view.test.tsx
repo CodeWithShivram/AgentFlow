@@ -2,7 +2,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { AnalyticsOverview, CostBreakdown } from "@/lib/api/types";
+import type { AnalyticsOverview, CostBreakdown, Distribution, WorkspaceMetrics } from "@/lib/api/types";
 import { createQueryClient } from "@/lib/query-client";
 import { WorkspaceProvider } from "@/lib/workspace";
 
@@ -39,10 +39,49 @@ function breakdown(groupBy: string): CostBreakdown {
   return { group_by: groupBy as CostBreakdown["group_by"], range: RANGE, rows, totals: TOTALS, truncated: groupBy === "model" };
 }
 
+const NONE: Distribution = { unit: "s", samples: 0, p50: null, p95: null, max: null, mean: null };
+const NO_RATE = { numerator: 0, denominator: 0, value: null };
+const METRICS: WorkspaceMetrics = {
+  range: RANGE,
+  model_calls: {
+    calls: 4,
+    by_status: { SUCCEEDED: 3, FAILED: 1 },
+    failure_rate: { numerator: 1, denominator: 4, value: 0.25 },
+    latency: { unit: "ms", samples: 4, p50: 250, p95: 385, max: 400, mean: 250 },
+    by_model: [],
+  },
+  attempts: {
+    finished: 4,
+    by_status: { SUCCEEDED: 2, FAILED: 1, CANCELLED: 1 },
+    in_flight: 1,
+    failure_rate: { numerator: 1, denominator: 3, value: 0.333333 },
+    retry_rate: { numerator: 1, denominator: 4, value: 0.25 },
+    duration: { unit: "s", samples: 4, p50: 15, p95: 28.5, max: 30, mean: 16.25 },
+    by_agent: [
+      {
+        key: "ag-1",
+        label: "Writer",
+        attempts: 2,
+        failure_rate: { numerator: 1, denominator: 2, value: 0.5 },
+        retry_rate: { numerator: 1, denominator: 2, value: 0.5 },
+        duration: NONE,
+      },
+    ],
+  },
+  tasks: { completed: 2, first_attempt: { numerator: 1, denominator: 2, value: 0.5 } },
+  verification: { deterministic_pass_rate: NO_RATE, semantic_pass_rate: NO_RATE },
+  tools: { calls: 0, by_status: {}, failure_rate: NO_RATE, denial_rate: NO_RATE, duration: NONE, by_tool: [] },
+  workflows: { finished: 0, by_status: {}, in_flight: 1, duration: NONE },
+};
+
 function renderView(overview: AnalyticsOverview = OVERVIEW) {
   const fetchMock = vi.fn<(input: string) => Promise<Response>>(async (input) => {
     const url = new URL(input, "http://localhost");
-    const body = url.pathname.endsWith("/overview") ? overview : breakdown(url.searchParams.get("group_by") ?? "");
+    const body = url.pathname.endsWith("/overview")
+      ? overview
+      : url.pathname.endsWith("/metrics")
+        ? METRICS
+        : breakdown(url.searchParams.get("group_by") ?? "");
     return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
   });
   vi.stubGlobal("fetch", fetchMock);
@@ -101,6 +140,22 @@ describe("AnalyticsView", () => {
     const to = Date.parse(url.searchParams.get("to")!);
     expect(Math.round((to - from) / 86_400_000)).toBe(7);
     expect(screen.getByRole("tab", { name: "Last 7 days" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("shows rates with their counts, percentiles with their samples, and unmeasured as such", async () => {
+    renderView();
+    const section = await screen.findByRole("region", { name: "Reliability and latency" });
+    const attempts = await within(section).findByRole("region", { name: "Agent attempts" });
+    expect(attempts).toHaveTextContent("Failure rate (cancelled excluded)33.3% (1 of 3)");
+    expect(attempts).toHaveTextContent("Retry rate25% (1 of 4)");
+    expect(attempts).toHaveTextContent("Durationmedian 15.0 s · 95th 28.5 s · max 30.0 s (4)");
+    expect(attempts).toHaveTextContent("Tasks accepted on the first attempt50% (1 of 2)");
+    expect(attempts).toHaveTextContent("Semantic evaluations passedNot measured");
+    expect(within(attempts).getByRole("row", { name: /Writer/ })).toHaveTextContent("50% (1 of 2)");
+    const calls = within(section).getByRole("region", { name: "Model calls" });
+    expect(calls).toHaveTextContent("Latencymedian 250 ms · 95th 385 ms · max 400 ms (4)");
+    expect(within(section).getByRole("region", { name: "Tool calls" })).toHaveTextContent("Failure rateNot measured");
+    expect(within(section).getByRole("region", { name: "Workflows" })).toHaveTextContent("Run timeNot measured");
   });
 
   it("says when nothing was called in the range", async () => {

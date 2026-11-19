@@ -41,6 +41,7 @@ import type {
   WorkflowReport,
   WorkflowStatus,
   Workspace,
+  WorkspaceMetrics,
 } from "./types";
 
 export interface PageQuery {
@@ -198,6 +199,9 @@ export function createEndpoints(client: ApiClient) {
         workspaceId: Uuid,
         query: { group_by: AnalyticsGroupBy; from: string; to: string; workflow_id?: Uuid; limit?: number },
       ) => client.get<CostBreakdown>(`${ws(workspaceId)}/analytics/costs`, { query: { ...query } }),
+      /** Latency, retry and failure metrics (ADR-0043). */
+      metrics: (workspaceId: Uuid, range: { from: string; to: string }) =>
+        client.get<WorkspaceMetrics>(`${ws(workspaceId)}/analytics/metrics`, { query: { ...range } }),
     },
 
     /** The workspace's approval decisions, newest first (ADMIN, ADR-0038). */

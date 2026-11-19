@@ -19,7 +19,9 @@ from app.schemas.analytics import (
     TokenBreakdownResponse,
     WorkflowAnalyticsResponse,
 )
+from app.schemas.metrics import MetricsResponse
 from app.services import analytics as service
+from app.services import metrics as metrics_service
 from app.services.authorization import WorkspaceAccess
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/analytics", tags=["analytics"])
@@ -92,6 +94,15 @@ async def agents(
     return await service.costs(
         session, access, service.resolve_range(start, end), "agent", workflow_id=None, limit=limit
     )
+
+
+@router.get("/metrics")
+async def metrics(
+    access: Viewer, session: DbSession, start: Start = None, end: End = None
+) -> MetricsResponse:
+    """Latency, retry and failure metrics (ADR-0043): each rate with its numerator and
+    denominator, each distribution with its sample count; null when nothing was measured."""
+    return await metrics_service.metrics(session, access, service.resolve_range(start, end))
 
 
 @router.get("/workflows/{workflow_id}")

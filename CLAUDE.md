@@ -177,6 +177,9 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   (and the frontend's `eventCategory`). The report (`app/services/report.py`) composes stored records only: outcomes and
   issue codes, never evaluator findings; no people's free text; deliverables as capped plain text. Platform calls
   (`analytics.PLATFORM_PURPOSES`) never count toward an agent, even when they record an attempt.
+- Metrics (ADR-0043, `app/services/metrics.py`): computed in SQL from stored records; each measurement counts in the
+  period it finished; rates always carry numerator and denominator and are null (never 0) when unmeasured; cancelled
+  attempts stay out of failure rates; distributions report samples and exact `percentile_cont`.
 - Workflow events are append-only.
 
 ## Security
