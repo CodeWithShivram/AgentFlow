@@ -332,6 +332,10 @@ These are never added together. The workflow's Settings tab shows spend against 
 
 When actual plus estimated spend reaches the budget, the workflow pauses once. Running attempts finish, and resuming past the budget is a person's choice. A budget in another currency than the prices is shown as not comparable and is not enforced.
 
+**Analytics** ([ADR-0041](docs/ADR/0041-usage-and-cost-analytics.md)). The "Analytics" page shows the workspace's model calls, tokens and costs over 7, 30 or 90 days or a year: an overview, plus tables by workflow, agent and model. Actual, estimated and mock costs stay in separate columns. Calls no agent made (analysis, planning, evaluation) appear as "Platform".
+
+Every figure comes from the stored usage records, and every breakdown adds up to the overview. The API is `GET /workspaces/{id}/analytics/overview`, `/costs?group_by=…`, `/tokens`, `/agents` and `/workflows/{id}`, readable by Viewers and above.
+
 **Replanning** ([ADR-0033](docs/ADR/0033-replanning.md)). A paused or blocked workflow can be replanned: "Replan remaining work" asks the planner to draft only what remains, building on the completed tasks it keeps. The draft is validated like any plan. Confirming it replaces the unfinished tasks (they stay as history, and failed ones stay as they are), once nothing is running or being verified. Workflows that require plan approval need an admin to confirm a replan. Confirming never resumes work. A blocked workflow's Next step banner suggests replanning; the platform never starts one by itself.
 
 **Cancellation and recovery** ([ADR-0029](docs/ADR/0029-cancellation-and-restart-recovery.md)). Cancelling a task or workflow stops a running agent at its next model or tool call; pausing lets running attempts finish. Every minute, a recovery sweep picks up work a lost worker or message left behind:

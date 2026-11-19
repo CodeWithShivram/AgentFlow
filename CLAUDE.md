@@ -170,6 +170,9 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   input price); `cost_basis` is actual/estimated/mock and they are never summed together. Unpriced calls stay NULL.
   Budgets count actual + estimated spend in the workflow's currency (no FX); `engine.pause_at_budget` pauses once
   (BUDGET_REACHED), called by the runner after each attempt and by the recovery sweep.
+- Analytics (ADR-0041, `app/services/analytics.py`): aggregate only stored `llm_usage` rows (never invent metrics),
+  per currency and cost basis; attribute agents through `agent_executions`, other calls as `platform:<purpose>`;
+  every breakdown must add up to the overview. Ranges need a time zone and span at most 366 days.
 - Workflow events are append-only.
 
 ## Security

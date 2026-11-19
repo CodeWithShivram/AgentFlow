@@ -2,8 +2,8 @@
 
 ## Current position
 - Phase: 7 — Observability and cost, in progress (Phases 2–6 complete; Phase 1 released as `v0.1.0`, pushed with its tag)
-- Last completed step: 7.2 — Cost calculation and reconciliation (actual vs estimated), with budget enforcement
-- Next step: 7.3 — Per-workflow/agent/model breakdown and analytics API, which needs a short plan and the owner's go-ahead
+- Last completed step: 7.3 — Per-workflow/agent/model breakdown and analytics API
+- Next step: 7.4 — Event timeline and execution report, which needs a short plan and the owner's go-ahead
 
 ## Completed steps
 | Step | Commit message | Hash |
@@ -51,12 +51,13 @@
 | 6.4 | `feat(interventions): audit approval decisions and authorize them per action` | `abb273c` (pushed, CI ✔) |
 | 7.1 | `feat(usage): add pricing snapshots and link each model call to its price` | `b3db0ee` (pushed, CI ✔) |
 | 7.2 | `feat(usage): compute and reconcile model costs and enforce budgets` | `ef2599a` (pushed, CI ✔) |
-| — | `fix(validation): refuse text made only of whitespace` | the commit after `ef2599a` |
+| — | `fix(validation): refuse text made only of whitespace` | `e1b89e6` (pushed, CI ✔) |
+| 7.3 | `feat(analytics): break usage and costs down by workflow, agent and model` | latest commit touching `docs/ADR/0041-usage-and-cost-analytics.md` |
 
 ## Environment snapshot (2026-11-14)
 | Item | Value |
 |---|---|
-| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `ef2599a` plus tag `v0.1.0` (owner-authorized) |
+| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `e1b89e6` plus tag `v0.1.0` (owner-authorized) |
 | Python / uv / Node / npm | 3.12.14 via uv 0.12.9 / Node 24.13.0 / npm 11.6.2 |
 | Celery / kombu | 5.7.0 / 5.7.0 |
 | Docker | 29.9.3 — `agentflow` stack healthy (Docker Desktop must be started first; it had stopped and was restarted in Steps 3.1 and 3.4) |
@@ -68,6 +69,38 @@
 | Test HTTP client | `httpx2` 2.16.0 (replaces `httpx`, OD-10); `httpx` is back only as a LiteLLM dependency |
 | LiteLLM | 1.109.1, imported by workers only when `MODEL_PROVIDER=litellm`; `.env` keeps the mock |
 | LangGraph | 1.2.22 (with langchain-core 1.8.0 and langsmith 0.14.17), imported by workers only; LangSmith tracing disabled; checkpoints via `langgraph-checkpoint-postgres` 3.2.1 |
+
+## Step 7.3 — usage and cost analytics (ADR-0041)
+- **Owner decisions (2026-11-19):**
+  - the handoff's paths, under the workspace;
+  - Viewer and above may read;
+  - calls no agent made count as "platform" by purpose;
+  - a basic Analytics page now, Phase 8 polishes it.
+- **Service** (`app/services/analytics.py`): one SQL aggregation over the workspace's `llm_usage`, grouped by key, currency and cost basis.
+  - Keys: workflow, task, agent (through `agent_executions`; `platform:<purpose>` when no agent made the call), model (provider/model), purpose, or UTC day.
+  - It is folded into rows of calls, unpriced calls, tokens and per-currency actual, estimated and mock costs (never added together).
+  - Labels come from the workspace's rows ("Removed …" when gone).
+  - Rows are ordered by calls and capped by `limit` (`truncated`); totals cover the whole range.
+  - The range is `from`/`to` with a time zone, at most 366 days, defaulting to 30 days (else 422 `ANALYTICS_RANGE_INVALID`).
+- **API** (VIEWER+, under `/workspaces/{id}/analytics`): `GET /overview`, `/costs?group_by=`, `/tokens?group_by=`, `/agents`, and `/workflows/{workflow_id}` (by task, agent and model). No schema change.
+- **Frontend:** an "Analytics" sidebar page with these parts:
+  - ranges of 7, 30 or 90 days or a year;
+  - the overview;
+  - tables by workflow, agent and model, one column per cost basis, "—" for unpriced groups, names as plain text, and workflow links.
+
+  Navigation E2E covers the new page.
+- **Tests:**
+  - 11 integration tests: overview totals; every grouping adds up to the overview (scenario 17); attribution to workflows, agents (and platform purposes) and models; tokens and per-workflow endpoints; range filtering and refused ranges; roles and workspace isolation; truncation;
+  - 6 unit tests (ranges, totals keeping currencies and bases apart);
+  - 4 component tests.
+
+## Checks last executed (Step 7.3)
+- **Full gate (`check.ps1 -E2E`) ✔, exit 0, on the first run:**
+  - backend: ruff format, ruff check, mypy (217 files), alembic check;
+  - pytest **1185 passed**;
+  - frontend: eslint, typecheck, Vitest **145**, Playwright **17 passed** (navigation now visits Analytics), build.
+- **Deliberate-bug check** (restored byte-for-byte): making the join to attempts an inner join silently drops every call no agent made; 5 analytics tests fail. The "adds up" tests alone would not catch it, since the overview shrinks the same way, but the overview's exact totals do.
+- **Environment:** another local project's containers (`easa`) were running alongside; no servers were left running after E2E.
 
 ## Fix — text made only of whitespace (owner request, 2026-11-18)
 - **The bug (pre-existing, found in 6.1):** fields declared with `StringConstraints(min_length=1, strip_whitespace=True)` accepted a value of only spaces or tabs and stored it empty, because the strip runs after the length check. The frontend's task form already refused blank titles; the API did not.
@@ -1174,6 +1207,6 @@
 None.
 
 ## Next exact action
-1. **Push the blank-text fix** on the owner's go-ahead, and confirm CI on GitHub.
-2. **Step 7.3 (per-workflow/agent/model breakdown and analytics API):** present a short plan and get the owner's go-ahead.
+1. **Push Step 7.3** on the owner's go-ahead, and confirm CI on GitHub.
+2. **Step 7.4 (event timeline and execution report):** present a short plan and get the owner's go-ahead.
 3. **Before any hosted deployment:** settle OD-14, OD-19 and OD-20.

@@ -97,6 +97,7 @@ const SECTION_LABELS: Record<string, string> = {
   approvals: "Approval history",
   agents: "Agents",
   proposals: "Agent proposals",
+  analytics: "Analytics",
   activity: "Activity",
   members: "Members",
   settings: "Settings",

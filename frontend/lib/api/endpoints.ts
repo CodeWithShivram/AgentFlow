@@ -4,6 +4,9 @@
 import type { ApiClient } from "./client";
 import type {
   AcceptedMembership,
+  AnalyticsGroupBy,
+  AnalyticsOverview,
+  CostBreakdown,
   Agent,
   AgentCatalog,
   AgentSuggestionList,
@@ -182,6 +185,16 @@ export function createEndpoints(client: ApiClient) {
       /** `then: "stop"` escalates an agent's task instead of retrying; the note is for people only. */
       reject: (workspaceId: Uuid, interventionId: Uuid, body: { then?: "retry" | "stop"; note?: string } = {}) =>
         client.post<Intervention>(`${ws(workspaceId)}/interventions/${enc(interventionId)}/reject`, body),
+    },
+
+    /** Usage and cost analytics from stored usage records (ADR-0041). */
+    analytics: {
+      overview: (workspaceId: Uuid, range: { from: string; to: string }) =>
+        client.get<AnalyticsOverview>(`${ws(workspaceId)}/analytics/overview`, { query: { ...range } }),
+      costs: (
+        workspaceId: Uuid,
+        query: { group_by: AnalyticsGroupBy; from: string; to: string; workflow_id?: Uuid; limit?: number },
+      ) => client.get<CostBreakdown>(`${ws(workspaceId)}/analytics/costs`, { query: { ...query } }),
     },
 
     /** The workspace's approval decisions, newest first (ADMIN, ADR-0038). */

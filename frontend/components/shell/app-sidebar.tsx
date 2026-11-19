@@ -3,6 +3,7 @@
 import {
   ActivityIcon,
   BotIcon,
+  ChartColumnIcon,
   CheckIcon,
   ChevronsUpDownIcon,
   ClipboardCheckIcon,
@@ -48,6 +49,7 @@ const MAIN_NAV = [
   { section: "requests", label: "Requests", icon: InboxIcon },
   { section: "agents", label: "Agents", icon: BotIcon },
   { section: "proposals", label: "Agent proposals", icon: ClipboardCheckIcon },
+  { section: "analytics", label: "Analytics", icon: ChartColumnIcon },
   { section: "activity", label: "Activity", icon: ActivityIcon },
 ] as const;
 

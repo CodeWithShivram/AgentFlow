@@ -7,6 +7,7 @@ const SECTIONS = [
   ["Requests", "Requests"],
   ["Agents", "Agents"],
   ["Agent proposals", "Agent proposals"],
+  ["Analytics", "Analytics"],
   ["Activity", "Activity"],
   ["Members", "Members"],
   ["Settings", "Workspace settings"],

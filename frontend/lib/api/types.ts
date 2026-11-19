@@ -421,6 +421,53 @@ export interface Workflow {
 /** Why a workflow is paused. Only AWAITING_DECISION is lifted by the platform itself. */
 export type PauseReason = "USER" | "DEADLINE_PASSED" | "AWAITING_DECISION" | "BUDGET_REACHED";
 
+// --- analytics (ADR-0041) -------------------------------------------------------------------
+
+export type AnalyticsGroupBy = "workflow" | "task" | "agent" | "model" | "purpose" | "day";
+
+/** Costs of one currency; actual, estimated and mock are never added together (ADR-0040). */
+export interface CostByCurrency {
+  currency: string;
+  actual: string;
+  estimated: string;
+  mock: string;
+}
+
+export interface UsageTotals {
+  calls: number;
+  unpriced_calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  cached_input_tokens: number;
+  costs: CostByCurrency[];
+}
+
+export interface BreakdownRow extends UsageTotals {
+  /** An id, "provider/model", a purpose, an ISO date, or "platform:<purpose>". */
+  key: string;
+  label: string;
+}
+
+export interface AnalyticsRange {
+  start: IsoDateTime;
+  end: IsoDateTime;
+}
+
+export interface AnalyticsOverview {
+  range: AnalyticsRange;
+  totals: UsageTotals;
+  workflows: number;
+  agents: number;
+}
+
+export interface CostBreakdown {
+  group_by: AnalyticsGroupBy;
+  range: AnalyticsRange;
+  rows: BreakdownRow[];
+  totals: UsageTotals;
+  truncated: boolean;
+}
+
 /** A workflow's model costs (ADR-0040). Amounts are decimal strings. */
 export interface CostTotals {
   currency: string;
