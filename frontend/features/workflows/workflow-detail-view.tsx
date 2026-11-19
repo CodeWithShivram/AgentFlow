@@ -184,7 +184,7 @@ export function WorkflowDetailView() {
         </TabsContent>
 
         <TabsContent value="graph" className="pt-2">
-          <DependencyGraph tasks={taskList} />
+          <DependencyGraph tasks={taskList} agentsById={agentsById} />
         </TabsContent>
 
         <TabsContent value="timeline" className="pt-2">

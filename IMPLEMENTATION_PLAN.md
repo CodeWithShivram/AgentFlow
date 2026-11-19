@@ -186,13 +186,13 @@ Acceptance (phase): deterministic tests with mock model responses; invalid plans
 | 7.2 | Cost calculation and reconciliation (actual vs estimated) | DONE (ADR-0040; includes budget enforcement) — `ef2599a` |
 | 7.3 | Per-workflow/agent/model breakdown and analytics API | DONE (ADR-0041) — `bbbaeb3` |
 | 7.4 | Event timeline and execution report | DONE (ADR-0042) — `8646e45` |
-| 7.5 | Latency, retry and failure metrics | DONE (ADR-0043) — see `progress.md` |
+| 7.5 | Latency, retry and failure metrics | DONE (ADR-0043) — `ec97575` |
 
 ## Phase 8 — Product completion
 
 | Step | Title | Status |
 |---|---|---|
-| 8.1 | Workflow DAG visualization | NOT_STARTED |
+| 8.1 | Workflow DAG visualization | DONE (ADR-0044) — see `progress.md` |
 | 8.2 | Analytics and final report UI | NOT_STARTED |
 | 8.3 | Artifact management (storage interface, checksums, scoping) | NOT_STARTED |
 | 8.4 | Safe workflow replay | NOT_STARTED |

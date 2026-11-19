@@ -180,6 +180,9 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
 - Metrics (ADR-0043, `app/services/metrics.py`): computed in SQL from stored records; each measurement counts in the
   period it finished; rates always carry numerator and denominator and are null (never 0) when unmeasured; cancelled
   attempts stay out of failure rates; distributions report samples and exact `percentile_cont`.
+- Task graph (ADR-0044, `frontend/features/workflows/graph.ts`, `dependency-graph.tsx`): read-only, hand-built SVG
+  on the stage layout (no graph library); arrows are `aria-hidden`, so card text and the details panel must carry the
+  same facts. The critical path counts unfinished required tasks; traversals stay cycle-guarded.
 - Workflow events are append-only.
 
 ## Security

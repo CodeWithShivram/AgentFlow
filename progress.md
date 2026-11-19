@@ -1,9 +1,9 @@
 # AgentFlow Progress
 
 ## Current position
-- Phase: 7 — Observability and cost, complete with Step 7.5 (Phases 2–7 complete; Phase 1 released as `v0.1.0`, pushed with its tag)
-- Last completed step: 7.5 — Latency, retry and failure metrics
-- Next step: 8.1 — Workflow DAG visualization (Phase 8), which needs a short plan and the owner's go-ahead
+- Phase: 8 — Product completion (Phases 2–7 complete; Phase 1 released as `v0.1.0`, pushed with its tag)
+- Last completed step: 8.1 — Workflow DAG visualization
+- Next step: 8.2 — Analytics and final report UI, which needs a short plan and the owner's go-ahead
 
 ## Completed steps
 | Step | Commit message | Hash |
@@ -54,12 +54,13 @@
 | — | `fix(validation): refuse text made only of whitespace` | `e1b89e6` (pushed, CI ✔) |
 | 7.3 | `feat(analytics): break usage and costs down by workflow, agent and model` | `bbbaeb3` (pushed, CI ✔) |
 | 7.4 | `feat(report): add a filterable event timeline and the execution report` | `8646e45` (pushed, CI ✔) |
-| 7.5 | `feat(analytics): add latency, retry and failure metrics` | latest commit touching `docs/ADR/0043-latency-retry-and-failure-metrics.md` |
+| 7.5 | `feat(analytics): add latency, retry and failure metrics` | `ec97575` (pushed, CI ✔) |
+| 8.1 | `feat(workflows): draw the task DAG with dependency chains and the critical path` | latest commit touching `docs/ADR/0044-workflow-dag-visualization.md` |
 
 ## Environment snapshot (2026-11-14)
 | Item | Value |
 |---|---|
-| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `8646e45` plus tag `v0.1.0` (owner-authorized) |
+| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `ec97575` plus tag `v0.1.0` (owner-authorized) |
 | Python / uv / Node / npm | 3.12.14 via uv 0.12.9 / Node 24.13.0 / npm 11.6.2 |
 | Celery / kombu | 5.7.0 / 5.7.0 |
 | Docker | 29.9.3 — `agentflow` stack healthy (Docker Desktop must be started first; it had stopped and was restarted in Steps 3.1 and 3.4) |
@@ -71,6 +72,33 @@
 | Test HTTP client | `httpx2` 2.16.0 (replaces `httpx`, OD-10); `httpx` is back only as a LiteLLM dependency |
 | LiteLLM | 1.109.1, imported by workers only when `MODEL_PROVIDER=litellm`; `.env` keeps the mock |
 | LangGraph | 1.2.22 (with langchain-core 1.8.0 and langsmith 0.14.17), imported by workers only; LangSmith tracing disabled; checkpoints via `langgraph-checkpoint-postgres` 3.2.1 |
+
+## Step 8.1 — workflow DAG visualization (ADR-0044)
+- **Owner decisions (2026-11-19):**
+  - a hand-built SVG on the existing stage layout, no new dependency;
+  - selecting a task highlights its whole upstream and downstream chain and opens its details and attempts;
+  - a "Show critical path" toggle;
+  - it replaces the workflow's Dependencies tab only; the plan-draft preview keeps its stages.
+- **Graph helpers** (`features/workflows/graph.ts`): `upstream` and `downstream` (transitive), `criticalPath` (the longest chain of unfinished required tasks; ties by priority, then title; cycle-guarded) and `layoutGraph` (stages as columns, one barycentre pass ordering the rows, an edge per dependency).
+- **Dependencies tab** (`dependency-graph.tsx`):
+  - cards in stage columns, joined by SVG arrows (decorative; the "After: …" line carries the same facts);
+  - selecting a card highlights its chain, fades the rest and opens a "Task details" panel: status, required, priority, agent, skills, what it waits on (directly and in all), what waits on it, and its attempts (`ExecutionsPanel`);
+  - "Show critical path" marks the chain's cards and edges and states it as text.
+
+  Read-only; no backend change.
+- **Tests:**
+  - 6 unit tests for the graph helpers;
+  - 4 component tests: arrows and card text, chain selection and the details panel, the critical path, the empty and finished cases;
+  - E2E journey 7 now selects a task, checks its details, closes them and shows the critical path.
+
+## Checks last executed (Step 8.1)
+- **Full gate (`check.ps1 -E2E`) ✔, exit 0:**
+  - backend: ruff format, ruff check, mypy (226 files), alembic check;
+  - pytest **1198 passed**;
+  - frontend: eslint, typecheck, Vitest **161** (10 new), Playwright **17 passed** (journey 7 extended), build.
+- **An earlier run was cut off** at 12% of pytest when Docker Desktop stopped. Docker was restarted, the one orphan test database it left (no connections) was dropped, and the rerun above passed.
+- **Deliberate-bug check** (restored byte-for-byte): making `upstream` stop at direct dependencies fails the transitive unit test and the chain-selection component test.
+- **Environment:** no servers were left running after E2E.
 
 ## Step 7.5 — latency, retry and failure metrics (ADR-0043)
 - **Owner decisions (2026-11-19):**
@@ -93,7 +121,7 @@
   - 2 unit tests;
   - 1 new component test (the analytics page test answers `/metrics`).
 
-## Checks last executed (Step 7.5)
+## Checks (Step 7.5)
 - **Full gate (`check.ps1 -E2E`) ✔, exit 0, on the second run:**
   - backend: ruff format, ruff check, mypy (226 files), alembic check;
   - pytest **1198 passed**;
@@ -1280,6 +1308,6 @@
 None.
 
 ## Next exact action
-1. **Push Step 7.5** on the owner's go-ahead, and confirm CI on GitHub. Phase 7 is then complete.
-2. **Phase 8, Step 8.1 (workflow DAG visualization):** present a short plan and get the owner's go-ahead.
+1. **Push Step 8.1** on the owner's go-ahead, and confirm CI on GitHub.
+2. **Step 8.2 (analytics and final report UI):** present a short plan and get the owner's go-ahead. It includes the proposals-list display nit.
 3. **Before any hosted deployment:** settle OD-14, OD-19 and OD-20.

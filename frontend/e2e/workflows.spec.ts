@@ -78,6 +78,15 @@ test("journey 7: plan tasks with dependencies", async ({ browser }) => {
   await page.getByRole("tab", { name: "Dependencies" }).click();
   const stage2 = page.getByRole("region", { name: "Stage 2" });
   await expect(stage2.getByText("Draft report")).toBeVisible();
+  // Step 8.1: selecting a task opens its chain and attempts; the critical path is on request.
+  await stage2.getByRole("button", { name: /^Draft report/ }).click();
+  const details = page.getByRole("region", { name: "Task details" });
+  await expect(details).toContainText("Waits on directlyCollect sources");
+  await expect(details).toContainText("Waited on by (all)Nothing");
+  await details.getByRole("button", { name: "Close" }).click();
+  await expect(details).toBeHidden();
+  await page.getByRole("switch", { name: "Show critical path" }).click();
+  await expect(page.getByText("Critical path: Collect sources → Draft report")).toBeVisible();
 
   // A cycle is rejected by the API and explained.
   await page.getByRole("tab", { name: /Tasks/ }).click();
