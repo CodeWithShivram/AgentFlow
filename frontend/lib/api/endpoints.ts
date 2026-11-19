@@ -38,6 +38,7 @@ import type {
   Workflow,
   WorkflowInput,
   WorkflowCosts,
+  WorkflowReport,
   WorkflowStatus,
   Workspace,
 } from "./types";
@@ -137,6 +138,8 @@ export function createEndpoints(client: ApiClient) {
         client.get<{ items: PlanDraftSummary[] }>(`${wf(workspaceId, workflowId)}/plan-drafts`),
       planDraft: (workspaceId: Uuid, workflowId: Uuid, version: number) =>
         client.get<PlanDraftPreview>(`${wf(workspaceId, workflowId)}/plan-drafts/${version}`),
+      /** The execution report, composed from stored records (ADR-0042). */
+      report: (workspaceId: Uuid, workflowId: Uuid) => client.get<WorkflowReport>(`${wf(workspaceId, workflowId)}/report`),
       /** The workflow's model calls, costs by basis, budget and reconciliation (ADR-0040). */
       costs: (workspaceId: Uuid, workflowId: Uuid) =>
         client.get<WorkflowCosts>(`${wf(workspaceId, workflowId)}/costs`),

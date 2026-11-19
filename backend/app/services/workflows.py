@@ -39,6 +39,7 @@ from app.services.transitions import (
     transition_workflow,
 )
 from app.workflows import engine
+from app.workflows.event_categories import EventCategory, event_types
 from app.workflows.state_machine import Actor
 
 logger = logging.getLogger("agentflow.workflows")
@@ -256,10 +257,18 @@ async def list_events(
     *,
     after_sequence: int,
     limit: int,
+    task_id: uuid.UUID | None = None,
+    category: EventCategory | None = None,
 ) -> list[WorkflowEvent]:
+    """Events in order; optionally one task's, or one category's (ADR-0042)."""
     workflow = await get_workflow(session, access, workflow_id)
     return await repository.list_events(
-        session, workflow, after_sequence=after_sequence, limit=limit
+        session,
+        workflow,
+        after_sequence=after_sequence,
+        limit=limit,
+        task_id=task_id,
+        event_types=event_types(category) if category is not None else None,
     )
 
 

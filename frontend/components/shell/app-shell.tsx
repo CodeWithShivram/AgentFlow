@@ -107,8 +107,8 @@ const DETAIL_LABELS: Record<string, string> = { workflows: "Workflow", agents: "
 
 function ShellHeader({ workspace }: { workspace: CurrentWorkspace }) {
   const pathname = usePathname();
-  // /w/<id>/<section>/<detail>
-  const [, , , section, detail] = pathname.split("/");
+  // /w/<id>/<section>/<detail>[/<view>]
+  const [, , , section, detail, view] = pathname.split("/");
   const crumbs: { label: string; href?: string }[] = [
     { label: workspace.name, href: workspacePath(workspace.id) },
   ];
@@ -117,8 +117,10 @@ function ShellHeader({ workspace }: { workspace: CurrentWorkspace }) {
     if (detail) {
       crumbs.push({
         label: detail === "new" ? "New" : `${DETAIL_LABELS[section] ?? "Item"} ${shortId(detail)}`,
+        href: view ? workspacePath(workspace.id, `${section}/${detail}`) : undefined,
       });
     }
+    if (detail && view === "report") crumbs.push({ label: "Report" });
   }
   const current = crumbs.length - 1;
 

@@ -2,8 +2,8 @@
 
 ## Current position
 - Phase: 7 — Observability and cost, in progress (Phases 2–6 complete; Phase 1 released as `v0.1.0`, pushed with its tag)
-- Last completed step: 7.3 — Per-workflow/agent/model breakdown and analytics API
-- Next step: 7.4 — Event timeline and execution report, which needs a short plan and the owner's go-ahead
+- Last completed step: 7.4 — Event timeline and execution report
+- Next step: 7.5 — Latency, retry and failure metrics, which needs a short plan and the owner's go-ahead
 
 ## Completed steps
 | Step | Commit message | Hash |
@@ -52,12 +52,13 @@
 | 7.1 | `feat(usage): add pricing snapshots and link each model call to its price` | `b3db0ee` (pushed, CI ✔) |
 | 7.2 | `feat(usage): compute and reconcile model costs and enforce budgets` | `ef2599a` (pushed, CI ✔) |
 | — | `fix(validation): refuse text made only of whitespace` | `e1b89e6` (pushed, CI ✔) |
-| 7.3 | `feat(analytics): break usage and costs down by workflow, agent and model` | latest commit touching `docs/ADR/0041-usage-and-cost-analytics.md` |
+| 7.3 | `feat(analytics): break usage and costs down by workflow, agent and model` | `bbbaeb3` (pushed, CI ✔) |
+| 7.4 | `feat(report): add a filterable event timeline and the execution report` | latest commit touching `docs/ADR/0042-timeline-and-execution-report.md` |
 
 ## Environment snapshot (2026-11-14)
 | Item | Value |
 |---|---|
-| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `e1b89e6` plus tag `v0.1.0` (owner-authorized) |
+| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `bbbaeb3` plus tag `v0.1.0` (owner-authorized) |
 | Python / uv / Node / npm | 3.12.14 via uv 0.12.9 / Node 24.13.0 / npm 11.6.2 |
 | Celery / kombu | 5.7.0 / 5.7.0 |
 | Docker | 29.9.3 — `agentflow` stack healthy (Docker Desktop must be started first; it had stopped and was restarted in Steps 3.1 and 3.4) |
@@ -69,6 +70,43 @@
 | Test HTTP client | `httpx2` 2.16.0 (replaces `httpx`, OD-10); `httpx` is back only as a LiteLLM dependency |
 | LiteLLM | 1.109.1, imported by workers only when `MODEL_PROVIDER=litellm`; `.env` keeps the mock |
 | LangGraph | 1.2.22 (with langchain-core 1.8.0 and langsmith 0.14.17), imported by workers only; LangSmith tracing disabled; checkpoints via `langgraph-checkpoint-postgres` 3.2.1 |
+
+## Step 7.4 — event timeline and execution report (ADR-0042)
+- **Owner decisions (2026-11-19):**
+  - the report is available any time, labelled "In progress" until finished;
+  - it is generated on read;
+  - accepted deliverables are included as capped plain text;
+  - it is a printable page plus JSON.
+- **Timeline:**
+  - `app/workflows/event_categories.py` gives every event type one category (status, planning, verification, people, recovery), with a completeness test;
+  - `GET …/events` takes `task_id` and `category`;
+  - the Timeline tab groups by day, filters by category and task (`filterEvents`), and describes every event type in plain text.
+- **Report:** `GET …/workflows/{id}/report` (VIEWER, `report/v1`, `app/services/report.py`) is composed from stored records only:
+  - request and plan;
+  - tasks with dependencies and agents;
+  - every attempt with verification outcomes and issue codes (never findings);
+  - accepted deliverables (plain text, 20,000 characters each, `truncated`);
+  - failures and recovery (retries, failed attempts, reassignments, escalations, expired requests, failed jobs, pauses with reasons);
+  - human interventions (decisions and roles, without people's free text);
+  - metrics (counts and elapsed time);
+  - costs, reconciliation and usage by task, agent and model.
+
+  `final` is true once the workflow ends. A report page (`/workflows/{id}/report`, linked from the workflow, with a "Report" breadcrumb) prints cleanly.
+- **Fix to 7.3 (found by the report test):** semantic evaluations record the attempt they judge, so the analytics counted their cost as the evaluated agent's, against ADR-0041. Calls whose purpose is the platform's (`PLATFORM_PURPOSES`, checked against the jobs' constants) now always count as `platform:<purpose>`, also in the overview's agent count.
+- **Tests:**
+  - 4 integration tests: a finished workflow driven through the real jobs (failed attempt, automatic retry, deterministic verification, semantic evaluation) and its full report; an in-progress report; roles and isolation; timeline filters by task and category;
+  - unit tests (category completeness and partition; platform purposes);
+  - 6 component tests (timeline descriptions, filtering, day groups; report sections, plain text, in progress);
+  - E2E journeys 8–9 open the finished workflow's report.
+- **Test changed (intended):** none removed. The timeline keeps its list name and `describeEvent` output for existing cases.
+
+## Checks last executed (Step 7.4)
+- **Full gate (`check.ps1 -E2E`) ✔, exit 0, on the first run:**
+  - backend: ruff format, ruff check, mypy (222 files), alembic check;
+  - pytest **1192 passed**;
+  - frontend: eslint, typecheck, Vitest **150**, Playwright **17 passed** (journeys 8–9 open the report), build.
+- **Deliberate-bug check** (restored byte-for-byte): marking every report final fails the in-progress report test.
+- **Environment:** no servers were left running after E2E.
 
 ## Step 7.3 — usage and cost analytics (ADR-0041)
 - **Owner decisions (2026-11-19):**
@@ -94,7 +132,7 @@
   - 6 unit tests (ranges, totals keeping currencies and bases apart);
   - 4 component tests.
 
-## Checks last executed (Step 7.3)
+## Checks (Step 7.3)
 - **Full gate (`check.ps1 -E2E`) ✔, exit 0, on the first run:**
   - backend: ruff format, ruff check, mypy (217 files), alembic check;
   - pytest **1185 passed**;
@@ -1207,6 +1245,6 @@
 None.
 
 ## Next exact action
-1. **Push Step 7.3** on the owner's go-ahead, and confirm CI on GitHub.
-2. **Step 7.4 (event timeline and execution report):** present a short plan and get the owner's go-ahead.
+1. **Push Step 7.4** on the owner's go-ahead, and confirm CI on GitHub.
+2. **Step 7.5 (latency, retry and failure metrics):** present a short plan and get the owner's go-ahead.
 3. **Before any hosted deployment:** settle OD-14, OD-19 and OD-20.

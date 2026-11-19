@@ -468,6 +468,101 @@ export interface CostBreakdown {
   truncated: boolean;
 }
 
+// --- execution report (ADR-0042) --------------------------------------------------------
+
+export interface ReportAttempt {
+  attempt_number: number;
+  agent_id: Uuid;
+  agent_name: string;
+  agent_version: number;
+  status: string;
+  error_code: string | null;
+  started_at: IsoDateTime;
+  completed_at: IsoDateTime | null;
+  duration_seconds: number | null;
+  verification: { verifier: string; outcome: string; issue_codes: string[] }[];
+}
+
+export interface ReportTask {
+  id: Uuid;
+  title: string;
+  status: string;
+  required: boolean;
+  removed: boolean;
+  priority: number;
+  required_skills: string[];
+  depends_on: Uuid[];
+  assigned_agent_id: Uuid | null;
+  assigned_agent_name: string | null;
+  assigned_agent_version: number | null;
+  started_at: IsoDateTime | null;
+  completed_at: IsoDateTime | null;
+  attempts: ReportAttempt[];
+  /** Agent text: plain text only. */
+  deliverables: { name: string; content: string | null; truncated: boolean }[];
+}
+
+export interface ReportIntervention {
+  id: Uuid;
+  task_id: Uuid | null;
+  type: string;
+  subject: string;
+  status: string;
+  /** May be model or agent text: plain text only. */
+  requested_action: string;
+  requested_by: string;
+  created_at: IsoDateTime;
+  resolved_at: IsoDateTime | null;
+  decision: string | null;
+  then: string | null;
+  outcome: string | null;
+  decided_role: string | null;
+}
+
+export interface WorkflowReport {
+  report_version: string;
+  generated_at: IsoDateTime;
+  final: boolean;
+  workflow: {
+    id: Uuid;
+    prompt: string;
+    status: string;
+    pause_reason: string | null;
+    autonomy_policy: string;
+    budget_limit: string | null;
+    currency: string;
+    max_parallel_tasks: number;
+    deadline: IsoDateTime | null;
+    confirmed_plan_version: number | null;
+    created_at: IsoDateTime;
+    started_at: IsoDateTime | null;
+    completed_at: IsoDateTime | null;
+  };
+  tasks: ReportTask[];
+  interventions: ReportIntervention[];
+  recovery: {
+    retries: number;
+    failed_attempts: number;
+    reassignments: number;
+    escalations: number;
+    expired_requests: number;
+    failed_background_jobs: number;
+    pauses: { at: IsoDateTime; pause_reason: string | null; actor: string | null }[];
+  };
+  metrics: {
+    tasks: number;
+    tasks_by_status: Record<string, number>;
+    attempts: number;
+    attempts_by_status: Record<string, number>;
+    verifications_passed: number;
+    verifications_failed: number;
+    elapsed_seconds: number | null;
+  };
+  costs: WorkflowCosts;
+  usage: { workflow_id: Uuid; totals: UsageTotals; by_task: BreakdownRow[]; by_agent: BreakdownRow[]; by_model: BreakdownRow[] };
+  requirements: Record<string, unknown> | null;
+}
+
 /** A workflow's model costs (ADR-0040). Amounts are decimal strings. */
 export interface CostTotals {
   currency: string;

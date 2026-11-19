@@ -173,6 +173,10 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
 - Analytics (ADR-0041, `app/services/analytics.py`): aggregate only stored `llm_usage` rows (never invent metrics),
   per currency and cost basis; attribute agents through `agent_executions`, other calls as `platform:<purpose>`;
   every breakdown must add up to the overview. Ranges need a time zone and span at most 366 days.
+- Timeline and report (ADR-0042): every `WorkflowEventType` needs a category in `app/workflows/event_categories.py`
+  (and the frontend's `eventCategory`). The report (`app/services/report.py`) composes stored records only: outcomes and
+  issue codes, never evaluator findings; no people's free text; deliverables as capped plain text. Platform calls
+  (`analytics.PLATFORM_PURPOSES`) never count toward an agent, even when they record an attempt.
 - Workflow events are append-only.
 
 ## Security

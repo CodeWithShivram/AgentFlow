@@ -17,6 +17,7 @@ from app.models import (
     VerificationResult,
     Workflow,
     WorkflowEvent,
+    WorkflowEventType,
     WorkflowPlan,
     WorkflowStatus,
     WorkflowTask,
@@ -156,7 +157,13 @@ async def delete_edges_touching(
 
 
 async def list_events(
-    session: AsyncSession, workflow: Workflow, *, after_sequence: int, limit: int
+    session: AsyncSession,
+    workflow: Workflow,
+    *,
+    after_sequence: int,
+    limit: int,
+    task_id: uuid.UUID | None = None,
+    event_types: list[WorkflowEventType] | None = None,
 ) -> list[WorkflowEvent]:
     statement = (
         select(WorkflowEvent)
@@ -168,6 +175,10 @@ async def list_events(
         .order_by(WorkflowEvent.sequence)
         .limit(limit)
     )
+    if task_id is not None:
+        statement = statement.where(WorkflowEvent.task_id == task_id)
+    if event_types is not None:
+        statement = statement.where(WorkflowEvent.event_type.in_(event_types))
     return list((await session.execute(statement)).scalars())
 
 

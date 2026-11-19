@@ -38,6 +38,13 @@ DEFAULT_RANGE = timedelta(days=30)
 MAX_RANGE = timedelta(days=366)
 LABEL_LENGTH = 120
 PLATFORM = "platform:"
+# The platform's own model calls (analysis, planning, semantic evaluation). An evaluation records
+# the attempt it judges, but its cost is the platform's, not the evaluated agent's.
+PLATFORM_PURPOSES = frozenset({"prompt_analysis", "plan_generation", "semantic_evaluation"})
+
+
+def _is_platform() -> ColumnElement[bool]:
+    return AgentExecution.agent_id.is_(None) | LlmUsage.purpose.in_(PLATFORM_PURPOSES)
 
 
 class AnalyticsRangeInvalidError(AppError):
@@ -137,10 +144,10 @@ def _keys(group_by: GroupBy | None) -> list[Any]:
         return [LlmUsage.purpose]
     if group_by == "day":
         return [func.date(func.timezone("UTC", LlmUsage.created_at))]
-    # agent: the attempt's agent; calls no agent made are grouped by purpose instead.
+    # agent: the attempt's agent; the platform's calls are grouped by purpose instead.
     return [
-        AgentExecution.agent_id,
-        case((AgentExecution.agent_id.is_(None), LlmUsage.purpose), else_=None),
+        case((_is_platform(), None), else_=AgentExecution.agent_id),
+        case((_is_platform(), LlmUsage.purpose), else_=None),
     ]
 
 
@@ -277,7 +284,9 @@ async def overview(
         await session.execute(
             select(
                 func.count(func.distinct(LlmUsage.workflow_id)),
-                func.count(func.distinct(AgentExecution.agent_id)),
+                func.count(
+                    func.distinct(case((_is_platform(), None), else_=AgentExecution.agent_id))
+                ),
             )
             .select_from(LlmUsage)
             .outerjoin(

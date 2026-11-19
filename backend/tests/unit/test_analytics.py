@@ -6,7 +6,12 @@ from decimal import Decimal
 import pytest
 
 from app.models import CostBasis
-from app.services.analytics import AnalyticsRangeInvalidError, _Totals, resolve_range
+from app.services.analytics import (
+    PLATFORM_PURPOSES,
+    AnalyticsRangeInvalidError,
+    _Totals,
+    resolve_range,
+)
 
 NOW = datetime(2026, 11, 19, 12, tzinfo=UTC)
 
@@ -59,3 +64,11 @@ def test_totals_keep_currencies_and_bases_apart() -> None:
     merged.merge(totals)
     merged.merge(totals)
     assert merged.model().calls == 20 and merged.model().costs[1].actual == Decimal("1.0")
+
+
+def test_the_platforms_purposes_match_its_jobs() -> None:
+    # Calls with these purposes are the platform's even when they record an attempt (ADR-0041).
+    from app.planning import analysis, plan
+    from app.verification import semantic
+
+    assert {analysis.PURPOSE, plan.PURPOSE, semantic.PURPOSE} == PLATFORM_PURPOSES

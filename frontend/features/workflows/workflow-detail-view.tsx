@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { PlusIcon, RadioIcon } from "lucide-react";
+import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -19,6 +20,7 @@ import { api } from "@/lib/api";
 import type { Agent, Task, Workflow } from "@/lib/api/types";
 import { formatDateTime, formatMoney } from "@/lib/format";
 import { useActionErrors } from "@/lib/hooks/use-action-errors";
+import { workspacePath } from "@/lib/navigation";
 import { useCan, useWorkspace } from "@/lib/workspace";
 
 import { AssignAgentDialog } from "./assign-agent-dialog";
@@ -108,6 +110,9 @@ export function WorkflowDetailView() {
         </div>
         <h1 className="text-2xl font-semibold tracking-tight break-words whitespace-pre-wrap">{wf.prompt}</h1>
         <p className="text-sm text-muted-foreground">{WORKFLOW_STATUS_HELP[wf.status]}</p>
+        <Button variant="link" className="px-0" asChild>
+          <Link href={workspacePath(workspace.id, `workflows/${wf.id}/report`)}>Execution report</Link>
+        </Button>
         {canEdit ? (
           <div className="flex flex-wrap gap-2">
             <WorkflowActions workflow={wf} onError={errors.handle} />

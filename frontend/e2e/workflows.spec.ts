@@ -169,6 +169,15 @@ test("journeys 8 and 9: approve, start, assign an agent and monitor execution", 
   await expect(timeline.getByText("Task assigned", { exact: true }).first()).toBeVisible();
   await expect(timeline.getByText("Workflow created", { exact: true })).toBeVisible();
 
+  // Step 7.4: the execution report of the finished workflow, from its records.
+  await page.getByRole("link", { name: "Execution report" }).click();
+  const report = page.getByRole("article", { name: "Execution report" });
+  await expect(report.getByRole("heading", { level: 1, name: "Execution report" })).toBeVisible();
+  await expect(report.getByText("Final", { exact: true })).toBeVisible();
+  const deliverables = page.getByRole("region", { name: "Deliverables" });
+  await expect(deliverables.getByText("Release notes draft", { exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Execution and verification" })).toContainText("Succeeded");
+
   await page.goto(workspaceUrl(user.workspaceId, "activity"));
   await expect(visibleText(page, "Task started")).toBeVisible();
   await user.context.close();

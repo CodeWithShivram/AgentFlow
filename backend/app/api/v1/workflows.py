@@ -17,6 +17,7 @@ from app.api.deps import DbSession, SettingsDep, workspace_role
 from app.models import VerificationResult, WorkflowStatus, WorkflowTask, WorkspaceRole
 from app.repositories import workflows as repository
 from app.schemas.costs import WorkflowCostsResponse
+from app.schemas.report import WorkflowReport
 from app.schemas.workflows import (
     AgentSelectionList,
     AgentSelectionResponse,
@@ -50,10 +51,12 @@ from app.schemas.workflows import (
 from app.schemas.workspaces import Page
 from app.services import background_jobs
 from app.services import costs as cost_service
+from app.services import report as report_service
 from app.services import tasks as task_service
 from app.services import workflows as service
 from app.services.authorization import WorkspaceAccess
 from app.services.idempotency import IdempotencyService
+from app.workflows.event_categories import EventCategory
 
 router = APIRouter(prefix="/workspaces/{workspace_id}/workflows", tags=["workflows"])
 
@@ -285,10 +288,19 @@ async def list_events(
     session: DbSession,
     after: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    task_id: uuid.UUID | None = None,
+    category: EventCategory | None = None,
 ) -> EventPage:
-    """Append-only history in order. Continue with `after=<last_sequence>`."""
+    """Append-only history in order. Continue with `after=<last_sequence>`. Optionally one
+    task's events, or one category's: status, planning, verification, people, recovery."""
     events = await service.list_events(
-        session, access, workflow_id, after_sequence=after, limit=limit
+        session,
+        access,
+        workflow_id,
+        after_sequence=after,
+        limit=limit,
+        task_id=task_id,
+        category=category,
     )
     items = [WorkflowEventResponse.model_validate(e, from_attributes=True) for e in events]
     return EventPage(items=items, last_sequence=items[-1].sequence if items else None)
@@ -449,6 +461,15 @@ async def list_agent_selections(
             for s in rows
         ]
     )
+
+
+@router.get("/{workflow_id}/report")
+async def workflow_report(
+    workflow_id: uuid.UUID, access: Viewer, session: DbSession
+) -> WorkflowReport:
+    """The execution report (ADR-0042), composed from stored records; `final` is false while the
+    workflow is still in progress."""
+    return await report_service.workflow_report(session, access, workflow_id)
 
 
 @router.get("/{workflow_id}/costs")
