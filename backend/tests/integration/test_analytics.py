@@ -410,3 +410,41 @@ def test_breakdowns_are_truncated_but_totals_are_not(
     body = _get(tenant.client, tenant, "/costs", group_by="purpose", limit=1)
     assert len(body["rows"]) == 1 and body["truncated"] is True
     assert body["totals"]["calls"] == 5
+
+
+@pytest.mark.usefixtures("prices")
+def test_days_are_cut_in_the_requested_time_zone(
+    new_client: ClientFactory, admin_factory: Factory, worker_factory: Factory
+) -> None:
+    # ADR-0045: a call at 23:30 UTC belongs to the next day in Kolkata (+05:30) and stays on
+    # the same day in New York (-05:00); UTC stays the default.
+    tenant = _tenant(new_client, admin_factory)
+    late = _call(worker_factory, tenant, "acme", "acme-large", ACME, workflow_id=tenant.survey)
+    early = _call(worker_factory, tenant, "acme", "acme-large", ACME, workflow_id=tenant.survey)
+    with session_scope(admin_factory) as s:
+        for call_id, at in ((late, "2026-11-10 23:30:00+00"), (early, "2026-11-11 00:30:00+00")):
+            s.execute(
+                text("UPDATE llm_usage SET created_at = CAST(:at AS timestamptz) WHERE id = :id"),
+                {"id": call_id, "at": at},
+            )
+        s.commit()
+    window = {"from": "2026-11-09T00:00:00+00:00", "to": "2026-11-13T00:00:00+00:00"}
+
+    def days(**params: str) -> list[tuple[str, int]]:
+        body = _get(tenant.client, tenant, "/tokens", group_by="day", **window, **params)
+        assert body["totals"]["calls"] == 2
+        return [(r["key"], r["calls"]) for r in body["rows"]]
+
+    assert days() == [("2026-11-10", 1), ("2026-11-11", 1)]
+    assert days(tz="Asia/Kolkata") == [("2026-11-11", 2)]
+    assert days(tz="America/New_York") == [("2026-11-10", 2)]
+    body = _get(tenant.client, tenant, "/costs", group_by="day", tz="Asia/Kolkata", **window)
+    assert body["time_zone"] == "Asia/Kolkata" and [r["key"] for r in body["rows"]] == [
+        "2026-11-11"
+    ]
+
+    url = f"{API}/workspaces/{tenant.workspace_id}/analytics/tokens"
+    for tz in ("Mars/Olympus", "../etc/passwd", "UTC'; --"):
+        refused = tenant.client.get(url, params={"group_by": "day", "tz": tz})
+        assert refused.status_code == 422, tz
+        assert refused.json()["error"]["code"] == "ANALYTICS_TIME_ZONE_INVALID"

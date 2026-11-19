@@ -12,7 +12,9 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from functools import cache
 from typing import Any
+from zoneinfo import available_timezones
 
 from sqlalchemy import ColumnElement, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -60,6 +62,27 @@ def resolve_range(start: datetime | None, end: datetime | None) -> Range:
     if start.tzinfo is None or end.tzinfo is None or start >= end or end - start > MAX_RANGE:
         raise AnalyticsRangeInvalidError()
     return Range(start=start, end=end)
+
+
+class AnalyticsTimeZoneInvalidError(AppError):
+    status_code = 422
+    code = "ANALYTICS_TIME_ZONE_INVALID"
+    message = "The time zone must be an IANA name, such as Europe/Paris."
+
+
+@cache
+def _time_zones() -> frozenset[str]:
+    # Scanning the tz database is slow and its contents do not change while the process runs.
+    return frozenset(available_timezones())
+
+
+def resolve_time_zone(name: str | None) -> str:
+    """The zone that cuts days for `group_by=day` (ADR-0045); UTC by default."""
+    if name is None:
+        return "UTC"
+    if name not in _time_zones():
+        raise AnalyticsTimeZoneInvalidError()
+    return name
 
 
 # --- aggregation ------------------------------------------------------------------------------
@@ -131,7 +154,7 @@ class _Totals:
         return BreakdownRow(key=key, label=label, **self._fields())
 
 
-def _keys(group_by: GroupBy | None) -> list[Any]:
+def _keys(group_by: GroupBy | None, time_zone: str) -> list[Any]:
     if group_by is None:
         return []
     if group_by == "workflow":
@@ -143,7 +166,7 @@ def _keys(group_by: GroupBy | None) -> list[Any]:
     if group_by == "purpose":
         return [LlmUsage.purpose]
     if group_by == "day":
-        return [func.date(func.timezone("UTC", LlmUsage.created_at))]
+        return [func.date(func.timezone(time_zone, LlmUsage.created_at))]
     # agent: the attempt's agent; the platform's calls are grouped by purpose instead.
     return [
         case((_is_platform(), None), else_=AgentExecution.agent_id),
@@ -156,8 +179,9 @@ async def _aggregate(
     access: WorkspaceAccess,
     group_by: GroupBy | None,
     conditions: Sequence[ColumnElement[bool]],
+    time_zone: str = "UTC",
 ) -> dict[tuple[Any, ...], _Totals]:
-    keys = _keys(group_by)
+    keys = _keys(group_by, time_zone)
     statement = (
         select(
             *keys,
@@ -254,8 +278,9 @@ async def _breakdown(
     group_by: GroupBy,
     conditions: Sequence[ColumnElement[bool]],
     limit: int,
+    time_zone: str = "UTC",
 ) -> tuple[list[BreakdownRow], _Totals, bool]:
-    groups = await _aggregate(session, access, group_by, conditions)
+    groups = await _aggregate(session, access, group_by, conditions, time_zone)
     names: dict[Any, str] = {}
     if group_by in ("workflow", "task", "agent"):
         names = await _names(session, access, group_by, (key[0] for key in groups))
@@ -310,13 +335,21 @@ async def costs(
     *,
     workflow_id: uuid.UUID | None,
     limit: int,
+    time_zone: str = "UTC",
 ) -> CostBreakdownResponse:
     conditions = _in_range(window)
     if workflow_id is not None:
         conditions.append(LlmUsage.workflow_id == workflow_id)
-    rows, totals, truncated = await _breakdown(session, access, group_by, conditions, limit)
+    rows, totals, truncated = await _breakdown(
+        session, access, group_by, conditions, limit, time_zone
+    )
     return CostBreakdownResponse(
-        group_by=group_by, range=window, rows=rows, totals=totals.model(), truncated=truncated
+        group_by=group_by,
+        range=window,
+        time_zone=time_zone,
+        rows=rows,
+        totals=totals.model(),
+        truncated=truncated,
     )
 
 
@@ -328,11 +361,21 @@ async def tokens(
     *,
     workflow_id: uuid.UUID | None,
     limit: int,
+    time_zone: str = "UTC",
 ) -> TokenBreakdownResponse:
-    result = await costs(session, access, window, group_by, workflow_id=workflow_id, limit=limit)
+    result = await costs(
+        session,
+        access,
+        window,
+        group_by,
+        workflow_id=workflow_id,
+        limit=limit,
+        time_zone=time_zone,
+    )
     return TokenBreakdownResponse(
         group_by=group_by,
         range=window,
+        time_zone=time_zone,
         rows=[
             TokenRow(
                 key=r.key,

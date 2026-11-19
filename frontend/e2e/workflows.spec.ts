@@ -186,6 +186,20 @@ test("journeys 8 and 9: approve, start, assign an agent and monitor execution", 
   const deliverables = page.getByRole("region", { name: "Deliverables" });
   await expect(deliverables.getByText("Release notes draft", { exact: true })).toBeVisible();
   await expect(page.getByRole("region", { name: "Execution and verification" })).toContainText("Succeeded");
+  // Step 8.2: metrics, the dependency graph and the execution timeline complete the report.
+  await expect(page.getByRole("region", { name: "Metrics" })).toContainText("Attempts1 (1 succeeded)");
+  await expect(page.getByRole("region", { name: "Report stage 1" })).toContainText("Draft the notes");
+  const reportTimeline = page.getByRole("list", { name: "Workflow events, oldest first" });
+  await expect(reportTimeline.getByText("Task completed", { exact: true }).first()).toBeVisible();
+
+  // Step 8.2: the dashboard summarises usage, and Analytics charts it over time.
+  await page.goto(workspaceUrl(user.workspaceId, "dashboard"));
+  const usage = page.getByRole("region", { name: "Usage, last 30 days" });
+  await expect(usage).toContainText("Agent attempts succeeded100% (1 of 1)");
+  await expect(usage).not.toContainText("No model calls yet");
+  await usage.getByRole("link", { name: "Analytics" }).click();
+  const overTime = page.getByRole("region", { name: "Usage over time" });
+  await expect(overTime.getByRole("group", { name: /Tokens per day/ })).toBeVisible();
 
   await page.goto(workspaceUrl(user.workspaceId, "activity"));
   await expect(visibleText(page, "Task started")).toBeVisible();

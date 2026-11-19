@@ -463,7 +463,27 @@ export interface AnalyticsOverview {
 export interface CostBreakdown {
   group_by: AnalyticsGroupBy;
   range: AnalyticsRange;
+  /** The IANA zone that cut days for group_by "day" (ADR-0045). */
+  time_zone: string;
   rows: BreakdownRow[];
+  totals: UsageTotals;
+  truncated: boolean;
+}
+
+export interface TokenRow {
+  key: string;
+  label: string;
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  cached_input_tokens: number;
+}
+
+export interface TokenBreakdown {
+  group_by: AnalyticsGroupBy;
+  range: AnalyticsRange;
+  time_zone: string;
+  rows: TokenRow[];
   totals: UsageTotals;
   truncated: boolean;
 }
@@ -623,7 +643,8 @@ export interface WorkflowReport {
   };
   costs: WorkflowCosts;
   usage: { workflow_id: Uuid; totals: UsageTotals; by_task: BreakdownRow[]; by_agent: BreakdownRow[]; by_model: BreakdownRow[] };
-  requirements: Record<string, unknown> | null;
+  /** The workflow's prompt analysis, when one is ready (ADR-0014). */
+  requirements: PromptAnalysis | null;
 }
 
 /** A workflow's model costs (ADR-0040). Amounts are decimal strings. */

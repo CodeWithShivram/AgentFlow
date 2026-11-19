@@ -161,7 +161,8 @@ export function ProposalsView() {
         </TabsList>
       </Tabs>
 
-      {query.isPending ? (
+      {/* An empty page kept from the previous filter is not this filter's answer: keep loading. */}
+      {query.isPending || (query.isPlaceholderData && query.data.items.length === 0) ? (
         <ListSkeleton label="Loading proposals" />
       ) : query.isError ? (
         <ErrorState error={query.error} onRetry={() => void query.refetch()} />

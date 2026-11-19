@@ -93,7 +93,7 @@ function AnalysisFailed({ workflow }: { workflow: Workflow }) {
   );
 }
 
-function AnalysisView({ analysis }: { analysis: PromptAnalysis }) {
+export function AnalysisView({ analysis }: { analysis: PromptAnalysis }) {
   return (
     <div className="space-y-4">
       <Card>

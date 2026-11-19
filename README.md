@@ -336,6 +336,8 @@ When actual plus estimated spend reaches the budget, the workflow pauses once. R
 
 Every figure comes from the stored usage records, and every breakdown adds up to the overview. The API is `GET /workspaces/{id}/analytics/overview`, `/costs?group_by=…`, `/tokens`, `/agents` and `/workflows/{id}`, readable by Viewers and above.
 
+**Usage over time and the dashboard** ([ADR-0045](docs/ADR/0045-analytics-and-report-ui.md)). Analytics charts tokens per day (per week past a month) in the viewer's time zone, with the calls in a readout and every value in a table view; costs stay in the tables. `group_by=day` takes `tz` (an IANA zone, UTC by default). The dashboard's "Usage, last 30 days" card shows calls, tokens, costs by basis and the share of agent attempts that succeeded.
+
 **Timeline and execution report** ([ADR-0042](docs/ADR/0042-timeline-and-execution-report.md)). The workflow's Timeline groups events by day and filters by category (status, planning, verification, people, recovery) and by task. `GET …/events` takes `task_id` and `category`.
 
 "Execution report" on a workflow (`GET …/workflows/{id}/report`) is built from stored records only and prints cleanly. It covers:
@@ -348,7 +350,7 @@ Every figure comes from the stored usage records, and every breakdown adds up to
 - metrics;
 - tokens and costs.
 
-It is marked "In progress" until the workflow finishes.
+It is marked "In progress" until the workflow finishes. It also shows the analysed requirements, metrics, a printable dependency graph and the execution timeline (the first 500 events, without people's free text; ADR-0045).
 
 **Reliability and latency** ([ADR-0043](docs/ADR/0043-latency-retry-and-failure-metrics.md)). The Analytics page also shows:
 - model call failure rate and latency, per model;

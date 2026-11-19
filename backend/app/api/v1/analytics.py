@@ -34,6 +34,10 @@ End = Annotated[
     datetime | None, Query(alias="to", description="End (exclusive), with a time zone.")
 ]
 Limit = Annotated[int, Query(ge=1, le=500)]
+TimeZone = Annotated[
+    str | None,
+    Query(alias="tz", max_length=64, description="IANA zone that cuts days for group_by=day."),
+]
 
 
 @router.get("/overview")
@@ -53,6 +57,7 @@ async def costs(
     start: Start = None,
     end: End = None,
     limit: Limit = 100,
+    time_zone: TimeZone = None,
 ) -> CostBreakdownResponse:
     """Calls, tokens and costs per group; actual, estimated and mock costs stay apart."""
     return await service.costs(
@@ -62,6 +67,7 @@ async def costs(
         group_by,
         workflow_id=workflow_id,
         limit=limit,
+        time_zone=service.resolve_time_zone(time_zone),
     )
 
 
@@ -74,8 +80,9 @@ async def tokens(
     start: Start = None,
     end: End = None,
     limit: Limit = 100,
+    time_zone: TimeZone = None,
 ) -> TokenBreakdownResponse:
-    """Calls and tokens per group."""
+    """Calls and tokens per group; days are cut in `tz` (UTC by default)."""
     return await service.tokens(
         session,
         access,
@@ -83,6 +90,7 @@ async def tokens(
         group_by,
         workflow_id=workflow_id,
         limit=limit,
+        time_zone=service.resolve_time_zone(time_zone),
     )
 
 

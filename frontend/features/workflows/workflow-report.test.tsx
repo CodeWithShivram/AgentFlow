@@ -1,7 +1,9 @@
+import { QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { WorkflowReport } from "@/lib/api/types";
+import type { ReportTask, WorkflowEvent, WorkflowReport } from "@/lib/api/types";
+import { createQueryClient } from "@/lib/query-client";
 
 import { ReportBody } from "./workflow-report";
 
@@ -131,9 +133,46 @@ const REPORT: WorkflowReport = {
   requirements: null,
 };
 
+const EVENTS: WorkflowEvent[] = [
+  {
+    id: "e-1",
+    sequence: 1,
+    task_id: null,
+    event_type: "WORKFLOW_STARTED",
+    payload: { from: "READY", to: "RUNNING", actor: "USER" },
+    created_at: "2026-11-19T10:01:00Z",
+  },
+  {
+    id: "e-2",
+    sequence: 2,
+    task_id: "t-1",
+    event_type: "TASK_CANCELLED",
+    payload: { from: "IN_PROGRESS", to: "CANCELLED", reason: "Private note from Alice" },
+    created_at: "2026-11-19T10:02:00Z",
+  },
+];
+
+function renderReport(report: WorkflowReport, events: WorkflowEvent[] = EVENTS) {
+  const fetchMock = vi.fn<(input: string) => Promise<Response>>(async () =>
+    new Response(JSON.stringify({ items: events, last_sequence: events.at(-1)?.sequence ?? null }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }),
+  );
+  vi.stubGlobal("fetch", fetchMock);
+  render(
+    <QueryClientProvider client={createQueryClient()}>
+      <ReportBody report={report} workspaceId="ws-1" />
+    </QueryClientProvider>,
+  );
+  return fetchMock;
+}
+
+afterEach(() => vi.unstubAllGlobals());
+
 describe("ReportBody", () => {
   it("tells the workflow's story from its records, as plain text", () => {
-    render(<ReportBody report={REPORT} workspaceId="ws-1" />);
+    renderReport(REPORT);
     const report = screen.getByRole("article", { name: "Execution report" });
     expect(within(report).getByText("Final")).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Request" })).toHaveTextContent("Elapsed30 min 0 s");
@@ -158,13 +197,67 @@ describe("ReportBody", () => {
   });
 
   it("marks a report of a running workflow as in progress", () => {
-    render(
-      <ReportBody
-        report={{ ...REPORT, final: false, workflow: { ...REPORT.workflow, status: "RUNNING", completed_at: null } }}
-        workspaceId="ws-1"
-      />,
-    );
+    renderReport({ ...REPORT, final: false, workflow: { ...REPORT.workflow, status: "RUNNING", completed_at: null } });
     expect(screen.getByText("In progress")).toBeInTheDocument();
     expect(screen.getByText("The workflow has not finished; this report shows what has happened so far.")).toBeInTheDocument();
+  });
+
+  it("adds metrics, the analysed requirements, the dependency graph and the execution timeline", async () => {
+    const publish: ReportTask = {
+      ...REPORT.tasks[0]!,
+      id: "t-2",
+      title: "Publish",
+      status: "PENDING",
+      depends_on: ["t-1"],
+      attempts: [],
+      deliverables: [],
+      assigned_agent_name: null,
+    };
+    const fetchMock = renderReport({
+      ...REPORT,
+      tasks: [...REPORT.tasks, publish],
+      requirements: {
+        schema_version: 1,
+        objective: "Launch the product",
+        requirements: [{ id: "r1", description: "Cover pricing", priority: "must" }],
+        constraints: [],
+        deliverables: ["Report"],
+        assumptions: [],
+        ambiguities: [],
+        suggested_skills: [],
+      },
+    });
+
+    expect(screen.getByRole("region", { name: "Metrics" })).toHaveTextContent(
+      "Attempts2 (1 failed, 1 succeeded)Verification results2 passed, 0 failed",
+    );
+    expect(screen.getByRole("region", { name: "Requirements" })).toHaveTextContent("Launch the product");
+
+    const graph = screen.getByRole("region", { name: "Dependency graph" });
+    expect(within(graph).getByRole("region", { name: "Report stage 2" })).toHaveTextContent(
+      "PublishPendingUnassigned · attempts 0After: Draft the report",
+    );
+    expect(graph.querySelectorAll("path[data-edge]")).toHaveLength(1);
+
+    const timeline = screen.getByRole("region", { name: "Execution timeline" });
+    expect(await within(timeline).findByText(/Ready → Running · by user/)).toBeInTheDocument();
+    expect(timeline).toHaveTextContent("Draft the report: In progress → Cancelled");
+    // People's free text stays out of the report.
+    expect(timeline).not.toHaveTextContent("Private note from Alice");
+    expect(timeline).not.toHaveTextContent("Showing the first");
+    const url = new URL(String(fetchMock.mock.calls[0]![0]), "http://localhost");
+    expect(url.pathname).toBe("/api/v1/workspaces/ws-1/workflows/wf-1/events");
+    expect(url.searchParams.get("limit")).toBe("500");
+  });
+
+  it("says when the timeline has more events than one page", async () => {
+    const many = Array.from({ length: 500 }, (_, i) => ({ ...EVENTS[0]!, id: `e-${i}`, sequence: i + 1 }));
+    renderReport(REPORT, many);
+    const timeline = screen.getByRole("region", { name: "Execution timeline" });
+    expect(await within(timeline).findByText(/Showing the first 500 events/)).toBeInTheDocument();
+    expect(within(timeline).getByRole("link", { name: "The workflow's Timeline" })).toHaveAttribute(
+      "href",
+      "/w/ws-1/workflows/wf-1",
+    );
   });
 });

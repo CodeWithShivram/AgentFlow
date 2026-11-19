@@ -11,7 +11,7 @@ import { humanize } from "@/lib/format";
 /** Timeline categories (ADR-0042); the backend's `event_categories.CATEGORIES` mirrors this. */
 export type EventCategory = "status" | "planning" | "verification" | "people" | "recovery";
 
-const CATEGORY_LABELS: Record<EventCategory, string> = {
+export const CATEGORY_LABELS: Record<EventCategory, string> = {
   status: "Status changes",
   planning: "Analysis and plans",
   verification: "Submissions and checks",

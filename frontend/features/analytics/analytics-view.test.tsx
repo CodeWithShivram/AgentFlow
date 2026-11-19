@@ -2,7 +2,15 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { AnalyticsOverview, CostBreakdown, Distribution, WorkspaceMetrics } from "@/lib/api/types";
+import userEvent from "@testing-library/user-event";
+
+import type {
+  AnalyticsOverview,
+  CostBreakdown,
+  Distribution,
+  TokenBreakdown,
+  WorkspaceMetrics,
+} from "@/lib/api/types";
 import { createQueryClient } from "@/lib/query-client";
 import { WorkspaceProvider } from "@/lib/workspace";
 
@@ -26,6 +34,17 @@ const TOTALS = {
   costs: [USD],
 };
 const OVERVIEW: AnalyticsOverview = { range: RANGE, totals: TOTALS, workflows: 2, agents: 2 };
+const TOKENS: TokenBreakdown = {
+  group_by: "day",
+  range: RANGE,
+  time_zone: "UTC",
+  rows: [
+    { key: "2026-11-01", label: "2026-11-01", calls: 3, input_tokens: 3000, output_tokens: 2000, cached_input_tokens: 0 },
+    { key: "2026-11-18", label: "2026-11-18", calls: 2, input_tokens: 2000, output_tokens: 1000, cached_input_tokens: 0 },
+  ],
+  totals: TOTALS,
+  truncated: false,
+};
 
 function breakdown(groupBy: string): CostBreakdown {
   const rows = {
@@ -36,7 +55,7 @@ function breakdown(groupBy: string): CostBreakdown {
     ],
     model: [{ ...TOTALS, calls: 2, key: "acme/acme-large", label: "acme · acme-large" }],
   }[groupBy as "workflow" | "agent" | "model"];
-  return { group_by: groupBy as CostBreakdown["group_by"], range: RANGE, rows, totals: TOTALS, truncated: groupBy === "model" };
+  return { group_by: groupBy as CostBreakdown["group_by"], range: RANGE, time_zone: "UTC", rows, totals: TOTALS, truncated: groupBy === "model" };
 }
 
 const NONE: Distribution = { unit: "s", samples: 0, p50: null, p95: null, max: null, mean: null };
@@ -81,7 +100,11 @@ function renderView(overview: AnalyticsOverview = OVERVIEW) {
       ? overview
       : url.pathname.endsWith("/metrics")
         ? METRICS
-        : breakdown(url.searchParams.get("group_by") ?? "");
+        : url.pathname.endsWith("/tokens")
+          ? overview.totals.calls === 0
+            ? { ...TOKENS, rows: [], totals: overview.totals }
+            : TOKENS
+          : breakdown(url.searchParams.get("group_by") ?? "");
     return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
   });
   vi.stubGlobal("fetch", fetchMock);
@@ -162,5 +185,33 @@ describe("AnalyticsView", () => {
     renderView({ ...OVERVIEW, totals: { ...TOTALS, calls: 0, costs: [] }, workflows: 0, agents: 0 });
     const overview = await screen.findByRole("region", { name: "Overview" });
     expect(await within(overview).findByText("No model calls in this range.")).toBeInTheDocument();
+    const usage = screen.getByRole("region", { name: "Usage over time" });
+    expect(await within(usage).findByText("No model calls in this range.")).toBeInTheDocument();
+  });
+
+  it("charts tokens per day in the viewer's time zone, with zero days and a table view", async () => {
+    const fetchMock = renderView();
+    const usage = await screen.findByRole("region", { name: "Usage over time" });
+    await vi.waitFor(() => expect(usage).toHaveTextContent("8,000 tokens · 5 calls in this range"));
+    const request = fetchMock.mock.calls
+      .map(([input]) => new URL(String(input), "http://localhost"))
+      .find((u) => u.pathname.endsWith("/tokens"))!;
+    expect(request.searchParams.get("group_by")).toBe("day");
+    expect(request.searchParams.get("tz")).toBeTruthy();
+    // 20 October to 19 November: every day has a column, days without calls included.
+    expect(usage.querySelectorAll("[data-bucket]")).toHaveLength(31);
+    expect(usage).toHaveTextContent("Days in UTC.");
+
+    // The keyboard reads each day: from the end, the 19th had nothing, the 18th had two calls.
+    const chart = within(usage).getByRole("group", { name: /Tokens per day/ });
+    chart.focus();
+    await userEvent.keyboard("{ArrowLeft}");
+    expect(usage).toHaveTextContent(/19.*: 0 tokens \(0 in · 0 out\) · 0 calls/);
+    await userEvent.keyboard("{ArrowLeft}");
+    expect(usage).toHaveTextContent(/18.*: 3,000 tokens \(2,000 in · 1,000 out\) · 2 calls/);
+
+    const table = within(usage).getByRole("table");
+    expect(within(table).getAllByRole("row")).toHaveLength(32); // header + 31 days
+    expect(within(table).getByRole("row", { name: /^(Nov 1|1 Nov) 3 3,000 2,000$/ })).toBeInTheDocument();
   });
 });

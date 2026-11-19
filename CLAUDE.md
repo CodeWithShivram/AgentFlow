@@ -183,6 +183,9 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
 - Task graph (ADR-0044, `frontend/features/workflows/graph.ts`, `dependency-graph.tsx`): read-only, hand-built SVG
   on the stage layout (no graph library); arrows are `aria-hidden`, so card text and the details panel must carry the
   same facts. The critical path counts unfinished required tasks; traversals stay cycle-guarded.
+- Analytics and report UI (ADR-0045): `tz` (validated IANA name, bound parameter) only cuts days for
+  `group_by=day`. Charts plot one measure on one axis, never a cost summed across bases, and always have a table
+  view. The report's timeline drops people's free text (event `reason`).
 - Workflow events are append-only.
 
 ## Security

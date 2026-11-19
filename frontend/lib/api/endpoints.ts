@@ -7,6 +7,7 @@ import type {
   AnalyticsGroupBy,
   AnalyticsOverview,
   CostBreakdown,
+  TokenBreakdown,
   Agent,
   AgentCatalog,
   AgentSuggestionList,
@@ -199,6 +200,11 @@ export function createEndpoints(client: ApiClient) {
         workspaceId: Uuid,
         query: { group_by: AnalyticsGroupBy; from: string; to: string; workflow_id?: Uuid; limit?: number },
       ) => client.get<CostBreakdown>(`${ws(workspaceId)}/analytics/costs`, { query: { ...query } }),
+      /** Calls and tokens per group; `tz` cuts days for group_by "day" (ADR-0045). */
+      tokens: (
+        workspaceId: Uuid,
+        query: { group_by: AnalyticsGroupBy; from: string; to: string; tz?: string; limit?: number },
+      ) => client.get<TokenBreakdown>(`${ws(workspaceId)}/analytics/tokens`, { query: { ...query } }),
       /** Latency, retry and failure metrics (ADR-0043). */
       metrics: (workspaceId: Uuid, range: { from: string; to: string }) =>
         client.get<WorkspaceMetrics>(`${ws(workspaceId)}/analytics/metrics`, { query: { ...range } }),

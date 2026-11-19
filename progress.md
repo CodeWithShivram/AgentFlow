@@ -2,8 +2,8 @@
 
 ## Current position
 - Phase: 8 — Product completion (Phases 2–7 complete; Phase 1 released as `v0.1.0`, pushed with its tag)
-- Last completed step: 8.1 — Workflow DAG visualization
-- Next step: 8.2 — Analytics and final report UI, which needs a short plan and the owner's go-ahead
+- Last completed step: 8.2 — Analytics and final report UI
+- Next step: 8.3 — Artifact management (storage interface, checksums, scoping), which needs a short plan and the owner's go-ahead
 
 ## Completed steps
 | Step | Commit message | Hash |
@@ -55,12 +55,13 @@
 | 7.3 | `feat(analytics): break usage and costs down by workflow, agent and model` | `bbbaeb3` (pushed, CI ✔) |
 | 7.4 | `feat(report): add a filterable event timeline and the execution report` | `8646e45` (pushed, CI ✔) |
 | 7.5 | `feat(analytics): add latency, retry and failure metrics` | `ec97575` (pushed, CI ✔) |
-| 8.1 | `feat(workflows): draw the task DAG with dependency chains and the critical path` | latest commit touching `docs/ADR/0044-workflow-dag-visualization.md` |
+| 8.1 | `feat(workflows): draw the task DAG with dependency chains and the critical path` | `04003a3` (pushed, CI ✔) |
+| 8.2 | `feat(analytics): chart usage over time and complete the dashboard and report` | latest commit touching `docs/ADR/0045-analytics-and-report-ui.md` |
 
 ## Environment snapshot (2026-11-14)
 | Item | Value |
 |---|---|
-| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `ec97575` plus tag `v0.1.0` (owner-authorized) |
+| Repo | `C:\Users\shivramm\project\AgentFlow`, branch `main`; pushed to `origin` up to `04003a3` plus tag `v0.1.0` (owner-authorized) |
 | Python / uv / Node / npm | 3.12.14 via uv 0.12.9 / Node 24.13.0 / npm 11.6.2 |
 | Celery / kombu | 5.7.0 / 5.7.0 |
 | Docker | 29.9.3 — `agentflow` stack healthy (Docker Desktop must be started first; it had stopped and was restarted in Steps 3.1 and 3.4) |
@@ -72,6 +73,42 @@
 | Test HTTP client | `httpx2` 2.16.0 (replaces `httpx`, OD-10); `httpx` is back only as a LiteLLM dependency |
 | LiteLLM | 1.109.1, imported by workers only when `MODEL_PROVIDER=litellm`; `.env` keeps the mock |
 | LangGraph | 1.2.22 (with langchain-core 1.8.0 and langsmith 0.14.17), imported by workers only; LangSmith tracing disabled; checkpoints via `langgraph-checkpoint-postgres` 3.2.1 |
+
+## Step 8.2 — analytics and final report UI (ADR-0045)
+- **Owner decisions (2026-11-19):**
+  - a daily usage chart, hand-built, with days cut in the viewer's time zone;
+  - tokens and calls in the chart, costs in the tables;
+  - the report's timeline from the existing events endpoint, no new report version;
+  - the attempt success rate on the dashboard.
+- **API:** `GET …/analytics/tokens` and `/costs` take `tz` (an IANA zone, validated, UTC by default) to cut days for `group_by=day`; responses carry `time_zone`. No schema change.
+- **Analytics:** "Usage over time": tokens per day (7-day buckets past a month) with zero days, a readout on pointing or arrow keys, and a table view.
+- **Dashboard:** "Usage, last 30 days" replaces the stale "not measured yet" note: calls, tokens, costs by basis, unpriced calls, and the attempt success rate ("Not measured", never 0%).
+- **Report:**
+  - requirements;
+  - a static dependency graph sharing ADR-0044's arrows;
+  - the execution timeline: the first 500 events, without `reason` text;
+  - metrics.
+- **Proposals list:** no more "No proposals" flash after a submission (the display nit from 7.5).
+- **Tests:**
+  - 1 integration test: days by time zone, invalid zones refused;
+  - 7 unit tests for the series helpers;
+  - component tests:
+    - Analytics: the chart, zero days, keyboard readout, table, empty state;
+    - dashboard card: 2;
+    - report: 2 new;
+    - proposals: the flash, shown to fail without the fix;
+  - E2E journey 9 now checks the report's new sections, the dashboard card and the chart.
+- **Visual check:** the chart, the dashboard card and the report graph were screenshotted from journey 9 and inspected.
+
+## Checks last executed (Step 8.2)
+- **Full gate (`check.ps1 -E2E`) ✔, exit 0, on the third run:**
+  - backend: ruff format, ruff check, mypy (226 files), alembic check;
+  - pytest **1199 passed**;
+  - frontend: eslint, typecheck, Vitest **174**, Playwright **17 passed** (journey 9 extended), build.
+- **The first run was stopped** by me at mypy (before any tests) to cache the zone list, which `available_timezones()` otherwise rescans per request.
+- **The second run** failed only E2E journeys 12 and 14, both on "This workflow changed" right after "Start planning" (a stale revision while the page refreshed). This step does not touch them. `easa-llm-1` held about 400% CPU and the machine was at 100%. The owner idled it, and the third run passed with no change.
+- **Deliberate-bug check** (restored byte-for-byte): cutting days in UTC whatever `tz` says fails the time-zone integration test. Separately, the proposals test fails without its fix.
+- **Environment:** no servers were left running after E2E.
 
 ## Step 8.1 — workflow DAG visualization (ADR-0044)
 - **Owner decisions (2026-11-19):**
@@ -91,7 +128,7 @@
   - 4 component tests: arrows and card text, chain selection and the details panel, the critical path, the empty and finished cases;
   - E2E journey 7 now selects a task, checks its details, closes them and shows the critical path.
 
-## Checks last executed (Step 8.1)
+## Checks (Step 8.1)
 - **Full gate (`check.ps1 -E2E`) ✔, exit 0:**
   - backend: ruff format, ruff check, mypy (226 files), alembic check;
   - pytest **1198 passed**;
@@ -1293,8 +1330,7 @@
 - **OD-21 (resolved in 7.1):** token counts are recorded with `usage_source`; counts from providers the price list does not mark as reporting usage are `estimated`.
 - **Prices:** only the mock provider is priced. Real providers need their published prices added to `app/llm/pricing.json` under a new version; until then their calls stay unpriced and do not count toward budgets.
 - **Budget cap is soft:** attempts already running when the budget is reached finish (ADR-0040).
-- **Proposals list (display nit, found in 7.5):** right after submitting a proposal, the list can briefly show the previous filter's "No proposals" while it refetches. To tidy in Phase 8 (UI).
-- **Load-sensitive E2E:** under heavy CPU load from other local work, E2E journeys can exceed their timeouts (journey 5 twice). Run the gate with the machine otherwise idle.
+- **Load-sensitive E2E:** under heavy CPU load from other local work, E2E journeys can exceed their timeouts (journey 5 twice) or race a workflow refresh (journeys 12 and 14 in 8.2: "This workflow changed" after "Start planning"). Run the gate with the machine otherwise idle.
 - **Live provider path unverified:** Step 3.3 was verified offline only, by owner decision.
 - **OD-14:** trusted proxy IP handling, before hosted deployment.
 - **OD-19:** the hosted frontend must share a host with the API (CSRF cookie readability); a CSP with nonces is not set yet.
@@ -1308,6 +1344,6 @@
 None.
 
 ## Next exact action
-1. **Push Step 8.1** on the owner's go-ahead, and confirm CI on GitHub.
-2. **Step 8.2 (analytics and final report UI):** present a short plan and get the owner's go-ahead. It includes the proposals-list display nit.
+1. **Push Step 8.2** on the owner's go-ahead, and confirm CI on GitHub.
+2. **Step 8.3 (artifact management):** present a short plan and get the owner's go-ahead.
 3. **Before any hosted deployment:** settle OD-14, OD-19 and OD-20.

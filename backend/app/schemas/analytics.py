@@ -62,6 +62,8 @@ class OverviewResponse(BaseModel):
 class CostBreakdownResponse(BaseModel):
     group_by: GroupBy
     range: Range
+    # The zone that cut days for group_by=day (ADR-0045).
+    time_zone: str
     rows: list[BreakdownRow]
     # Over every call in the range, including rows cut by `limit`; the rows add up to it.
     totals: UsageTotals
@@ -71,6 +73,7 @@ class CostBreakdownResponse(BaseModel):
 class TokenBreakdownResponse(BaseModel):
     group_by: GroupBy
     range: Range
+    time_zone: str
     rows: list[TokenRow]
     totals: UsageTotals
     truncated: bool

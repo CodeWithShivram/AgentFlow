@@ -16,6 +16,7 @@ import { workspacePath } from "@/lib/navigation";
 import { useWorkspace } from "@/lib/workspace";
 
 import { ReliabilitySection } from "./reliability";
+import { UsageOverTime } from "./usage-over-time";
 
 const RANGES = [7, 30, 90, 365] as const;
 type Days = (typeof RANGES)[number];
@@ -88,6 +89,7 @@ export function AnalyticsView() {
           )}
         </CardContent>
       </Card>
+      <UsageOverTime days={days} range={() => rangeFor(days)} />
       <ReliabilitySection days={days} range={() => rangeFor(days)} />
       <Breakdown title="By workflow" groupBy="workflow" days={days} />
       <Breakdown title="By agent" groupBy="agent" days={days} />

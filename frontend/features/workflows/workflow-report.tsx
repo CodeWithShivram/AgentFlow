@@ -17,6 +17,8 @@ import { formatCost, formatDateTime, humanize } from "@/lib/format";
 import { workspacePath } from "@/lib/navigation";
 import { useWorkspace } from "@/lib/workspace";
 
+import { ReportDependencyGraph, ReportTimeline } from "./report-sections";
+import { AnalysisView } from "./requirements-panel";
 import { workflowKeys } from "./use-workflow";
 
 function duration(seconds: number | null): string {
@@ -38,6 +40,11 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       <CardContent className="space-y-3 text-sm">{children}</CardContent>
     </Card>
   );
+}
+
+function counts(byStatus: Record<string, number>): string {
+  const entries = Object.entries(byStatus);
+  return entries.length === 0 ? "None" : entries.map(([s, n]) => `${n} ${humanize(s).toLowerCase()}`).join(", ");
 }
 
 function Facts({ rows }: { rows: [string, React.ReactNode][] }) {
@@ -113,6 +120,12 @@ export function ReportBody({ report, workspaceId }: { report: WorkflowReport; wo
         />
       </Section>
 
+      {report.requirements ? (
+        <Section title="Requirements">
+          <AnalysisView analysis={report.requirements} />
+        </Section>
+      ) : null}
+
       <Section title="Tasks and agents">
         <Table>
           <TableHeader>
@@ -144,6 +157,14 @@ export function ReportBody({ report, workspaceId }: { report: WorkflowReport; wo
             ))}
           </TableBody>
         </Table>
+      </Section>
+
+      <Section title="Dependency graph">
+        <ReportDependencyGraph tasks={report.tasks} />
+      </Section>
+
+      <Section title="Execution timeline">
+        <ReportTimeline workspaceId={workspaceId} workflowId={wf.id} titles={titles} />
       </Section>
 
       <Section title="Execution and verification">
@@ -225,6 +246,17 @@ export function ReportBody({ report, workspaceId }: { report: WorkflowReport; wo
             ))}
           </ul>
         )}
+      </Section>
+
+      <Section title="Metrics">
+        <Facts
+          rows={[
+            ["Tasks", `${report.metrics.tasks} (${counts(report.metrics.tasks_by_status)})`],
+            ["Attempts", `${report.metrics.attempts} (${counts(report.metrics.attempts_by_status)})`],
+            ["Verification results", `${report.metrics.verifications_passed} passed, ${report.metrics.verifications_failed} failed`],
+            ["Elapsed", duration(report.metrics.elapsed_seconds)],
+          ]}
+        />
       </Section>
 
       <Section title="Tokens and costs">

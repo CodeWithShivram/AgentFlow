@@ -17,6 +17,8 @@ import { formatMoney, humanize } from "@/lib/format";
 import { workspacePath } from "@/lib/navigation";
 import { useCan, useWorkspace } from "@/lib/workspace";
 
+import { UsageSummary } from "./usage-summary";
+
 // The API has no aggregate endpoint, so each count is the `total` of a one-item page.
 function useCount(key: unknown[], fetchTotal: () => Promise<{ total: number }>) {
   return useQuery({ queryKey: key, queryFn: async () => (await fetchTotal()).total });
@@ -154,10 +156,8 @@ export function DashboardView() {
         </Card>
       </div>
 
-      <p className="text-xs text-muted-foreground">
-        Spend, token usage and success rates are not shown: the platform does not measure them yet
-        (model gateway and usage records arrive in Phase 2).
-      </p>
+      <UsageSummary />
+
     </div>
   );
 }

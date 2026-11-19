@@ -192,8 +192,8 @@ Acceptance (phase): deterministic tests with mock model responses; invalid plans
 
 | Step | Title | Status |
 |---|---|---|
-| 8.1 | Workflow DAG visualization | DONE (ADR-0044) — see `progress.md` |
-| 8.2 | Analytics and final report UI | NOT_STARTED |
+| 8.1 | Workflow DAG visualization | DONE (ADR-0044) — `04003a3` |
+| 8.2 | Analytics and final report UI | DONE (ADR-0045) — see `progress.md` |
 | 8.3 | Artifact management (storage interface, checksums, scoping) | NOT_STARTED |
 | 8.4 | Safe workflow replay | NOT_STARTED |
 | 8.5 | Security review and load tests | NOT_STARTED |
