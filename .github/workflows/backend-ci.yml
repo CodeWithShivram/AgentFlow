@@ -83,5 +83,13 @@ jobs:
       - name: alembic check (models match migrations)
         run: uv run alembic check
 
+      # The sandbox tests (ADR-0050) run real containers from these images; keep the tags in
+      # sync with app/projects/profiles.py and scripts/sandbox.ps1.
+      - name: Build sandbox images
+        working-directory: .
+        run: |
+          docker build --tag agentflow-sandbox/python-3.12:1 infrastructure/sandbox/python-3.12
+          docker build --tag agentflow-sandbox/node-24-typescript:1 infrastructure/sandbox/node-24-typescript
+
       - name: pytest
         run: uv run pytest

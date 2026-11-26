@@ -20,6 +20,8 @@ class StackProfile:
     dependencies: tuple[str, ...]
     # Files every project of this profile has, each owned by exactly one task.
     shared_files: tuple[str, ...]
+    # The locally built sandbox image that checks this profile (ADR-0050).
+    image: str
     # Folders tests go in.
     test_paths: tuple[str, ...]
 
@@ -35,6 +37,7 @@ PROFILES: dict[str, StackProfile] = {
             dependencies=("fastapi", "pydantic", "httpx", "uvicorn", "sqlalchemy", "pytest"),
             shared_files=("pyproject.toml", "README.md"),
             test_paths=("tests/",),
+            image="agentflow-sandbox/python-3.12:1",
         ),
         StackProfile(
             id="node-24-typescript",
@@ -51,6 +54,7 @@ PROFILES: dict[str, StackProfile] = {
             ),
             shared_files=("package.json", "tsconfig.json", "README.md"),
             test_paths=("tests/",),
+            image="agentflow-sandbox/node-24-typescript:1",
         ),
     )
 }

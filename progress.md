@@ -2,8 +2,39 @@
 
 ## Current position
 - Phase: 9 — Software project generation (ADR-0046; Phases 2–7 and Steps 8.1–8.2 complete; Phase 1 released as `v0.1.0`)
-- Last completed step: 9.3 — Project workspaces
-- Next step: 9.4 — Docker sandbox runner and stack profile images
+- Last completed step: 9.4 — Docker sandbox runner and stack profile images
+- Next step: 9.5 — Execution checks and the project integration gate
+
+## Step 9.4 — Docker sandbox (ADR-0050)
+- **Images:** `infrastructure/sandbox/<profile>/Dockerfile`, built locally with `scripts/sandbox.ps1 build`, tagged `agentflow-sandbox/<profile>:1`.
+  - Bases are pinned by digest.
+  - Python pins in `requirements.txt` were resolved in the base image on 2026-11-26.
+  - Node uses a committed `package-lock.json` installed with `npm ci --ignore-scripts`.
+  - Both run as non-root uid 10001.
+  - `StackProfile.image` names each profile's image.
+- **Runner** (`app/sandbox/runner.py`, `DockerSandbox.run`): a fresh container on a throwaway copy of the project, with:
+  - regular files only (no links, `.git` or dependency folders);
+  - `--network none`, `--read-only` with a tmpfs `/tmp`, `--cap-drop ALL`, `no-new-privileges`;
+  - user 10001, pids, memory and CPU limits, a timeout with kill and remove;
+  - no host environment, socket or other mounts;
+  - capped, redacted output.
+
+  It fails closed (`DOCKER_UNAVAILABLE`, `IMAGE_MISSING`, `IMAGE_REFUSED`); there is no host fallback and no pulls.
+- **CI:** `backend-ci` builds both images before pytest, so the sandbox tests run there.
+- **Tests:** `tests/integration/test_sandbox.py` runs real containers:
+  - pass and fail detection, no network, a read-only root, non-root user;
+  - source untouched, host secrets absent, timeout kill and cleanup, the process limit;
+  - an offline TypeScript type check and test run;
+  - fail-closed paths and redaction.
+
+  The symlinked-source case skips on this machine (privilege).
+- **Not yet:** nothing calls the sandbox until Step 9.5.
+
+## Checks (Step 9.4)
+- **Images:** both images were built (`scripts/sandbox.ps1 build`) and smoke-tested offline as uid 10001: `tsc 7.0.2`, `vitest 5.1.2`, `pytest 9.2.0`.
+- **Targeted:** `tests/integration/test_sandbox.py`: 10 passed, 1 skipped (symlink privilege).
+- **Full backend gate:** format, lint, `mypy app tests alembic` and `alembic check` all clean; `uv run pytest` **1283 passed, 2 skipped** (7 min 22 s).
+- **CI:** the image build step was added; it is not yet run on GitHub (nothing pushed).
 
 ## Step 9.3 — project workspaces and file ownership (ADR-0049)
 - **Verification:** `deterministic/v2` adds the `file_scope` check. A task with a scope must propose Developer files (`FILES_MISSING`), all inside its scope (`FILE_OUTSIDE_SCOPE`, reported as a count, never as paths). Rework has fixed sentences for both codes.

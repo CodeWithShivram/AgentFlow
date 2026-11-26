@@ -206,3 +206,12 @@ def test_shared_files_without_an_owner_are_reported() -> None:
     software = WorkflowKind.SOFTWARE_PROJECT
     assert plan.project_issue(software, None, partial) == "PLAN_SHARED_FILE_UNOWNED"
     assert plan.project_issue(software, None, partial, replan=True) is None
+
+
+def test_profiles_name_their_sandbox_images_and_build_contexts() -> None:
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[3] / "infrastructure" / "sandbox"
+    for profile in PROFILES.values():
+        assert profile.image == f"agentflow-sandbox/{profile.id}:1"
+        assert (root / profile.id / "Dockerfile").is_file()

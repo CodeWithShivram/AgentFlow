@@ -200,12 +200,16 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   (`project.apply`), via `ProjectWorkspaces.apply` (scope sync, path re-checks, no links, hardened git: no global
   config, empty hooks, `add --force`). One `workspace_applications` row per attempt (append-only). Contract v4 carries
   `file_scope`, `stack_profile` and capped `dependency_files`; `deterministic/v2` refuses files outside the scope.
+- Sandbox (ADR-0050, `app/sandbox/runner.py`): the only way to execute generated code. Fixed platform commands in a
+  fresh `agentflow-sandbox/<profile>:<n>` container (built by `scripts/sandbox.ps1 build`, never pulled) on a throwaway
+  copy: no network, read-only root, non-root, no capabilities, limits, timeout. `SandboxUnavailableError` means the
+  check did not run: never report it as passed, never fall back to the host.
 - Workflow events are append-only.
 
 ## Security
 - Never commit `.env`, secrets, tokens, local DBs, logs, caches, `.venv`, `node_modules`. Only `.env.example` with placeholders.
 - Argon2id for passwords. Enforce workspace authorization in backend services on every resource.
-- No unrestricted shell or code execution by agents. Code execution stays disabled in Phase 1.
+- No unrestricted shell or code execution by agents. Generated code runs only in the Docker sandbox (ADR-0050).
 - Never return stack traces, secrets or raw exceptions to clients.
 
 ## Environment (Windows 11, PowerShell)
