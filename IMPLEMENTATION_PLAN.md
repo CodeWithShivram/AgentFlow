@@ -194,11 +194,44 @@ Acceptance (phase): deterministic tests with mock model responses; invalid plans
 |---|---|---|
 | 8.1 | Workflow DAG visualization | DONE (ADR-0044) — `04003a3` |
 | 8.2 | Analytics and final report UI | DONE (ADR-0045) — see `progress.md` |
-| 8.3 | Artifact management (storage interface, checksums, scoping) | NOT_STARTED |
-| 8.4 | Safe workflow replay | NOT_STARTED |
-| 8.5 | Security review and load tests | NOT_STARTED |
-| 8.6 | Backup/restore and operational runbooks | NOT_STARTED |
-| 8.7 | Production deployment design (design only) | NOT_STARTED |
+| 8.3 | Artifact management (storage interface, checksums, scoping) | MOVED to Step 9.1 (ADR-0046) |
+| 8.4 | Safe workflow replay | NOT_STARTED (after Phase 9) |
+| 8.5 | Security review and load tests | NOT_STARTED (after Phase 9) |
+| 8.6 | Backup/restore and operational runbooks | NOT_STARTED (after Phase 9) |
+| 8.7 | Production deployment design (design only) | NOT_STARTED (after Phase 9) |
+
+## Phase 9 — Software project generation (ADR-0046)
+
+Inserted by the owner on 2026-11-26 from `docs/AgentFlow_Claude_Code_Master_Playbook.txt`. Goal: one prompt → approved plan → agents build in isolation → platform integrates and verifies in a sandbox → downloadable, tested ZIP.
+
+| Step | Title | Status |
+|---|---|---|
+| 9.0 | Rebaseline, product direction ADR and Phase 9 plan (docs only) | DONE (ADR-0046) |
+| 9.1 | Artifact storage: storage interface, local root, checksums, RLS-scoped metadata, download API (was 8.3) | NOT_STARTED |
+| 9.2 | Software project kind and plan schema v2 (stack profile, file ownership, effort) | NOT_STARTED |
+| 9.3 | Project workspace: platform applies verified proposals in dependency order with ownership checks | NOT_STARTED |
+| 9.4 | Docker sandbox runner and stack profile images (fail closed; threat model) | NOT_STARTED |
+| 9.5 | Execution checks and project integration gate feeding verification and rework | NOT_STARTED |
+| 9.6 | Secure ZIP packaging, README and build report, download | NOT_STARTED |
+| 9.7 | Project UX, weighted progress and time-remaining range | NOT_STARTED |
+| 9.8 | End-to-end prompt → ZIP journey (mock provider); release v0.2.0 | NOT_STARTED |
+
+Acceptance (phase): the playbook's §16 test passes with the mock provider. A project is COMPLETED only when every required task and the integration gate pass; otherwise it is shown as FAILED, BLOCKED or PARTIAL with reasons. Each step refines its acceptance criteria at its start.
+
+### Playbook roadmap → repository steps
+| Playbook step | Repository status |
+|---|---|
+| 1.9 Frontend foundation | Done as 1.9 (`b3cce86`); the project-centric screens are 9.7 |
+| 1.10 Security boundary / RLS | Done as 1.9a (`889d989`); OD-20 still open |
+| 2.0 Project generation domain | 9.2 (a workflow kind, not a new aggregate) |
+| 2.1 Model provider abstraction | Done as 2.1, 3.3, 7.1, 7.2 |
+| 2.2 Orchestrator and planner | Done as 2.2–2.5, 5.4, 6.1; software plan fields in 9.2 |
+| 2.3 Specialist agent runtime | Done as 3.1–3.7 |
+| 2.4 Isolated coding workspaces | 9.3 and 9.4 |
+| 2.5 Parallel delegation | Done as 4.1–4.6 (OD-17 in 4.5) |
+| 2.6 Integration and quality gates | Partly done as 5.1–5.5 (OD-18 in 4.3); executed checks in 9.5 |
+| 2.7 Artifact packaging | 9.1 and 9.6 |
+| 2.8 Product polish | 9.7, 9.8, then 8.4–8.7 |
 
 ---
 

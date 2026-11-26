@@ -1,9 +1,36 @@
 # AgentFlow Progress
 
 ## Current position
-- Phase: 8 — Product completion (Phases 2–7 complete; Phase 1 released as `v0.1.0`, pushed with its tag)
-- Last completed step: 8.2 — Analytics and final report UI
-- Next step: 8.3 — Artifact management (storage interface, checksums, scoping), which needs a short plan and the owner's go-ahead
+- Phase: 9 — Software project generation (ADR-0046; Phases 2–7 and Steps 8.1–8.2 complete; Phase 1 released as `v0.1.0`)
+- Last completed step: 9.0 — Rebaseline and Phase 9 plan (docs only)
+- Next step: 9.1 — Artifact storage (was 8.3)
+
+## Step 9.0 — rebaseline and product direction (ADR-0046)
+- **Trigger:** the owner supplied `docs/AgentFlow_Claude_Code_Master_Playbook.txt` (2026-11-26). Its repository snapshot (HEAD at Step 1.8) was stale; the repository at `a1ca9cc` (Step 8.2) is the source of truth.
+- **Gap found:** nothing writes, runs, integrates or packages generated code. Developer proposals and QA designs are never applied or executed, and artifact storage did not exist.
+- **Decision:** Phase 9 (ADR-0046):
+  - Step 8.3 becomes 9.1, and 8.4–8.7 follow Phase 9;
+  - a project is a workflow kind;
+  - agents still only propose, and the platform writes to a per-project Git workspace;
+  - code runs only in a fail-closed Docker sandbox with curated stack images;
+  - an integration gate is required for completion;
+  - packaging is secure.
+- **Environment re-established on this machine (2026-11-26):**
+  - fresh clone of `origin/main` at `a1ca9cc` into `C:\Users\shivramm\project\AgentFlow`;
+  - uv 0.13.10 installed with winget (not yet on PATH in already-open shells; binary in `%LOCALAPPDATA%\Microsoft\WinGet\Packages\astral-sh.uv_*`);
+  - Node 26.13.1 (CI pins 24; `engines` is `>=24`);
+  - new local `.env` with generated secrets;
+  - infrastructure up, migrations at `0029`, roles provisioned, built-ins seeded, price list `2026-11-16.1` loaded.
+
+## Checks (Step 9.0, baseline at `a1ca9cc` on this machine)
+- **Backend:**
+  - `uv run ruff format --check .` (226 files formatted), `uv run ruff check .` (passed) and `uv run mypy app tests alembic` (no issues);
+  - `uv run alembic check` (no new operations);
+  - `uv run pytest`: **1199 passed** in 17 min 25 s (12 third-party pydantic warnings from LiteLLM types).
+- **Frontend:** `npm run lint`, `npm run typecheck` and `npm run build` passed; `npm test` **174/174** passed.
+  - The first run, under load from the parallel backend suite, had one failure that did not reproduce.
+  - Vitest must be run from a shell whose working directory uses an upper-case drive letter (`C:\…`). From `c:\…` every suite fails with "failed to find the current suite", because modules load twice.
+- **Not run:** Playwright E2E (needs the full stack; it runs at Step 9.8).
 
 ## Completed steps
 | Step | Commit message | Hash |
