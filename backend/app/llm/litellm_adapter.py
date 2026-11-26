@@ -81,6 +81,44 @@ def _usage(response: Any) -> ProviderUsage:
     )
 
 
+# JSON Schema keywords that bound values rather than shape them. Lower bounds on sizes (minItems,
+# minLength, minProperties) are kept: they are cheap for providers and tell the model that an
+# answer may not be empty. Providers that compile the
+# schema into a decoding constraint (e.g. Gemini) reject schemas with many such bounds ("too many
+# states"), so they are left out of what the provider sees. The structure (types, properties,
+# required fields, enums, references) is kept; every bound is still enforced by the gateway's
+# Pydantic validation, and an invalid reply is retried with corrections (ADR-0055).
+_BOUND_KEYWORDS = frozenset(
+    {
+        "maxLength", "maxItems", "maxProperties",
+        "maximum", "minimum", "exclusiveMaximum", "exclusiveMinimum", "multipleOf",
+        "pattern", "format", "uniqueItems", "title",
+    }
+)  # fmt: skip
+# Keys under these are names (fields, definitions), never keywords.
+_NAME_MAPS = frozenset({"properties", "$defs", "definitions", "patternProperties"})
+
+
+def _relax(node: Any) -> Any:
+    if isinstance(node, list):
+        return [_relax(item) for item in node]
+    if not isinstance(node, dict):
+        return node
+    relaxed: dict[str, Any] = {}
+    for key, value in node.items():
+        if key in _NAME_MAPS and isinstance(value, dict):
+            relaxed[key] = {name: _relax(schema) for name, schema in value.items()}
+        elif key not in _BOUND_KEYWORDS:
+            relaxed[key] = _relax(value)
+    return relaxed
+
+
+def provider_schema(model: type[BaseModel]) -> dict[str, Any]:
+    """The model's JSON Schema without value bounds, for the provider's structured output."""
+    relaxed: dict[str, Any] = _relax(model.model_json_schema())
+    return relaxed
+
+
 class LiteLLMAdapter:
     def __init__(
         self, settings: Settings, completion: Callable[..., Any] = litellm.completion
@@ -125,12 +163,12 @@ class LiteLLMAdapter:
             arguments["api_base"] = self._api_base
         if response_format is not None and litellm.supports_response_schema(model=model):
             # Not strict: providers differ in the JSON Schema they accept. The gateway validates
-            # the reply against the Pydantic model either way.
+            # the reply against the full Pydantic model either way.
             arguments["response_format"] = {
                 "type": "json_schema",
                 "json_schema": {
                     "name": response_format.__name__,
-                    "schema": response_format.model_json_schema(),
+                    "schema": provider_schema(response_format),
                     "strict": False,
                 },
             }

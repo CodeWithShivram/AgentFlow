@@ -15,11 +15,12 @@ model wrote: Research (no retrieval), Developer (nothing executed or written) an
 run). Developer and QA outputs must also fit their stricter models (`app/agents/outputs.py`).
 """
 
+import functools
 import json
 import re
 from typing import Any, ClassVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, create_model
 
 from app.agents.base import AgentContext, BaseAgent
 from app.agents.contract import (
@@ -71,6 +72,10 @@ def _contract_json(contract: TaskContract) -> str:
     # Software project tasks only (ADR-0049); absent for other tasks.
     if contract.file_scope:
         data["file_scope"] = contract.file_scope
+        data["file_scope_rule"] = (
+            "Propose files and tests only at paths inside file_scope; other tasks own every "
+            "other path and their files will not be applied."
+        )
         data["stack_profile"] = contract.stack_profile
         data["dependency_files"] = [f.model_dump() for f in contract.dependency_files]
     return json.dumps(data, ensure_ascii=False, indent=1).replace("</", "<\\/")
@@ -148,6 +153,17 @@ def build_request(
     )
 
 
+@functools.cache
+def _typed_submission(outputs_model: type[BaseModel]) -> type[AgentSubmission]:
+    """AgentSubmission with `outputs` typed as the runtime's outputs model (one class each)."""
+    model: type[AgentSubmission] = create_model(
+        f"{outputs_model.__name__.removesuffix('Outputs')}Submission",
+        __base__=AgentSubmission,
+        outputs=(outputs_model, ...),
+    )
+    return model
+
+
 class ModelAgent(BaseAgent):
     instruction_ref: ClassVar[str]
     # A stricter shape for `outputs`, sent to the model and checked before accepting a reply.
@@ -170,11 +186,15 @@ class ModelAgent(BaseAgent):
                 instruction, contract, self.configuration, issues, self.outputs_model
             )
             try:
-                response = context.models.complete(call, request, AgentSubmission)
+                response = context.models.complete(call, request, self.response_model())
             except ModelOutputInvalidError:  # recorded by the gateway; never echoed back
                 issues = ["SCHEMA_INVALID"]
                 continue
-            validation = self.validate_output(contract, response.parsed)
+            if response.parsed is None:  # a response_format was requested, so this cannot happen
+                raise RuntimeError("gateway returned no parsed output")
+            # Back to the plain submission (outputs as an object), with its own checks.
+            parsed = AgentSubmission.model_validate(response.parsed.model_dump(mode="json"))
+            validation = self.validate_output(contract, parsed)
             if validation.submission is not None and not validation.issues:
                 extra = self.output_issues(contract, validation.submission)
                 if not extra:
@@ -183,6 +203,15 @@ class ModelAgent(BaseAgent):
             else:
                 issues = validation.issues
         raise InvalidSubmissionError(issues or ["SCHEMA_INVALID"])
+
+    @classmethod
+    def response_model(cls) -> type[AgentSubmission]:
+        """The reply schema: a submission whose `outputs` is the runtime's outputs model, so
+        providers that enforce schemas see what the outputs must hold (ADR-0055). Without an
+        outputs model it is the plain submission."""
+        if cls.outputs_model is None:
+            return AgentSubmission
+        return _typed_submission(cls.outputs_model)
 
     def output_issues(self, contract: TaskContract, submission: AgentSubmission) -> list[str]:
         """Runtime-specific checks on top of the platform's (which agents cannot weaken)."""

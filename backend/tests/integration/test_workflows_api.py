@@ -655,7 +655,7 @@ def test_execution_history_lists_attempts_with_agent_versions(
     (attempt,) = owner.get(url).json()["items"]
     verification, evaluation = attempt["verifications"]
     assert verification["execution_id"] == attempt["id"]
-    assert verification["verifier"] == "deterministic/v2"
+    assert verification["verifier"] == "deterministic/v3"
     assert verification["outcome"] == "PASSED" and verification["issues"] == []
     assert {c["name"]: c["outcome"] for c in verification["checks"]} == {
         "submission": "passed",

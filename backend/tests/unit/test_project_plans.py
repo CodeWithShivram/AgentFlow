@@ -215,3 +215,50 @@ def test_profiles_name_their_sandbox_images_and_build_contexts() -> None:
     for profile in PROFILES.values():
         assert profile.image == f"agentflow-sandbox/{profile.id}:1"
         assert (root / profile.id / "Dockerfile").is_file()
+
+
+def test_project_tasks_may_only_need_the_developers_skills() -> None:
+    # Live Gemini run: a README task for the Writer and a test task for QA could never pass the
+    # file-scope check, because only the Developer runtime proposes files.
+    writer = _plan(
+        tasks=[
+            _task("t1", ["pyproject.toml"]),
+            _task("t2", ["README.md"], required_skills=["documentation", "report_writing"]),
+        ]
+    )
+    with pytest.raises(ValidationError, match="t2 of a software project may only require"):
+        PlanProposal.model_validate(writer)
+    mixed = _plan(
+        tasks=[
+            _task(
+                "t1",
+                ["pyproject.toml", "README.md"],
+                required_skills=["code_generation", "test_design"],
+            )
+        ]
+    )
+    with pytest.raises(ValidationError, match="not test_design"):
+        PlanProposal.model_validate(mixed)
+
+
+def test_software_projects_get_a_schema_that_requires_the_project() -> None:
+    from app.planning.schema import ProjectPlanProposal
+
+    schema = ProjectPlanProposal.model_json_schema()
+    assert "project" in schema["required"]
+    assert plan.response_model(WorkflowKind.SOFTWARE_PROJECT) is ProjectPlanProposal
+    assert plan.response_model(WorkflowKind.GENERAL) is PlanProposal
+    missing = {k: v for k, v in VALID.items() if k != "project"}
+    with pytest.raises(ValidationError):
+        ProjectPlanProposal.model_validate(missing)
+    assert isinstance(ProjectPlanProposal.model_validate(VALID), PlanProposal)
+
+
+def test_the_project_schema_requires_scope_and_effort_per_task() -> None:
+    from app.planning.schema import ProjectPlanProposal
+
+    task_schema = ProjectPlanProposal.model_json_schema()["$defs"]["ProjectPlannedTask"]
+    assert {"file_scope", "effort_points"} <= set(task_schema["required"])
+    no_effort = _plan(tasks=[_task("t1", ["pyproject.toml", "README.md"], effort_points=None)])
+    with pytest.raises(ValidationError):
+        ProjectPlanProposal.model_validate(no_effort)

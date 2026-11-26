@@ -149,7 +149,8 @@ def test_other_runtimes_get_no_outputs_schema_or_note() -> None:
             "agent_development",
             _developer_reply(proposed_files=[_file("../../outside.py")]),
             _developer_reply(proposed_files=[_file()]),
-            "OUTPUTS_INVALID",
+            # The reply schema types the outputs (ADR-0055), so the gateway refuses it first.
+            "SCHEMA_INVALID",
         ),
         (
             QAAgent,
@@ -180,4 +181,5 @@ def test_two_invalid_developer_replies_fail_the_attempt_and_store_nothing() -> N
 
     with pytest.raises(InvalidSubmissionError) as error:
         _run(DeveloperAgent, adapter)
-    assert error.value.issues == ["OUTPUTS_INVALID"]
+    # Refused by the typed reply schema (ADR-0055) before the runtime's own outputs check.
+    assert error.value.issues == ["SCHEMA_INVALID"]

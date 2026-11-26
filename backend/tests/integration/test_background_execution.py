@@ -851,7 +851,7 @@ def test_dispatch_reaches_a_real_worker_through_redis(
     assert usage.execution_id == execution.id
     with session_scope(admin_factory) as s:
         results = {r.verifier: r for r in s.execute(select(VerificationResult)).scalars()}
-    assert set(results) == {"deterministic/v2", "semantic/v1"}
+    assert set(results) == {"deterministic/v3", "semantic/v1"}
     assert all(r.execution_id == execution.id for r in results.values())
     assert all(r.outcome == VerificationOutcome.PASSED for r in results.values())
 

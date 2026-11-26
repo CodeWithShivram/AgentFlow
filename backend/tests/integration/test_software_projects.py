@@ -98,7 +98,9 @@ def test_the_planner_retries_plans_of_the_wrong_kind(
     adapter.script(plan.PURPOSE, *[general_reply] * plan.MAX_ATTEMPTS)
     assert jobs["plan"](_plan_request(admin_factory, software), adapter) == "failed"
     last = owner.get(_url(owner, software, "/events")).json()["items"][-1]
-    assert last["payload"]["error_code"] == "PLAN_PROJECT_MISSING"
+    # The software project schema requires the project, so validation refuses it first
+    # (the PLAN_PROJECT_MISSING check stays as a second layer; see test_project_plans.py).
+    assert last["payload"]["error_code"] == "MODEL_OUTPUT_INVALID"
 
     general = _analysed(owner, admin_factory, jobs, "GENERAL")
     project_reply = plan.mock_software_plan(plan._profiles_section(None))

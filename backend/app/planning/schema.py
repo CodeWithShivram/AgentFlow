@@ -10,7 +10,7 @@ shared files has at most one owner; a first plan must own them all, see `unowned
 Version 1 plans have neither.
 """
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import (
     AfterValidator,
@@ -30,6 +30,9 @@ from app.schemas.workflows import AcceptanceCriterion
 MAX_TASKS = 25
 MAX_SCOPE_ENTRIES = 50
 MAX_EFFORT_POINTS = 13
+# Only the Developer runtime proposes files (ADR-0022, ADR-0049), so every task of a software
+# project must need nothing but its skills; other runtimes return text that cannot be applied.
+PROJECT_TASK_SKILLS = frozenset({"code_generation", "implementation", "debugging"})
 
 Text = Annotated[SafeText, StringConstraints(min_length=1, max_length=2000, strip_whitespace=True)]
 Title = Annotated[SafeText, StringConstraints(min_length=1, max_length=300, strip_whitespace=True)]
@@ -121,6 +124,12 @@ class PlanProposal(BaseModel):
         if self.schema_version != 2:
             raise ValueError("a project plan has schema_version 2")
         for task in self.tasks:
+            outside = sorted(set(task.required_skills) - PROJECT_TASK_SKILLS)
+            if outside:
+                raise ValueError(
+                    f"task {task.key} of a software project may only require "
+                    f"{', '.join(sorted(PROJECT_TASK_SKILLS))} (not {', '.join(outside)})"
+                )
             if not task.file_scope:
                 raise ValueError(f"task {task.key} needs a file_scope")
             if task.effort_points is None:
@@ -156,3 +165,22 @@ class PlanProposal(BaseModel):
         if cycle:
             raise ValueError(f"dependency cycle among tasks: {', '.join(cycle)}")
         return self
+
+
+class ProjectPlannedTask(PlannedTask):
+    """A software project task: its file scope and effort are required in the schema the model
+    sees (a live Gemini run often left effort_points out while they were optional there)."""
+
+    file_scope: Annotated[list[ScopeEntry], Field(min_length=1, max_length=MAX_SCOPE_ENTRIES)]
+    effort_points: int = Field(ge=1, le=MAX_EFFORT_POINTS)
+
+
+class ProjectPlanProposal(PlanProposal):
+    """What the model must return for a software project: a version 2 plan whose `project`, and
+    every task's scope and effort, are required in the schema the model sees, not only by the
+    cross-field rules (live Gemini runs left them out while they were optional)."""
+
+    schema_version: Literal[2] = 2
+    project: ProjectSpec
+    # Narrowed to project tasks; lists are invariant for mypy, but every item is a PlannedTask.
+    tasks: Annotated[list[ProjectPlannedTask], Field(min_length=1, max_length=MAX_TASKS)]  # type: ignore[assignment]

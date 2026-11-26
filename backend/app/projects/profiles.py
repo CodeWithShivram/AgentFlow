@@ -22,6 +22,8 @@ class StackProfile:
     shared_files: tuple[str, ...]
     # The locally built sandbox image that checks this profile (ADR-0050).
     image: str
+    # Layout conventions the planner and agents follow, and the checks rely on.
+    conventions: str
     # The integration checks (ADR-0051): (name, fixed command) pairs run in `image`.
     checks: tuple[tuple[str, tuple[str, ...]], ...]
     # Folders tests go in.
@@ -42,10 +44,23 @@ PROFILES: dict[str, StackProfile] = {
             dependencies=("fastapi", "pydantic", "httpx", "uvicorn", "sqlalchemy", "pytest"),
             shared_files=("pyproject.toml", "README.md"),
             test_paths=("tests/",),
+            conventions=(
+                "Put the package in src/<package>/ (with __init__.py) and all tests in "
+                "tests/; tests "
+                "import the package by name. Checks run with PYTHONPATH=src. No build step."
+            ),
             image="agentflow-sandbox/python-3.12:1",
             checks=(
                 ("compile", ("python", "-m", "compileall", "-q", ".")),
-                ("tests", ("python", "-m", "pytest", "-q", "-p", "no:cacheprovider")),
+                (
+                    "tests",
+                    (
+                        "sh",
+                        "-c",
+                        "PYTHONPATH=src:. python -m pytest -q -p no:cacheprovider"
+                        " --import-mode=importlib",
+                    ),
+                ),
             ),
         ),
         StackProfile(
@@ -63,6 +78,10 @@ PROFILES: dict[str, StackProfile] = {
             ),
             shared_files=("package.json", "tsconfig.json", "README.md"),
             test_paths=("tests/",),
+            conventions=(
+                "Put sources in src/ and tests in tests/ (*.test.ts, importing ../src/...). "
+                'package.json uses "type": "module"; tsconfig.json includes src and tests.'
+            ),
             image="agentflow-sandbox/node-24-typescript:1",
             checks=(
                 ("typecheck", ("sh", "-c", f"{_LINK_DEPS} && tsc -p . --noEmit")),

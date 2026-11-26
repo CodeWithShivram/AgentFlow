@@ -18,7 +18,7 @@ from app.llm.gateway import (
     ModelOutputInvalidError,
     create_adapter,
 )
-from app.llm.litellm_adapter import LiteLLMAdapter, ModelConfigurationError
+from app.llm.litellm_adapter import LiteLLMAdapter, ModelConfigurationError, provider_schema
 from app.llm.mock import MockModelAdapter
 from app.llm.types import CallContext, ChatMessage, ModelRequest
 from app.models import LlmCallStatus
@@ -127,7 +127,8 @@ def test_a_structured_call_records_provider_usage_and_no_cost() -> None:
     assert (arguments["temperature"], arguments["max_tokens"]) == (0.2, 500)
     schema = arguments["response_format"]["json_schema"]
     assert schema["name"] == "Plan" and schema["strict"] is False
-    assert schema["schema"] == Plan.model_json_schema()
+    # The structure without value bounds (ADR-0055); the gateway validates the full model.
+    assert schema["schema"] == provider_schema(Plan)
 
 
 def test_models_without_schema_support_get_no_response_format() -> None:

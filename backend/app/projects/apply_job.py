@@ -30,6 +30,7 @@ from app.models import (
     WorkspaceApplicationStatus,
 )
 from app.projects.integration_job import all_work_applied
+from app.projects.scope import in_scope
 from app.projects.workspace import ProjectWorkspaces, WorkspaceError
 from app.workflows import engine
 
@@ -38,14 +39,18 @@ logger = logging.getLogger("agentflow.projects")
 CONSUMER = "apply_to_workspace"
 
 
-def accepted_files(submission: dict[str, Any] | None) -> dict[str, str]:
-    """The files of an accepted Developer submission (proposed files and tests), by path.
-    Raises WorkspaceError("OUTPUTS_INVALID") when the outputs do not parse."""
+def accepted_files(
+    submission: dict[str, Any] | None, scope: list[str] | None = None
+) -> dict[str, str]:
+    """The files of an accepted Developer submission (proposed files and tests), by path. With a
+    scope, extra tests outside it are left out: another task owns them (verification v3 only
+    warns about them). Raises WorkspaceError("OUTPUTS_INVALID") when the outputs do not parse."""
     try:
         outputs = DeveloperOutputs.model_validate((submission or {}).get("outputs") or {})
     except ValidationError:
         raise WorkspaceError("OUTPUTS_INVALID") from None
-    return {f.path: f.content for f in (*outputs.proposed_files, *outputs.proposed_tests)}
+    tests = [t for t in outputs.proposed_tests if scope is None or in_scope(scope, t.path)]
+    return {f.path: f.content for f in (*outputs.proposed_files, *tests)}
 
 
 def _latest_success(session: Session, task: WorkflowTask) -> AgentExecution | None:
@@ -119,7 +124,7 @@ def run(
         execution_id=execution.id,
     )
     try:
-        files = accepted_files(execution.submission)
+        files = accepted_files(execution.submission, list(task.file_scope))
         change = workspaces.apply(
             workflow.workspace_id,
             workflow.id,

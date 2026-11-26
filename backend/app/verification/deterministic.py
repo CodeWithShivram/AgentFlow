@@ -37,8 +37,9 @@ from app.projects.scope import in_scope
 from app.schemas.agents import AgentConfiguration
 from app.tools.registry import REGISTRY, ToolDefinition, usable_grants
 
-# v2 (ADR-0049): adds the `file_scope` check for software project tasks.
-VERIFIER = "deterministic/v2"
+# v2 (ADR-0049): adds the `file_scope` check for software project tasks. v3 (ADR-0055 follow-up):
+# a project task's files are its deliverables, and extra tests outside its scope only warn.
+VERIFIER = "deterministic/v3"
 # Schema mismatches reported per verification; the rest are summarised by the count.
 MAX_SCHEMA_ISSUES = 20
 
@@ -141,7 +142,9 @@ def verify(subject: Subject, registry: Mapping[str, ToolDefinition] = REGISTRY) 
     expected = [str(criterion["id"]) for criterion in subject.acceptance_criteria]
     report.record("criteria_coverage", _coverage(submission, expected))
     report.record("criteria_claims", _claims(submission, expected))
-    report.record("deliverables", _deliverables(submission, subject.deliverables))
+    # v3: a software project task's deliverables are its files (checked by `file_scope`).
+    deliverables = None if subject.file_scope else _deliverables(submission, subject.deliverables)
+    report.record("deliverables", deliverables)
     report.record("output_schema", _output_schema(submission, subject.output_schema))
     runtime, configuration = _runtime(subject.configuration)
     report.record("runtime_outputs", _runtime_outputs(runtime, submission, expected))
@@ -285,8 +288,17 @@ def _file_scope(submission: AgentSubmission, scope: Sequence[str]) -> list[Issue
         outputs = DeveloperOutputs.model_validate(submission.outputs or {})
     except ValidationError:
         return [Issue("FILES_MISSING")]
-    paths = [f.path for f in (*outputs.proposed_files, *outputs.proposed_tests)]
-    outside = sum(1 for path in paths if not in_scope(scope, path))
+    issues: list[Issue] = []
+    outside = sum(1 for f in outputs.proposed_files if not in_scope(scope, f.path))
     if outside:
-        return [Issue("FILE_OUTSIDE_SCOPE", location=f"{outside} file(s)")]
-    return []
+        issues.append(Issue("FILE_OUTSIDE_SCOPE", location=f"{outside} file(s)"))
+    # v3: extra tests outside the scope belong to another task; they are never applied, so
+    # they are a warning, not a reason to reject the task's own files.
+    extra_tests = sum(1 for f in outputs.proposed_tests if not in_scope(scope, f.path))
+    if extra_tests:
+        issues.append(
+            Issue(
+                "TEST_OUTSIDE_SCOPE", severity=Severity.WARNING, location=f"{extra_tests} file(s)"
+            )
+        )
+    return issues

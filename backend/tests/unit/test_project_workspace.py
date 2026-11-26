@@ -132,3 +132,21 @@ def test_a_project_gitignore_cannot_hide_platform_files(workspaces: ProjectWorks
     workspaces.apply(WS, WF, scope=[".gitignore"], files={".gitignore": "*\n"}, message="t1")
     change = workspaces.apply(WS, WF, scope=["src/"], files={"src/a.py": "a\n"}, message="t2")
     assert change.commit_sha is not None
+
+
+def test_accepted_files_leave_out_tests_outside_the_scope() -> None:
+    from app.projects.apply_job import accepted_files
+
+    submission = {
+        "outputs": {
+            "proposed_files": [
+                {"path": "src/a.py", "language": "python", "purpose": "p", "content": "a"}
+            ],
+            "proposed_tests": [
+                {"path": "tests/test_a.py", "language": "python", "purpose": "p", "content": "t"},
+                {"path": "src/test_local.py", "language": "python", "purpose": "p", "content": "l"},
+            ],
+        }
+    }
+    assert set(accepted_files(submission, ["src/"])) == {"src/a.py", "src/test_local.py"}
+    assert set(accepted_files(submission)) == {"src/a.py", "tests/test_a.py", "src/test_local.py"}

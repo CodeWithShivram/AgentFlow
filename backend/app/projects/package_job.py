@@ -51,7 +51,8 @@ def setup_commands(profile: StackProfile) -> list[str]:
             "python -m venv .venv",
             ". .venv/bin/activate   # Windows: .venv\\Scripts\\activate",
             f"pip install {packages}",
-            "python -m pytest",
+            "PYTHONPATH=src python -m pytest --import-mode=importlib",
+            '# Windows PowerShell: $env:PYTHONPATH = "src"',
         ]
     return [f"npm install {packages}", "npx tsc -p . --noEmit", "npx vitest run"]
 

@@ -59,7 +59,7 @@ def _codes(report: deterministic.Report) -> list[str]:
 
 
 def test_the_verifier_is_versioned() -> None:
-    assert deterministic.VERIFIER == "deterministic/v2"
+    assert deterministic.VERIFIER == "deterministic/v3"
 
 
 def test_a_complete_submission_passes_and_records_every_check() -> None:
@@ -294,3 +294,19 @@ def test_project_tasks_must_propose_files_inside_their_scope() -> None:
     ]
     missing = _scoped(_submission(), ["src/"])
     assert not missing.passed and _codes(missing) == ["FILES_MISSING"]
+
+
+def test_project_task_files_are_its_deliverables_and_extra_tests_only_warn() -> None:
+    submission = _developer_submission("src/a.py")
+    submission["outputs"] = {
+        "proposed_files": submission["outputs"]["proposed_files"],
+        "proposed_tests": [
+            {"path": "tests/test_a.py", "language": "python", "purpose": "p", "content": "x"}
+        ],
+    }  # no text entry for the "Report" deliverable
+    report = _scoped(submission, ["src/"])
+    assert report.passed
+    assert ("deliverables", CheckOutcome.SKIPPED) in report.checks
+    assert report.issues_json() == [
+        {"code": "TEST_OUTSIDE_SCOPE", "severity": "warning", "location": "1 file(s)"}
+    ]

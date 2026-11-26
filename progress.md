@@ -1594,6 +1594,27 @@ None.
   - prices: Gemini isn't in `app/llm/pricing.json`, so its calls are recorded unpriced and don't count toward budgets until published prices are added under a new price-list version.
 - **Test isolation:** `tests/conftest.py` now forces `MODEL_PROVIDER=mock` and blanks `MODEL_API_KEY` for the whole test session, so a real key in `.env` can never be used by tests. A guard test in `test_infrastructure.py` checks this.
 
+## First real-model project runs (Gemini, 2026-11-26)
+The full stack (API :8010, Celery worker and Beat) ran against the dev database with `gemini/gemini-3.5-flash-lite`, driven through the real API by a script. Eight runs; each one surfaced a gap that the mock model hid:
+
+| Run | What happened | Fix |
+|---|---|---|
+| 1 | Gemini refused the analysis and plan schemas with HTTP 400 ("too many states") | ADR-0055: providers get the schema without value bounds; the gateway still validates the full model |
+| 2 | Planning worked, but tasks went to Writer and QA, which can't produce files, or needed skills no agent had; the stall showed as "Building" | Project tasks may only need the Developer's skills (schema and prompt); progress flags READY tasks with no agent as needing attention |
+| 3 | The plan sometimes omitted `project` (optional in the shared schema) | `ProjectPlanProposal` requires it (prompt `software_plan/v3`) |
+| 4 | The driver's connection dropped | Driver only; it now retries |
+| 5 | Developer replies were empty: `outputs` was untyped in the schema the provider enforced, and lower bounds had been stripped | Typed `<Runtime>Submission` reply schemas; `minItems`/`minLength` kept |
+| 6 | Verification refused files as deliverables (`DELIVERABLE_MISSING`) and an extra test outside the scope | `deterministic/v3`: a project task's files are its deliverables; out-of-scope extra tests only warn and are never applied; the contract states the scope rule |
+| 7 | Plans often omitted `effort_points` (optional per task) | `ProjectPlannedTask` requires `file_scope` and `effort_points` (`software_plan/v4`) |
+| 8 | **End to end:** planned, 3 tasks built, verified and applied, progress 0→15→53→76%, then integration ran in the sandbox: compile passed, tests failed (`No module named 'wordcount'`, src layout) | Python checks run with `PYTHONPATH=src` and `--import-mode=importlib` (the generated code had two same-named test files); profiles state their layout `conventions` (`software_plan/v5`) |
+
+- **Resuming run 8** (BLOCKED → RUNNING, no new model calls) re-ran the gate on the same code. The imports then worked: **2 tests passed and 1 failed**, because a Gemini-written test expects 18 characters for `"Hello world\nFoo bar"`, which has 19.
+- **The gate correctly kept the project from COMPLETED** (NEEDS_ATTENTION).
+- **A PARTIAL package was created** on the owner's behalf: `wordcount-8b51468d-partial.zip` (6 files plus report and manifest, checksum verified) in local artifact storage.
+- **Usage:** run 8 made 15 model calls, about 24k input and 9k output tokens. All calls were unpriced, because Gemini is not in the price list.
+- **Remaining gap:** a failed integration needs a person (resume, replan or a partial package). Automatic targeted rework that feeds check failures to the responsible task is the next feature that would let such a project finish by itself.
+- **Leftover projects:** the stuck or failed projects from runs 1–7 remain in the dev database (local data only).
+
 ## Post-release fix — sandbox cleanup on Linux (CI)
 - **Push:** `main` (`a1ca9cc..6332bcc`) and tag `v0.2.0` were pushed on the owner's go-ahead (2026-11-26). `frontend-ci` passed.
 - **`backend-ci` failure:** 1 of 1338 tests failed: `test_the_mock_project_passes_its_real_sandbox_checks` with `PermissionError: Operation not permitted`. The owner supplied the CI log line.

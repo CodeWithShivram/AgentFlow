@@ -13,7 +13,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import AgentExecution, ExecutionStatus, Workflow
+from app.models import AgentExecution, ExecutionStatus, Workflow, WorkflowTask
 from app.projects.apply_job import accepted_files
 from app.projects.workspace import WorkspaceError
 
@@ -41,7 +41,8 @@ def dependency_files(
         if execution is None:
             continue
         try:
-            files = accepted_files(execution.submission)
+            owner = session.get(WorkflowTask, task_id)
+            files = accepted_files(execution.submission, list(owner.file_scope) if owner else None)
         except WorkspaceError:
             continue
         for path in sorted(files):

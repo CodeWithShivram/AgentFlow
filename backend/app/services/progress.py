@@ -95,6 +95,14 @@ class ProgressResponse(BaseModel):
     remaining: Estimate
 
 
+def _needs_person(task: WorkflowTask) -> bool:
+    """Work that cannot move on without a person: escalated, blocked or failed, or ready to run
+    with no agent to run it (no eligible agent was found)."""
+    if task.status in _ATTENTION:
+        return True
+    return task.status == TaskStatus.READY and task.assigned_agent_id is None
+
+
 def _weight(task: WorkflowTask) -> int:
     return task.effort_points or 1
 
@@ -158,6 +166,7 @@ async def project_progress(
     )
     active = [t for t in tasks if not (t.status == TaskStatus.CANCELLED and not t.required)]
     completed = [t for t in active if t.status == TaskStatus.COMPLETED]
+    stuck = [t for t in active if _needs_person(t)]
     counts = TaskCounts(
         total=len(active),
         completed=len(completed),
@@ -165,9 +174,9 @@ async def project_progress(
         waiting=sum(
             1
             for t in active
-            if t.status not in _IN_FLIGHT | _ATTENTION and t.status != TaskStatus.COMPLETED
+            if t.status not in _IN_FLIGHT and t.status != TaskStatus.COMPLETED and t not in stuck
         ),
-        needs_attention=sum(1 for t in active if t.status in _ATTENTION),
+        needs_attention=len(stuck),
     )
     task_weight = sum(_weight(t) for t in active)
     done_weight = sum(_weight(t) for t in completed)
@@ -300,7 +309,8 @@ def _phase(
         return "CANCELLED"
     if status == WorkflowStatus.COMPLETED:
         return "PACKAGING" if package == "pending" else "COMPLETED"
-    if status in {WorkflowStatus.PAUSED, WorkflowStatus.BLOCKED} or open_requests:
+    stuck = status == WorkflowStatus.RUNNING and counts.needs_attention > 0
+    if status in {WorkflowStatus.PAUSED, WorkflowStatus.BLOCKED} or open_requests or stuck:
         return "NEEDS_ATTENTION"
     if status in {WorkflowStatus.AWAITING_APPROVAL, WorkflowStatus.READY}:
         return "AWAITING_APPROVAL"

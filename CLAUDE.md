@@ -197,10 +197,12 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   `file_scope`/`effort_points`) on a curated profile from `app/projects/profiles.py` (immutable; new deps = new id).
   Scope matching lives only in `app/projects/scope.py` (case-insensitive; folders end in `/`); scopes of different
   tasks never overlap and every profile shared file has exactly one owner. General workflows keep version 1 plans.
+  Project tasks may only need Developer skills (`PROJECT_TASK_SKILLS`); the planner replies with `ProjectPlanProposal`.
+  Providers see `provider_schema(...)` (no value bounds, ADR-0055); model agents ask for typed `<Runtime>Submission`s.
 - Project workspaces (ADR-0049, `app/projects/`): only `apply_job` writes them, after a task is COMPLETED
   (`project.apply`), via `ProjectWorkspaces.apply` (scope sync, path re-checks, no links, hardened git: no global
   config, empty hooks, `add --force`). One `workspace_applications` row per attempt (append-only). Contract v4 carries
-  `file_scope`, `stack_profile` and capped `dependency_files`; `deterministic/v2` refuses files outside the scope.
+  `file_scope`, `stack_profile` and capped `dependency_files`; `deterministic/v3` refuses files outside the scope (extra tests only warn and are not applied).
 - Sandbox (ADR-0050, `app/sandbox/runner.py`): the only way to execute generated code. Fixed platform commands in a
   fresh `agentflow-sandbox/<profile>:<n>` container (built by `scripts/sandbox.ps1 build`, never pulled) on a throwaway
   copy: no network, read-only root, non-root, no capabilities, limits, timeout. `SandboxUnavailableError` means the

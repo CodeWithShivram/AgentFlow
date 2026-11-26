@@ -93,3 +93,24 @@ async def test_a_failed_gate_needs_attention(
     blocked = await _progress(engine, admin_factory, graph)
     assert (blocked.phase, blocked.integration) == ("NEEDS_ATTENTION", "failed")
     assert blocked.percent == 9 * 100 // 11
+
+
+async def test_ready_work_without_an_agent_needs_attention(
+    engine: AsyncEngine, admin_factory: Factory
+) -> None:
+    # Live Gemini run: a task whose skills no single agent had sat READY with no agent while the
+    # page said "Building". It needs a person, so the project says so.
+    from app.models import TaskStatus, WorkflowTask
+
+    graph = _start_project(admin_factory)
+    with session_scope(admin_factory) as s:
+        task = s.get(WorkflowTask, graph.task_ids[0])
+        assert task is not None and task.status in (TaskStatus.ASSIGNED, TaskStatus.QUEUED)
+        task.status, task.assigned_agent_id, task.assigned_agent_version_id = (
+            TaskStatus.READY,
+            None,
+            None,
+        )
+        s.commit()
+    progress = await _progress(engine, admin_factory, graph)
+    assert progress.phase == "NEEDS_ATTENTION" and progress.tasks.needs_attention == 1
