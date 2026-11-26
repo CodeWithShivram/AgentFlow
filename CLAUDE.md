@@ -65,7 +65,8 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   versions in `app/agents/instructions.py` (change = new ref). The contract reaches models only inside
   `<task_contract>` delimiters, without platform IDs; one corrective retry names issue codes only. Agents call models via
   `context.models`; tests pass `models=` (and `MockAgent` explicitly where no model should run), never the global gateway.
-- Developer and QA (ADR-0022) never execute code, run tests or write files: their outputs must fit `outputs_model`
+- Developer and QA (ADR-0022) never execute code, run tests or write files (the platform applies accepted Developer
+  proposals, ADR-0049): their outputs must fit `outputs_model`
   (`app/agents/outputs.py`: path-checked `proposed_files`/`proposed_tests`, `test_cases` covering contract criteria),
   and a runtime's `platform_note` is appended unless the contract grants the matching tool. Never drop those notes.
 - Agent selection (ADR-0023): ranking is pure and versioned (`app/agents/selection.py`, `RULES_VERSION`); change
@@ -195,6 +196,10 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   `file_scope`/`effort_points`) on a curated profile from `app/projects/profiles.py` (immutable; new deps = new id).
   Scope matching lives only in `app/projects/scope.py` (case-insensitive; folders end in `/`); scopes of different
   tasks never overlap and every profile shared file has exactly one owner. General workflows keep version 1 plans.
+- Project workspaces (ADR-0049, `app/projects/`): only `apply_job` writes them, after a task is COMPLETED
+  (`project.apply`), via `ProjectWorkspaces.apply` (scope sync, path re-checks, no links, hardened git: no global
+  config, empty hooks, `add --force`). One `workspace_applications` row per attempt (append-only). Contract v4 carries
+  `file_scope`, `stack_profile` and capped `dependency_files`; `deterministic/v2` refuses files outside the scope.
 - Workflow events are append-only.
 
 ## Security

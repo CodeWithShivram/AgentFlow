@@ -2,8 +2,34 @@
 
 ## Current position
 - Phase: 9 — Software project generation (ADR-0046; Phases 2–7 and Steps 8.1–8.2 complete; Phase 1 released as `v0.1.0`)
-- Last completed step: 9.2 — Software project kind and plan schema v2
-- Next step: 9.3 — Project workspace (the platform applies verified proposals with ownership checks)
+- Last completed step: 9.3 — Project workspaces
+- Next step: 9.4 — Docker sandbox runner and stack profile images
+
+## Step 9.3 — project workspaces and file ownership (ADR-0049)
+- **Verification:** `deterministic/v2` adds the `file_scope` check. A task with a scope must propose Developer files (`FILES_MISSING`), all inside its scope (`FILE_OUTSIDE_SCOPE`, reported as a count, never as paths). Rework has fixed sentences for both codes.
+- **Contract v4:** `file_scope`, `stack_profile` and `dependency_files`.
+  - `dependency_files` holds the accepted files of the dependencies' latest successful attempts (≤ 40 files, ≤ 120,000 characters).
+  - These reach models inside `<task_contract>` only for scoped tasks.
+- **Mock Developer:** scope-aware deterministic files (manifest, README, module, test) for both profiles.
+- **Workspace** (`app/projects/workspace.py`):
+  - one Git repository per project under `PROJECT_WORKSPACE_ROOT` (default `~/.agentflow/workspaces`, outside the repo);
+  - each apply syncs the task's scope exactly: writes atomically and removes stale files of that scope;
+  - every path is re-checked, and links and junctions are refused;
+  - Git is hardened: no system or global config, empty hooks, no signing or credentials, `add --force`.
+- **Apply job:** the engine writes `project.apply` when a software project's task reaches COMPLETED.
+  - `apply_job.run` (Celery task `agentflow.apply_to_workspace`) locks the workflow and applies the latest successful attempt.
+  - It records one append-only `workspace_applications` row per attempt (migration `0032`, RLS, worker SELECT/INSERT): APPLIED with commit, head and tree hash, or FAILED with a fixed code.
+- **Tests:**
+  - `test_project_workspace.py` (unit, 13);
+  - `test_project_workspace.py` (integration, 3): a full chain through the real Developer runtime on the mock model, verification, semantic evaluation, apply and Git, with duplicate deliveries and the failure codes;
+  - the verifier and contract version assertions were updated to v2 and v4, and the expected check lists now include the skipped `file_scope` check.
+
+## Checks (Step 9.3)
+- **Full backend gate:** format, lint, `mypy app tests alembic` and `alembic check` all clean.
+  - `uv run pytest`: 1271 passed, 1 skipped, 1 failed. The failure was `test_execution_history_lists_attempts_with_agent_versions`, whose exact check list lacked the new skipped `file_scope` check.
+  - After updating that expectation, `test_workflows_api.py` and both workspace test files were re-run: 46 passed.
+- **Dev database:** upgraded to `0032` and roles re-provisioned.
+- **Requirement:** Git must be on PATH for workers (it is, at 2.56.1).
 
 ## Step 9.2 — software project workflows and plan schema v2 (ADR-0048)
 - **Kind:** migration `0031` adds:

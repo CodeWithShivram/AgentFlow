@@ -31,12 +31,14 @@ from jsonschema import Draft202012Validator, SchemaError, validators
 from pydantic import ValidationError
 
 from app.agents.contract import AgentSubmission, CriterionStatus
-from app.agents.outputs import QAOutputs, parse_outputs
+from app.agents.outputs import DeveloperOutputs, QAOutputs, parse_outputs
 from app.agents.specialists import RUNTIMES, ModelAgent
+from app.projects.scope import in_scope
 from app.schemas.agents import AgentConfiguration
 from app.tools.registry import REGISTRY, ToolDefinition, usable_grants
 
-VERIFIER = "deterministic/v1"
+# v2 (ADR-0049): adds the `file_scope` check for software project tasks.
+VERIFIER = "deterministic/v2"
 # Schema mismatches reported per verification; the rest are summarised by the count.
 MAX_SCHEMA_ISSUES = 20
 
@@ -80,6 +82,8 @@ class Subject:
     deliverables: Sequence[str]
     output_schema: Mapping[str, Any] | None
     configuration: Mapping[str, Any]
+    # Software project tasks only (ADR-0048): the files the task alone may write.
+    file_scope: Sequence[str] = ()
 
 
 @dataclass
@@ -118,6 +122,7 @@ _CHECKS = (
     "output_schema",
     "runtime_outputs",
     "platform_note",
+    "file_scope",
 )
 
 
@@ -141,6 +146,7 @@ def verify(subject: Subject, registry: Mapping[str, ToolDefinition] = REGISTRY) 
     runtime, configuration = _runtime(subject.configuration)
     report.record("runtime_outputs", _runtime_outputs(runtime, submission, expected))
     report.record("platform_note", _platform_note(runtime, configuration, submission, registry))
+    report.record("file_scope", _file_scope(submission, subject.file_scope))
     return report
 
 
@@ -268,3 +274,19 @@ def _platform_note(
     if runtime.platform_note in submission.limitations:
         return []
     return [Issue("PLATFORM_NOTE_MISSING")]
+
+
+def _file_scope(submission: AgentSubmission, scope: Sequence[str]) -> list[Issue] | None:
+    """A software project task must propose files, all inside its scope (ADR-0049). Paths are
+    not stored in issues: they are agent text."""
+    if not scope:
+        return None
+    try:
+        outputs = DeveloperOutputs.model_validate(submission.outputs or {})
+    except ValidationError:
+        return [Issue("FILES_MISSING")]
+    paths = [f.path for f in (*outputs.proposed_files, *outputs.proposed_tests)]
+    outside = sum(1 for path in paths if not in_scope(scope, path))
+    if outside:
+        return [Issue("FILE_OUTSIDE_SCOPE", location=f"{outside} file(s)")]
+    return []

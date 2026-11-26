@@ -97,6 +97,13 @@ _ISSUE_SENTENCES = {
     "OUTPUT_SCHEMA_MISMATCH": "Make outputs conform to the task's output schema.",
     "OUTPUT_SCHEMA_MORE_MISMATCHES": "Make outputs conform to the task's output schema.",
     "OUTPUTS_INVALID": "Make outputs fit the structure your role requires.",
+    # Software project tasks (ADR-0049).
+    "FILES_MISSING": (
+        "Propose the task's files in outputs.proposed_files (and tests in proposed_tests)."
+    ),
+    "FILE_OUTSIDE_SCOPE": (
+        "Propose only files inside the contract's file_scope; other tasks own the rest."
+    ),
     "TEST_CASE_UNKNOWN_CRITERION": (
         "Let test cases cover only the acceptance criteria in the contract."
     ),

@@ -68,6 +68,11 @@ def _contract_json(contract: TaskContract) -> str:
         },
     )
     data["dependencies_completed"] = len(contract.dependencies)
+    # Software project tasks only (ADR-0049); absent for other tasks.
+    if contract.file_scope:
+        data["file_scope"] = contract.file_scope
+        data["stack_profile"] = contract.stack_profile
+        data["dependency_files"] = [f.model_dump() for f in contract.dependency_files]
     return json.dumps(data, ensure_ascii=False, indent=1).replace("</", "<\\/")
 
 
@@ -268,9 +273,53 @@ def runtime_for(configuration: AgentConfiguration) -> type[BaseAgent]:
 # --- deterministic mock defaults (MODEL_PROVIDER=mock) -------------------------------------------
 
 
+_MOCK_FILE_CONTENT = {
+    "pyproject.toml": (
+        '[project]\nname = "mock-project"\nversion = "0.1.0"\nrequires-python = ">=3.12"\n'
+        'dependencies = []\n\n[tool.pytest.ini_options]\npythonpath = ["src"]\n'
+    ),
+    "package.json": (
+        '{\n  "name": "mock-project",\n  "version": "0.1.0",\n  "private": true,\n'
+        '  "type": "module",\n  "scripts": {"test": "vitest run"}\n}\n'
+    ),
+    "tsconfig.json": '{\n  "compilerOptions": {"strict": true, "module": "esnext"}\n}\n',
+    "README.md": "# Mock project\n\nGenerated with the mock model provider (no real model).\n",
+    ".env.example": "# No settings are needed.\n",
+}
+
+
+def _mock_scoped_file(entry: str, profile: str | None) -> tuple[str, str]:
+    """A deterministic file for one scope entry: the entry itself for exact files, or a module
+    (or a test, under a test folder) inside a folder entry."""
+    node = profile is not None and profile.startswith("node")
+    if not entry.endswith("/"):
+        return entry, _MOCK_FILE_CONTENT.get(entry.rsplit("/", 1)[-1], "Mock content.\n")
+    if entry.split("/", 1)[0] == "tests":
+        if node:
+            return f"{entry}mock.test.ts", (
+                'import { expect, test } from "vitest";\n\n'
+                'test("mock", () => {\n  expect(1 + 1).toBe(2);\n});\n'
+            )
+        return f"{entry}test_mock.py", "def test_mock() -> None:\n    assert 1 + 1 == 2\n"
+    if node:
+        return f"{entry}mock.ts", "export const VALUE = 1;\n"
+    return f"{entry}mock_module.py", "VALUE = 1\n"
+
+
 def _mock_developer_outputs(contract: dict[str, Any]) -> dict[str, Any]:
     purpose = f"Mock proposal for: {str(contract.get('objective', 'the task'))[:200]}"
     content = "# Mock proposal: no real model was used.\n"
+    scope = contract.get("file_scope")
+    if scope:  # a software project task (ADR-0049): stay inside the scope
+        profile = contract.get("stack_profile")
+        files = [_mock_scoped_file(str(entry), profile) for entry in scope]
+        language = "typescript" if profile and str(profile).startswith("node") else "python"
+        return {
+            "proposed_files": [
+                {"path": path, "language": language, "purpose": purpose, "content": text}
+                for path, text in files
+            ]
+        }
     return {
         "proposed_files": [
             {

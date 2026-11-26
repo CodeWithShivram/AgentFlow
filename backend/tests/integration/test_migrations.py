@@ -43,6 +43,7 @@ EXPECTED_TABLES = {
     "human_interventions",
     "approval_decisions",
     "artifacts",
+    "workspace_applications",
     "verification_results",
     "checkpoint_migrations",
     "checkpoints",

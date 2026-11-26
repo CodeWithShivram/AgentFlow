@@ -32,6 +32,8 @@ TASK_VERIFY = "task.verify"
 TASK_EVALUATE = "task.evaluate"
 WORKFLOW_ANALYZE = "workflow.analyze"
 WORKFLOW_PLAN = "workflow.plan"
+# Asks a worker to apply an accepted software project task to its workspace (ADR-0049).
+PROJECT_APPLY = "project.apply"
 # Asks the orchestration graph to reassess a workflow (ADR-0025).
 WORKFLOW_ORCHESTRATE = "workflow.orchestrate"
 _MAX_BACKOFF_SECONDS = 300

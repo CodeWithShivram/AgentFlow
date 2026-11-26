@@ -67,6 +67,10 @@ class Settings(BaseSettings):
     )
     # The largest artifact stored, in bytes (default 200 MiB, at most 2 GiB).
     artifact_max_bytes: int = Field(default=200 * 1024 * 1024, ge=1024, le=2 * 1024 * 1024 * 1024)
+    # Project workspaces (ADR-0049): one platform-written Git repository per software project.
+    project_workspace_root: Path = Field(
+        default_factory=lambda: Path.home() / ".agentflow" / "workspaces"
+    )
 
     # --- Authentication (ADR-0007) ---
     # Key ring as JSON: {"<key id>": "<secret>"}. Tokens are signed with the active key and
@@ -151,12 +155,15 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _validate_artifact_root(self) -> "Settings":
-        # Artifacts are user deliverables: never inside the source tree (handoff section 3).
-        root = self.artifact_storage_root
-        if not root.is_absolute():
-            raise ValueError("ARTIFACT_STORAGE_ROOT must be an absolute path")
-        if root.resolve().is_relative_to(REPO_ROOT_ENV_FILE.parent.resolve()):
-            raise ValueError("ARTIFACT_STORAGE_ROOT must be outside the repository")
+        # Artifacts and generated projects are never inside the source tree (handoff section 3).
+        for name, root in (
+            ("ARTIFACT_STORAGE_ROOT", self.artifact_storage_root),
+            ("PROJECT_WORKSPACE_ROOT", self.project_workspace_root),
+        ):
+            if not root.is_absolute():
+                raise ValueError(f"{name} must be an absolute path")
+            if root.resolve().is_relative_to(REPO_ROOT_ENV_FILE.parent.resolve()):
+                raise ValueError(f"{name} must be outside the repository")
         return self
 
     @model_validator(mode="after")

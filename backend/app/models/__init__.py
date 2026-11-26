@@ -55,6 +55,10 @@ from app.models.workflow import (
     WorkflowStatus,
     WorkflowTask,
 )
+from app.models.workspace_application import (
+    WorkspaceApplication,
+    WorkspaceApplicationStatus,
+)
 
 __all__ = [
     "Artifact",
@@ -113,6 +117,8 @@ __all__ = [
     "WorkflowStatus",
     "WorkflowTask",
     "Workspace",
+    "WorkspaceApplication",
+    "WorkspaceApplicationStatus",
     "WorkspaceInvitation",
     "WorkspaceMember",
     "WorkspaceRole",

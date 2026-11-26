@@ -57,6 +57,7 @@ from app.models import (
     WorkflowTask,
     WorkspaceRole,
 )
+from app.projects.context import dependency_files
 from app.schemas.agents import AgentConfiguration
 from app.services.usage import record_tool_invocation
 from app.tools.gateway import InvocationRecord, InvocationRecorder, ToolGateway
@@ -118,6 +119,10 @@ class Claim:
     rework_instructions: list[str] = field(default_factory=list)
     # Approved after the previous attempt asked (ADR-0035).
     approved_actions: list[str] = field(default_factory=list)
+    # Software project tasks (ADR-0049).
+    file_scope: list[str] = field(default_factory=list)
+    stack_profile: str | None = None
+    dependency_files: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -291,6 +296,8 @@ def claim(
         .where(TaskDependency.workflow_id == workflow.id, TaskDependency.task_id == task.id)
         .order_by(TaskDependency.depends_on_task_id)
     ).scalars()
+    dependency_ids = list(dependencies)
+    project_files = dependency_files(session, workflow, dependency_ids) if task.file_scope else []
     claimed = Claim(
         execution_id=execution.id,
         workspace_id=workflow.workspace_id,
@@ -309,9 +316,12 @@ def claim(
         deliverables=list(task.deliverables),
         output_schema=task.expected_output_schema,
         acceptance_criteria=list(task.acceptance_criteria),
-        dependencies=list(dependencies),
+        dependencies=dependency_ids,
         rework_instructions=instructions,
         approved_actions=approved,
+        file_scope=list(task.file_scope),
+        stack_profile=(workflow.project_spec or {}).get("stack_profile"),
+        dependency_files=project_files,
     )
     session.commit()
     return claimed
@@ -344,6 +354,9 @@ def build_contract(
             ),
             "rework_instructions": claim.rework_instructions,
             "approved_actions": claim.approved_actions,
+            "file_scope": claim.file_scope,
+            "stack_profile": claim.stack_profile,
+            "dependency_files": claim.dependency_files,
         }
     )
 

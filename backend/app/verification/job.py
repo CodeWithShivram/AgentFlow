@@ -98,6 +98,7 @@ def run(
             deliverables=list(task.deliverables),
             output_schema=task.expected_output_schema,
             configuration=version.configuration if version else {},
+            file_scope=list(task.file_scope),
         )
     )
     result = VerificationResult(

@@ -53,6 +53,7 @@ from app.models import (
     Workflow,
     WorkflowEvent,
     WorkflowEventType,
+    WorkflowKind,
     WorkflowStatus,
     WorkflowTask,
     WorkspaceRole,
@@ -573,6 +574,23 @@ def request_evaluation(session: _AddsRows, workflow: Workflow, task: WorkflowTas
     )
 
 
+def request_apply(session: _AddsRows, workflow: Workflow, task: WorkflowTask) -> uuid.UUID:
+    """Writes a `project.apply` outbox row (identifiers only): apply a software project's
+    accepted task to its workspace (ADR-0049)."""
+    return outbox.enqueue(
+        session,
+        outbox.PROJECT_APPLY,
+        workspace_id=workflow.workspace_id,
+        workflow_id=workflow.id,
+        task_id=task.id,
+        payload={
+            "workspace_id": str(workflow.workspace_id),
+            "workflow_id": str(workflow.id),
+            "task_id": str(task.id),
+        },
+    )
+
+
 def request_analysis(session: Session, workflow: Workflow, *, actor: Actor) -> uuid.UUID:
     """Asks a worker to analyse the workflow's prompt (Step 2.2): writes a `workflow.analyze`
     outbox row and marks the analysis PENDING, in the caller's transaction. A newer request
@@ -855,6 +873,8 @@ def transition_task(
     request_orchestration(session, workflow)
     if target == T.SUBMITTED:
         request_verification(session, workflow, task)
+    if target == T.COMPLETED and workflow.kind == WorkflowKind.SOFTWARE_PROJECT:
+        request_apply(session, workflow, task)
     # Flush so later queries in this transaction (and DB constraints) see the change; app
     # sessions do not autoflush.
     session.flush()

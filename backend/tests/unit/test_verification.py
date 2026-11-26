@@ -59,7 +59,7 @@ def _codes(report: deterministic.Report) -> list[str]:
 
 
 def test_the_verifier_is_versioned() -> None:
-    assert deterministic.VERIFIER == "deterministic/v1"
+    assert deterministic.VERIFIER == "deterministic/v2"
 
 
 def test_a_complete_submission_passes_and_records_every_check() -> None:
@@ -74,6 +74,7 @@ def test_a_complete_submission_passes_and_records_every_check() -> None:
         {"name": "output_schema", "outcome": "passed"},
         {"name": "runtime_outputs", "outcome": "skipped"},
         {"name": "platform_note", "outcome": "skipped"},
+        {"name": "file_scope", "outcome": "skipped"},  # not a software project task
     ]
 
 
@@ -94,7 +95,7 @@ def test_an_unreadable_submission_fails_and_skips_the_rest(
 ) -> None:
     report = _verify(submission)
     assert not report.passed and _codes(report) == [code]
-    assert [outcome for _, outcome in report.checks[1:]] == [CheckOutcome.SKIPPED] * 6
+    assert [outcome for _, outcome in report.checks[1:]] == [CheckOutcome.SKIPPED] * 7
 
 
 def test_every_criterion_needs_exactly_one_claim_and_unknown_ids_are_not_stored() -> None:
@@ -252,3 +253,44 @@ def test_a_writer_has_no_runtime_specific_checks() -> None:
 def test_issues_have_a_fixed_shape() -> None:
     issue = deterministic.Issue("X", Severity.WARNING, deliverable="Report")
     assert issue.as_dict() == {"code": "X", "severity": "warning", "deliverable": "Report"}
+
+
+def _developer_submission(*paths: str) -> dict[str, Any]:
+    submission = _submission()
+    submission["outputs"] = {
+        **submission["outputs"],
+        "proposed_files": [
+            {"path": path, "language": "python", "purpose": "p", "content": "x = 1\n"}
+            for path in paths
+        ],
+    }
+    return submission
+
+
+def _scoped(submission: dict[str, Any], scope: list[str]) -> deterministic.Report:
+    return deterministic.verify(
+        deterministic.Subject(
+            submission=submission,
+            acceptance_criteria=[
+                {"id": "c1", "description": "d"},
+                {"id": "c2", "description": "e"},
+            ],
+            deliverables=["Report"],
+            output_schema=None,
+            configuration={},
+            file_scope=scope,
+        )
+    )
+
+
+def test_project_tasks_must_propose_files_inside_their_scope() -> None:
+    passed = _scoped(_developer_submission("src/a.py", "src/b/c.py"), ["src/"])
+    assert passed.passed and ("file_scope", CheckOutcome.PASSED) in passed.checks
+
+    outside = _scoped(_developer_submission("src/a.py", "tests/test_a.py"), ["src/"])
+    assert not outside.passed and _codes(outside) == ["FILE_OUTSIDE_SCOPE"]
+    assert outside.issues_json() == [
+        {"code": "FILE_OUTSIDE_SCOPE", "severity": "error", "location": "1 file(s)"}
+    ]
+    missing = _scoped(_submission(), ["src/"])
+    assert not missing.passed and _codes(missing) == ["FILES_MISSING"]

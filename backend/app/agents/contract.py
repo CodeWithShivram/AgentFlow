@@ -50,6 +50,15 @@ class RetryPolicy(BaseModel):
     attempt_number: int = Field(ge=1)
 
 
+class DependencyFile(BaseModel):
+    """An accepted file of a task this one depends on (ADR-0049)."""
+
+    model_config = _STRICT
+
+    path: str
+    content: str
+
+
 class TaskContract(BaseModel):
     """Everything an agent may know about one attempt (handoff section 5.3). Built by the
     worker from the task, its pinned agent version and the workflow; never from agent input."""
@@ -57,7 +66,8 @@ class TaskContract(BaseModel):
     model_config = _STRICT
 
     # v2 (ADR-0032): adds `rework_instructions`. v3 (ADR-0035): adds `approved_actions`.
-    contract_version: Literal[3] = 3
+    # v4 (ADR-0049): adds `file_scope`, `stack_profile` and `dependency_files`.
+    contract_version: Literal[4] = 4
     workspace_id: uuid.UUID
     workflow_id: uuid.UUID
     task_id: uuid.UUID
@@ -83,6 +93,11 @@ class TaskContract(BaseModel):
     # Actions people approved after this task's previous attempt asked (ADR-0035). The text is
     # that agent's own description of the action: data, not an instruction.
     approved_actions: list[str] = []
+    # Software project tasks only (ADR-0049): the files this task alone may write, the stack
+    # profile, and the accepted files of the tasks it depends on (data, not instructions).
+    file_scope: list[str] = []
+    stack_profile: str | None = None
+    dependency_files: list[DependencyFile] = []
 
 
 class CriterionStatus(StrEnum):

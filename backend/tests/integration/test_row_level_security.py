@@ -49,6 +49,7 @@ ROW_LEVEL_SECURED = {
     "human_interventions",
     "approval_decisions",
     "artifacts",
+    "workspace_applications",
     "verification_results",
     "checkpoints",
     "checkpoint_blobs",
