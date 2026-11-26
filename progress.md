@@ -2,8 +2,34 @@
 
 ## Current position
 - Phase: 9 — Software project generation (ADR-0046; Phases 2–7 and Steps 8.1–8.2 complete; Phase 1 released as `v0.1.0`)
-- Last completed step: 9.4 — Docker sandbox runner and stack profile images
-- Next step: 9.5 — Execution checks and the project integration gate
+- Last completed step: 9.5 — Project integration gate
+- Next step: 9.6 — Secure ZIP packaging, README and build report, download
+
+## Step 9.5 — project integration gate (ADR-0051)
+- **Checks:** `StackProfile.checks` are fixed sandbox commands:
+  - python: `compileall`, then `pytest`;
+  - node: `tsc --noEmit`, then `vitest run`, both with the image's dependencies linked in.
+- **Trigger:** software projects no longer auto-complete. `reconcile_workflow` requests `project.integrate` when all required tasks are COMPLETED, and the apply job asks again after the last apply.
+- **Job** (`app/projects/integration_job.py`, Celery `agentflow.integrate_project`):
+  - claim (requires a RUNNING project with all work APPLIED and no live run; closes runs stale for over 30 minutes as `WORKER_LOST`);
+  - execute (sandbox, no transaction);
+  - finish (PASSED completes the workflow if the commit is unchanged; FAILED or NOT_RUN blocks it).
+- **Guard:** the engine refuses COMPLETED for a software project without a latest PASSED integration (`INTEGRATION_REQUIRED`).
+- **Records:** migration `0033` adds `project_integrations` (RLS; a trigger allows only one finishing update). The API offers `GET …/integrations` and `GET …/workspace-applications` (VIEWER).
+- **Retry and fix:** resume the BLOCKED workflow (a new run on the current tree), or replan. Automatic targeted rework of the responsible task is deferred, because failures cannot be attributed to one task reliably.
+- **Tests:** `tests/integration/test_project_integration.py` covers:
+  - requests that wait until the last apply;
+  - the mock project passing **real** sandbox checks (compile and pytest);
+  - failure, block and resume-retry;
+  - NOT_RUN blocking;
+  - the completion guard;
+  - single runs under duplicate requests;
+  - API scoping.
+
+## Checks (Step 9.5)
+- **Targeted:** integration-gate, workspace, migration and RLS tests: 27 passed, plus the API scoping test.
+- **Full backend gate:** format, lint, `mypy app tests alembic` and `alembic check` all clean; `uv run pytest` **1290 passed, 2 skipped** (7 min 5 s).
+- **Dev database:** upgraded to `0033` and roles re-provisioned.
 
 ## Step 9.4 — Docker sandbox (ADR-0050)
 - **Images:** `infrastructure/sandbox/<profile>/Dockerfile`, built locally with `scripts/sandbox.ps1 build`, tagged `agentflow-sandbox/<profile>:1`.

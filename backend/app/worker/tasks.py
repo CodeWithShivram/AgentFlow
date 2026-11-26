@@ -19,8 +19,9 @@ from app.execution import cleanup, heartbeat, outbox, recovery, relay, runner
 from app.llm.gateway import ModelGatewayError, get_model_gateway
 from app.orchestration import job as orchestration_job
 from app.planning import analysis, plan
-from app.projects import apply_job
+from app.projects import apply_job, integration_job
 from app.projects.workspace import ProjectWorkspaces
+from app.sandbox.runner import DockerSandbox
 from app.tools.gateway import ToolError
 from app.verification import job as verification_job
 from app.verification import semantic
@@ -37,6 +38,7 @@ EVENT_ROUTES = {
     outbox.WORKFLOW_PLAN: ("agentflow.plan_workflow", EXECUTION_QUEUE),
     outbox.WORKFLOW_ORCHESTRATE: ("agentflow.orchestrate_workflow", EXECUTION_QUEUE),
     outbox.PROJECT_APPLY: ("agentflow.apply_to_workspace", EXECUTION_QUEUE),
+    outbox.PROJECT_INTEGRATE: ("agentflow.integrate_project", EXECUTION_QUEUE),
 }
 # The identifiers each event's task needs; a payload missing one can never be consumed.
 _WORKFLOW_IDS = frozenset({"workspace_id", "workflow_id"})
@@ -48,6 +50,7 @@ REQUIRED_PAYLOAD = {
     outbox.WORKFLOW_PLAN: _WORKFLOW_IDS,
     outbox.WORKFLOW_ORCHESTRATE: _WORKFLOW_IDS,
     outbox.PROJECT_APPLY: _WORKFLOW_IDS | {"task_id"},
+    outbox.PROJECT_INTEGRATE: _WORKFLOW_IDS,
 }
 _FINISH_ATTEMPTS = 3
 # Default agent timeout (handoff section 6): 600 s. Hard limit gives the soft one room to finish.
@@ -346,3 +349,25 @@ def apply_to_workspace(event_id: str, workspace_id: str, workflow_id: str, task_
         )
     logger.info("workspace apply", extra={"event_id": event_id, "outcome": outcome})
     return outcome
+
+
+@celery_app.task(name="agentflow.integrate_project", soft_time_limit=900, time_limit=960)
+def integrate_project(event_id: str, workspace_id: str, workflow_id: str) -> str:
+    """Runs a software project's integration gate (ADR-0051): claim, sandbox checks outside any
+    transaction, finish. Idempotent on `event_id`; at most one run per project at a time."""
+    workspaces = ProjectWorkspaces(settings.project_workspace_root)
+    factory = get_worker_session_factory()
+    with session_scope(factory) as session:
+        job = integration_job.claim(
+            session,
+            workspaces,
+            event_id=uuid.UUID(event_id),
+            workspace_id=uuid.UUID(workspace_id),
+            workflow_id=uuid.UUID(workflow_id),
+        )
+    if isinstance(job, str):
+        logger.info("integration skipped", extra={"event_id": event_id, "outcome": job})
+        return job
+    outcome = integration_job.execute(DockerSandbox(), job)
+    with session_scope(factory) as session:
+        return integration_job.finish(session, workspaces, job, outcome)

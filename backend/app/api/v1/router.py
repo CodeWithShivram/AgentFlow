@@ -8,6 +8,7 @@ from app.api.v1 import (
     health,
     interventions,
     pricing,
+    projects,
     workflows,
     workspaces,
 )
@@ -24,3 +25,4 @@ api_router.include_router(interventions.approvals_router)
 api_router.include_router(pricing.router)
 api_router.include_router(analytics.router)
 api_router.include_router(artifacts.router)
+api_router.include_router(projects.router)

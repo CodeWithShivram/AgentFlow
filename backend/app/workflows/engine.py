@@ -41,11 +41,13 @@ from app.models import (
     AutonomyPolicy,
     ExecutionStatus,
     HumanIntervention,
+    IntegrationStatus,
     InterventionStatus,
     InterventionSubject,
     InterventionType,
     PauseReason,
     PlanStatus,
+    ProjectIntegration,
     TaskDependency,
     TaskStatus,
     VerificationOutcome,
@@ -591,6 +593,37 @@ def request_apply(session: _AddsRows, workflow: Workflow, task: WorkflowTask) ->
     )
 
 
+def request_integration(session: _AddsRows, workflow: Workflow) -> uuid.UUID:
+    """Writes a `project.integrate` outbox row (identifiers only): run a software project's
+    integration gate (ADR-0051). The job decides whether it is time; duplicates are harmless."""
+    return outbox.enqueue(
+        session,
+        outbox.PROJECT_INTEGRATE,
+        workspace_id=workflow.workspace_id,
+        workflow_id=workflow.id,
+        payload={"workspace_id": str(workflow.workspace_id), "workflow_id": str(workflow.id)},
+    )
+
+
+def _require_integration_passed(session: Session, workflow: Workflow) -> None:
+    """A software project completes only after its latest finished integration PASSED."""
+    latest = session.execute(
+        select(ProjectIntegration.status)
+        .where(
+            ProjectIntegration.workflow_id == workflow.id,
+            ProjectIntegration.workspace_id == workflow.workspace_id,
+            ProjectIntegration.status != IntegrationStatus.RUNNING,
+        )
+        .order_by(ProjectIntegration.created_at.desc(), ProjectIntegration.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    if latest != IntegrationStatus.PASSED:
+        raise TransitionPreconditionError(
+            "A software project completes only after its integration checks pass.",
+            details={"code": "INTEGRATION_REQUIRED"},
+        )
+
+
 def request_analysis(session: Session, workflow: Workflow, *, actor: Actor) -> uuid.UUID:
     """Asks a worker to analyse the workflow's prompt (Step 2.2): writes a `workflow.analyze`
     outbox row and marks the analysis PENDING, in the caller's transaction. A newer request
@@ -718,6 +751,8 @@ def transition_workflow(
         pause_reason = PauseReason.USER
     tasks = _active(list_tasks(session, workflow))
     _check_workflow_guards(workflow, source, target, tasks)
+    if target == W.COMPLETED and workflow.kind == WorkflowKind.SOFTWARE_PROJECT:
+        _require_integration_passed(session, workflow)
 
     now = datetime.now(UTC)
     workflow.status = target
@@ -1026,6 +1061,10 @@ def reconcile_workflow(session: Session, workflow: Workflow) -> None:
     if workflow.status == W.BLOCKED:
         return
     if required and all(t.status == T.COMPLETED for t in required):
+        if workflow.kind == WorkflowKind.SOFTWARE_PROJECT:
+            # Software projects complete only through the integration gate (ADR-0051).
+            request_integration(session, workflow)
+            return
         transition_workflow(session, workflow, W.COMPLETED, actor=Actor.SYSTEM)
         return
 

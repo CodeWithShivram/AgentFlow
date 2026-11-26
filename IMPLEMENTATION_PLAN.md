@@ -211,7 +211,7 @@ Inserted by the owner on 2026-11-26 from `docs/AgentFlow_Claude_Code_Master_Play
 | 9.2 | Software project kind and plan schema v2 (stack profile, file ownership, effort) | DONE (ADR-0048) |
 | 9.3 | Project workspace: platform applies verified proposals in dependency order with ownership checks | DONE (ADR-0049) |
 | 9.4 | Docker sandbox runner and stack profile images (fail closed; threat model) | DONE (ADR-0050) |
-| 9.5 | Execution checks and project integration gate feeding verification and rework | NOT_STARTED |
+| 9.5 | Execution checks and project integration gate feeding verification and rework | DONE (ADR-0051; automatic targeted rework deferred) |
 | 9.6 | Secure ZIP packaging, README and build report, download | NOT_STARTED |
 | 9.7 | Project UX, weighted progress and time-remaining range | NOT_STARTED |
 | 9.8 | End-to-end prompt → ZIP journey (mock provider); release v0.2.0 | NOT_STARTED |

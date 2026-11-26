@@ -204,6 +204,10 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   fresh `agentflow-sandbox/<profile>:<n>` container (built by `scripts/sandbox.ps1 build`, never pulled) on a throwaway
   copy: no network, read-only root, non-root, no capabilities, limits, timeout. `SandboxUnavailableError` means the
   check did not run: never report it as passed, never fall back to the host.
+- Integration gate (ADR-0051, `app/projects/integration_job.py`): software projects never auto-complete; reconcile and the
+  last apply request `project.integrate`; claim -> sandbox checks (`StackProfile.checks`) outside any transaction ->
+  finish (PASSED completes, else BLOCKED). The engine refuses COMPLETED without a latest PASSED `project_integrations`
+  row (`INTEGRATION_REQUIRED`); NOT_RUN is never a pass.
 - Workflow events are append-only.
 
 ## Security

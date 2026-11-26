@@ -37,6 +37,7 @@ from app.models.intervention import (
 )
 from app.models.plan import WorkflowPlan
 from app.models.pricing import ModelPrice, PricingVersion
+from app.models.project_integration import IntegrationStatus, ProjectIntegration
 from app.models.selection import AgentSelection
 from app.models.tenancy import User, Workspace, WorkspaceMember, WorkspaceRole
 from app.models.usage import CostBasis, LlmCallStatus, LlmUsage, UsageSource
@@ -91,6 +92,7 @@ __all__ = [
     "InterventionStatus",
     "InterventionSubject",
     "InterventionType",
+    "IntegrationStatus",
     "LlmCallStatus",
     "LlmUsage",
     "ModelPrice",
@@ -98,6 +100,7 @@ __all__ = [
     "OutboxStatus",
     "PauseReason",
     "PricingVersion",
+    "ProjectIntegration",
     "PlanStatus",
     "RefreshToken",
     "SessionRevocationReason",

@@ -22,9 +22,14 @@ class StackProfile:
     shared_files: tuple[str, ...]
     # The locally built sandbox image that checks this profile (ADR-0050).
     image: str
+    # The integration checks (ADR-0051): (name, fixed command) pairs run in `image`.
+    checks: tuple[tuple[str, tuple[str, ...]], ...]
     # Folders tests go in.
     test_paths: tuple[str, ...]
 
+
+# The image's preinstalled dependencies, linked into the throwaway copy of the project.
+_LINK_DEPS = "ln -sfn /opt/deps/node_modules node_modules"
 
 PROFILES: dict[str, StackProfile] = {
     profile.id: profile
@@ -38,6 +43,10 @@ PROFILES: dict[str, StackProfile] = {
             shared_files=("pyproject.toml", "README.md"),
             test_paths=("tests/",),
             image="agentflow-sandbox/python-3.12:1",
+            checks=(
+                ("compile", ("python", "-m", "compileall", "-q", ".")),
+                ("tests", ("python", "-m", "pytest", "-q", "-p", "no:cacheprovider")),
+            ),
         ),
         StackProfile(
             id="node-24-typescript",
@@ -55,6 +64,10 @@ PROFILES: dict[str, StackProfile] = {
             shared_files=("package.json", "tsconfig.json", "README.md"),
             test_paths=("tests/",),
             image="agentflow-sandbox/node-24-typescript:1",
+            checks=(
+                ("typecheck", ("sh", "-c", f"{_LINK_DEPS} && tsc -p . --noEmit")),
+                ("tests", ("sh", "-c", f"{_LINK_DEPS} && vitest run")),
+            ),
         ),
     )
 }

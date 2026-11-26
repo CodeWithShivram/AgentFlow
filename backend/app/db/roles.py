@@ -63,6 +63,8 @@ WORKER_GRANTS: dict[str, tuple[str, ...]] = {
     "approval_decisions": ("SELECT", "INSERT"),
     # Workspace applications (ADR-0049): written once per applied attempt; append-only.
     "workspace_applications": ("SELECT", "INSERT"),
+    # Integration runs (ADR-0051): recorded RUNNING, then finished once.
+    "project_integrations": ("SELECT", "INSERT", "UPDATE"),
     # Stored artifacts (ADR-0047): created by platform jobs; deletion marks the row.
     "artifacts": ("SELECT", "INSERT", "UPDATE"),
     # LangGraph checkpoints (ADR-0026): the library upserts; the hourly cleanup deletes.

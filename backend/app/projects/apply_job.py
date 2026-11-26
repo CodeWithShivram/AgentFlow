@@ -24,11 +24,14 @@ from app.models import (
     TaskStatus,
     Workflow,
     WorkflowKind,
+    WorkflowStatus,
     WorkflowTask,
     WorkspaceApplication,
     WorkspaceApplicationStatus,
 )
+from app.projects.integration_job import all_work_applied
 from app.projects.workspace import ProjectWorkspaces, WorkspaceError
+from app.workflows import engine
 
 logger = logging.getLogger("agentflow.projects")
 
@@ -135,6 +138,15 @@ def run(
         application.files_removed = change.files_removed
         application.tree_sha256 = change.tree_sha256
     session.add(application)
+    session.flush()
+    # The engine requests integration when the last task completes, which can be before its
+    # files are applied; the last apply asks again (ADR-0051).
+    if (
+        application.status == WorkspaceApplicationStatus.APPLIED
+        and workflow.status == WorkflowStatus.RUNNING
+        and all_work_applied(session, workflow)
+    ):
+        engine.request_integration(session, workflow)
     session.commit()
     outcome = application.status.value.lower()
     logger.info(
