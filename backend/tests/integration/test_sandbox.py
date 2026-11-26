@@ -14,6 +14,7 @@ from app.sandbox.runner import (
     DockerSandbox,
     SandboxLimits,
     SandboxUnavailableError,
+    container_user,
     redact,
 )
 
@@ -101,7 +102,9 @@ def test_root_filesystem_is_read_only_and_the_user_is_not_root(tmp_path: Path) -
         "open('/tmp/scratch.txt', 'w').write('ok')\n"
         "print('WORK-OK')\n"
     )
-    assert _python(tmp_path, code) == (0, "10001\nREAD-ONLY\nWORK-OK\n")
+    uid = container_user().split(":")[0]
+    assert uid != "0"  # never root
+    assert _python(tmp_path, code) == (0, f"{uid}\nREAD-ONLY\nWORK-OK\n")
     # Writes went to a throwaway copy, never to the source tree.
     assert not (tmp_path / "project" / "scratch.txt").exists()
 
@@ -210,3 +213,36 @@ def test_output_redaction() -> None:
     redacted = redact(text)
     assert "sk-abcdef" not in redacted and "pass@" not in redacted and "AKIA" not in redacted
     assert redacted.count("[redacted]") == 3
+
+
+@needs_python
+def test_folders_created_by_the_run_are_cleaned_up(tmp_path: Path) -> None:
+    # Regression (CI on Linux): folders the container creates in the copy (e.g. __pycache__
+    # from compileall) must belong to a user that can remove them afterwards.
+    import tempfile
+
+    before = set(Path(tempfile.gettempdir()).glob("agentflow-sbx-*"))
+    code = (
+        "import os\n"
+        "os.makedirs('/work/out/nested', exist_ok=True)\n"
+        "open('/work/out/nested/data.txt', 'w').write('x')\n"
+        "print('OK')\n"
+    )
+    project = _project(tmp_path, {"main.py": code, "src/mod.py": "VALUE = 1\n"})
+    compiled = DockerSandbox().run(PYTHON, project, ["python", "-m", "compileall", "-q", "."])
+    assert compiled.succeeded, compiled.output
+    assert DockerSandbox().run(PYTHON, project, ["python", "main.py"]).output == "OK\n"
+    assert set(Path(tempfile.gettempdir()).glob("agentflow-sbx-*")) == before
+    assert not (project / "out").exists() and not (project / "src" / "__pycache__").exists()
+
+
+def test_the_container_user_is_never_root(monkeypatch: pytest.MonkeyPatch) -> None:
+    import os
+
+    monkeypatch.setattr(os, "getuid", lambda: 1001, raising=False)
+    monkeypatch.setattr(os, "getgid", lambda: 121, raising=False)
+    assert container_user() == "1001:121"
+    monkeypatch.setattr(os, "getuid", lambda: 0, raising=False)
+    assert container_user() == "10001:10001"
+    monkeypatch.delattr(os, "getuid", raising=False)
+    assert container_user() == "10001:10001"

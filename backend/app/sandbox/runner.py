@@ -94,6 +94,21 @@ def copy_tree(source: Path, target: Path) -> None:
             shutil.copyfile(path, destination)
 
 
+IMAGE_USER = "10001:10001"
+
+
+def container_user() -> str:
+    """The user the container runs as: never root. On Linux and macOS it is the calling user,
+    so files the run creates in the throwaway copy (e.g. __pycache__ folders) belong to the
+    caller and can be removed afterwards; a root caller, and Windows (no uids; Docker Desktop
+    maps ownership itself), use the image's unprivileged user."""
+    getuid = getattr(os, "getuid", None)
+    getgid = getattr(os, "getgid", None)
+    if getuid is None or getgid is None or getuid() == 0:
+        return IMAGE_USER
+    return f"{getuid()}:{getgid()}"
+
+
 def _make_writable(root: Path) -> None:
     # The copy is throwaway; the container's non-root user must be able to write caches.
     for path in [root, *root.rglob("*")]:
@@ -136,7 +151,10 @@ class DockerSandbox:
         self.ensure_image(image)
         limits = self.limits
         name = f"agentflow-sbx-{uuid.uuid4().hex[:16]}"
-        with tempfile.TemporaryDirectory(prefix="agentflow-sbx-") as scratch:
+        # Best effort: a leftover copy must never fail a run whose results are known.
+        with tempfile.TemporaryDirectory(
+            prefix="agentflow-sbx-", ignore_cleanup_errors=True
+        ) as scratch:
             work = Path(scratch) / "work"
             work.mkdir()
             copy_tree(project, work)
@@ -148,7 +166,7 @@ class DockerSandbox:
                 "--tmpfs", f"/tmp:rw,nosuid,nodev,size={limits.tmpfs_mb}m",  # noqa: S108
                 "--cap-drop", "ALL",
                 "--security-opt", "no-new-privileges",
-                "--user", "10001:10001",
+                "--user", container_user(),
                 "--pids-limit", str(limits.pids),
                 "--memory", f"{limits.memory_mb}m",
                 "--memory-swap", f"{limits.memory_mb}m",

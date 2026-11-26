@@ -1580,3 +1580,15 @@ None.
 1. **Push Step 8.2** on the owner's go-ahead, and confirm CI on GitHub.
 2. **Step 8.3 (artifact management):** present a short plan and get the owner's go-ahead.
 3. **Before any hosted deployment:** settle OD-14, OD-19 and OD-20.
+
+## Post-release fix — sandbox cleanup on Linux (CI)
+- **Push:** `main` (`a1ca9cc..6332bcc`) and tag `v0.2.0` were pushed on the owner's go-ahead (2026-11-26). `frontend-ci` passed.
+- **`backend-ci` failure:** 1 of 1338 tests failed: `test_the_mock_project_passes_its_real_sandbox_checks` with `PermissionError: Operation not permitted`. The owner supplied the CI log line.
+  - **Cause:** the container ran as uid 10001, so `__pycache__` folders that `compileall` created in the throwaway copy belonged to 10001, and the runner (uid 1001) could not delete them when the temp folder was removed.
+  - **Why only CI:** Docker Desktop on Windows hides ownership. The other sandbox tests passed on CI because they created no folders in `/work`.
+- **Fix** (`app/sandbox/runner.py`, ADR-0050 amended):
+  - the container runs as the calling uid:gid on Linux and macOS, still never root (falls back to 10001 for a root caller or on Windows);
+  - temp-copy cleanup is best-effort, so a leftover folder cannot fail a finished run.
+- **Tests:** a cleanup regression test (nested folders and `compileall` output are removed) and a container-user test (never root). The uid assertion now expects the calling user.
+- **Local gate:** format, lint, `mypy app tests alembic` and `alembic check` clean; `uv run pytest` **1339 passed, 2 skipped**.
+- **Reproduction attempts:** unit (909 passed) and integration (419 passed, sandbox skipped) suites passed on Linux in local containers. Running the sandbox tests in a container with access to the host Docker daemon was not permitted, so the Linux fix is confirmed by CI.

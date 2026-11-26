@@ -32,7 +32,7 @@
   - `--network none`;
   - `--read-only` with a `/tmp` tmpfs (nosuid, nodev, 256 MiB);
   - `--cap-drop ALL` and `--security-opt no-new-privileges`;
-  - `--user 10001:10001`;
+  - a non-root user: the calling user's uid:gid on Linux and macOS, so files the run creates in the copy can be removed afterwards; image user 10001 on Windows or when the caller is root (never root);
   - `--pids-limit 256`, `--memory 1024m` (no swap) and `--cpus 1`;
   - `HOME=/tmp`.
 - **Nothing from the host is passed in.** No environment variables (Docker passes none unless asked, and tests prove host secrets are absent), no Docker socket, no other bind mounts.
