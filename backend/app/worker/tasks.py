@@ -14,12 +14,13 @@ from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
 from app.agents.contract import AgentSubmission, InvalidSubmissionError
 from app.agents.specialists import AgentRuntimeUnavailableError
+from app.artifacts.records import storage_from_settings
 from app.db.sync_session import get_worker_session_factory, session_scope
 from app.execution import cleanup, heartbeat, outbox, recovery, relay, runner
 from app.llm.gateway import ModelGatewayError, get_model_gateway
 from app.orchestration import job as orchestration_job
 from app.planning import analysis, plan
-from app.projects import apply_job, integration_job
+from app.projects import apply_job, integration_job, package_job
 from app.projects.workspace import ProjectWorkspaces
 from app.sandbox.runner import DockerSandbox
 from app.tools.gateway import ToolError
@@ -39,6 +40,7 @@ EVENT_ROUTES = {
     outbox.WORKFLOW_ORCHESTRATE: ("agentflow.orchestrate_workflow", EXECUTION_QUEUE),
     outbox.PROJECT_APPLY: ("agentflow.apply_to_workspace", EXECUTION_QUEUE),
     outbox.PROJECT_INTEGRATE: ("agentflow.integrate_project", EXECUTION_QUEUE),
+    outbox.PROJECT_PACKAGE: ("agentflow.package_project", EXECUTION_QUEUE),
 }
 # The identifiers each event's task needs; a payload missing one can never be consumed.
 _WORKFLOW_IDS = frozenset({"workspace_id", "workflow_id"})
@@ -51,6 +53,7 @@ REQUIRED_PAYLOAD = {
     outbox.WORKFLOW_ORCHESTRATE: _WORKFLOW_IDS,
     outbox.PROJECT_APPLY: _WORKFLOW_IDS | {"task_id"},
     outbox.PROJECT_INTEGRATE: _WORKFLOW_IDS,
+    outbox.PROJECT_PACKAGE: _WORKFLOW_IDS,
 }
 _FINISH_ATTEMPTS = 3
 # Default agent timeout (handoff section 6): 600 s. Hard limit gives the soft one room to finish.
@@ -371,3 +374,27 @@ def integrate_project(event_id: str, workspace_id: str, workflow_id: str) -> str
     outcome = integration_job.execute(DockerSandbox(), job)
     with session_scope(factory) as session:
         return integration_job.finish(session, workspaces, job, outcome)
+
+
+@celery_app.task(name="agentflow.package_project", soft_time_limit=300, time_limit=360)
+def package_project(
+    event_id: str,
+    workspace_id: str,
+    workflow_id: str,
+    partial: bool = False,
+    requested_by: str | None = None,
+) -> str:
+    """Packages a software project's deliverable (ADR-0052). Idempotent on `event_id`."""
+    with session_scope(get_worker_session_factory()) as session:
+        outcome = package_job.run(
+            session,
+            ProjectWorkspaces(settings.project_workspace_root),
+            storage_from_settings(settings),
+            event_id=uuid.UUID(event_id),
+            workspace_id=uuid.UUID(workspace_id),
+            workflow_id=uuid.UUID(workflow_id),
+            partial=partial,
+            requested_by=uuid.UUID(requested_by) if requested_by else None,
+        )
+    logger.info("project packaging", extra={"event_id": event_id, "outcome": outcome})
+    return outcome

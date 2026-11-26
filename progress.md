@@ -2,8 +2,30 @@
 
 ## Current position
 - Phase: 9 — Software project generation (ADR-0046; Phases 2–7 and Steps 8.1–8.2 complete; Phase 1 released as `v0.1.0`)
-- Last completed step: 9.5 — Project integration gate
-- Next step: 9.6 — Secure ZIP packaging, README and build report, download
+- Last completed step: 9.6 — Deliverable packaging
+- Next step: 9.7 — Project UX, weighted progress and time-remaining range
+
+## Step 9.6 — deliverable packaging (ADR-0052)
+- **Trigger:** a PASSED integration completes the project and requests `project.package`. An ADMIN may request a package with `POST …/packages` (BLOCKED, PAUSED or COMPLETED software projects only).
+- **Label:** decided from evidence. VERIFIED only for the commit of the latest PASSED integration; PARTIAL only on an admin's request (recorded).
+- **Package** (`app/projects/packaging.py`):
+  - Git-tracked files only, with path and link re-checks;
+  - the denylist (real `.env`, keys and certificates, databases, logs, VCS, dependency and cache folders);
+  - a secret scan (any hit: FAILED `SECRET_DETECTED`, a count only);
+  - limits (2,000 files, 2 MiB per file, 50 MiB in total);
+  - a reproducible ZIP under one folder, with `AGENTFLOW_BUILD_REPORT.md` and `AGENTFLOW_MANIFEST.json`, re-opened and verified.
+- **Storage:** the archive and report are stored as artifacts inside a savepoint (a failure stores nothing). Migration `0034` adds append-only `project_packages` (RLS) and changes `artifacts.deleted_by_user_id` to RESTRICT, because the trigger made SET NULL impossible.
+- **API:** `GET …/packages` (VIEWER) and `POST …/packages` (ADMIN). Downloads go through the artifacts API.
+- **Tests:** `tests/unit/test_packaging.py` (36) and `tests/integration/test_project_packaging.py` (5):
+  - an automatic VERIFIED package with its contents, report and manifest;
+  - no automatic package without a pass;
+  - an explicit PARTIAL package;
+  - a committed secret refusing the package and storing nothing;
+  - API rules.
+
+## Checks (Step 9.6)
+- **Full backend gate:** format, lint, `mypy app tests alembic` and `alembic check` all clean; `uv run pytest` **1331 passed, 2 skipped** (9 min 52 s).
+- **Dev database:** upgraded to `0034` and roles re-provisioned.
 
 ## Step 9.5 — project integration gate (ADR-0051)
 - **Checks:** `StackProfile.checks` are fixed sandbox commands:

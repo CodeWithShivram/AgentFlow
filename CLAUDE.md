@@ -208,6 +208,9 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   last apply request `project.integrate`; claim -> sandbox checks (`StackProfile.checks`) outside any transaction ->
   finish (PASSED completes, else BLOCKED). The engine refuses COMPLETED without a latest PASSED `project_integrations`
   row (`INTEGRATION_REQUIRED`); NOT_RUN is never a pass.
+- Packaging (ADR-0052, `app/projects/packaging.py`, `package_job.py`): only Git-tracked workspace files; denylist, secret
+  scan (any hit fails the whole package), limits, fixed-time archive re-verified, manifest and build report. VERIFIED
+  only for the commit of the latest PASSED integration; PARTIAL only on an ADMIN request. Archives are artifacts.
 - Workflow events are append-only.
 
 ## Security

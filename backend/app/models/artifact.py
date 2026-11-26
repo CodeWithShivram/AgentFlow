@@ -85,5 +85,5 @@ class Artifact(Base):
     created_at: Mapped[datetime] = created_at_column()
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deleted_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL")
+        ForeignKey("users.id", ondelete="RESTRICT")
     )

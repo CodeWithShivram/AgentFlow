@@ -7,7 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from app.models import IntegrationStatus, WorkspaceApplicationStatus
+from app.models import IntegrationStatus, PackageLabel, PackageStatus, WorkspaceApplicationStatus
 
 
 class IntegrationResponse(BaseModel):
@@ -31,4 +31,20 @@ class WorkspaceApplicationResponse(BaseModel):
     commit_sha: str | None
     files_written: int
     files_removed: int
+    created_at: datetime
+
+
+class PackageResponse(BaseModel):
+    """A packaging attempt (ADR-0052). Download READY archives through the artifacts API."""
+
+    id: uuid.UUID
+    workflow_id: uuid.UUID
+    head_sha: str
+    label: PackageLabel
+    status: PackageStatus
+    error_code: str | None
+    archive_artifact_id: uuid.UUID | None
+    report_artifact_id: uuid.UUID | None
+    file_count: int
+    excluded_count: int
     created_at: datetime

@@ -236,6 +236,7 @@ def finish(
                 session, workflow, WorkflowStatus.COMPLETED, actor=Actor.SYSTEM,
                 reason="integration checks passed",
             )  # fmt: skip
+            engine.request_package(session, workflow)
         else:
             engine.transition_workflow(
                 session, workflow, WorkflowStatus.BLOCKED, actor=Actor.SYSTEM,

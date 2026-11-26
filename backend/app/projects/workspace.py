@@ -143,6 +143,11 @@ class ProjectWorkspaces:
             self._git(project, "commit", "--quiet", "--allow-empty", "-m", "Start project")
         return project
 
+    def tracked_files(self, project: Path) -> list[str]:
+        """The files committed at HEAD (relative, `/`-separated)."""
+        output = self._git(project, "ls-files", "-z")
+        return [path for path in output.split("\0") if path]
+
     def head(self, project: Path) -> str:
         sha = self._git(project, "rev-parse", "HEAD")
         if not _SHA.fullmatch(sha):

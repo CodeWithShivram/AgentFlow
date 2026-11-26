@@ -43,6 +43,7 @@ EXPECTED_TABLES = {
     "human_interventions",
     "approval_decisions",
     "project_integrations",
+    "project_packages",
     "artifacts",
     "workspace_applications",
     "verification_results",

@@ -36,6 +36,8 @@ WORKFLOW_PLAN = "workflow.plan"
 PROJECT_APPLY = "project.apply"
 # Asks a worker to run a software project's integration gate (ADR-0051).
 PROJECT_INTEGRATE = "project.integrate"
+# Asks a worker to package a software project's deliverable (ADR-0052).
+PROJECT_PACKAGE = "project.package"
 # Asks the orchestration graph to reassess a workflow (ADR-0025).
 WORKFLOW_ORCHESTRATE = "workflow.orchestrate"
 _MAX_BACKOFF_SECONDS = 300

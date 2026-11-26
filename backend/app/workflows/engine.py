@@ -605,6 +605,26 @@ def request_integration(session: _AddsRows, workflow: Workflow) -> uuid.UUID:
     )
 
 
+def request_package(
+    session: _AddsRows, workflow: Workflow, *, partial_by: uuid.UUID | None = None
+) -> uuid.UUID:
+    """Writes a `project.package` outbox row (identifiers only, ADR-0052). `partial_by` is the
+    admin who explicitly asked for a PARTIAL package of a project that did not pass."""
+    payload: dict[str, Any] = {
+        "workspace_id": str(workflow.workspace_id),
+        "workflow_id": str(workflow.id),
+    }
+    if partial_by is not None:
+        payload.update(partial=True, requested_by=str(partial_by))
+    return outbox.enqueue(
+        session,
+        outbox.PROJECT_PACKAGE,
+        workspace_id=workflow.workspace_id,
+        workflow_id=workflow.id,
+        payload=payload,
+    )
+
+
 def _require_integration_passed(session: Session, workflow: Workflow) -> None:
     """A software project completes only after its latest finished integration PASSED."""
     latest = session.execute(
