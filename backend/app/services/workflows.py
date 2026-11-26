@@ -164,6 +164,7 @@ async def create_workflow(
         workspace_id=access.workspace_id,
         created_by_user_id=access.user_id,
         prompt=request.prompt,
+        kind=request.kind,
         status=W.PENDING,
         autonomy_policy=settings.autonomy_policy,
         budget_limit=settings.budget_limit,

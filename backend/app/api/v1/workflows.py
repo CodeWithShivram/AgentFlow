@@ -92,6 +92,8 @@ def _task(task: WorkflowTask, depends_on: list[uuid.UUID]) -> TaskResponse:
         updated_at=task.updated_at,
         started_at=task.started_at,
         completed_at=task.completed_at,
+        file_scope=task.file_scope,
+        effort_points=task.effort_points,
     )
 
 

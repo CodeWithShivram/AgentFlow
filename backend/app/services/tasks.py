@@ -28,6 +28,7 @@ from app.models import (
     TaskStatus,
     Workflow,
     WorkflowEventType,
+    WorkflowKind,
     WorkflowPlan,
     WorkflowStatus,
     WorkflowTask,
@@ -35,6 +36,7 @@ from app.models import (
 )
 from app.planning.dag import analyse_plan
 from app.planning.schema import PlanProposal
+from app.projects.scope import covers, overlaps
 from app.repositories import agents as agents_repository
 from app.repositories import workflows as repository
 from app.schemas.agents import AgentConfiguration
@@ -557,6 +559,33 @@ async def cancel_task(
     return task
 
 
+def _project_issues(
+    workflow: Workflow, proposal: PlanProposal, kept: list[WorkflowTask]
+) -> list[str]:
+    """Why a draft cannot become a software project's (or a general workflow's) tasks
+    (ADR-0048): the plan kind must match the workflow kind, the stack profile never changes
+    once confirmed, new tasks never own files that kept tasks own, and every shared file of
+    the profile has an owner among the new and kept tasks."""
+    if workflow.kind != WorkflowKind.SOFTWARE_PROJECT:
+        return ["PROJECT_PLAN_UNEXPECTED"] if proposal.project is not None else []
+    if proposal.project is None:
+        return ["PROJECT_PLAN_REQUIRED"]
+    issues = []
+    confirmed = workflow.project_spec or {}
+    if any(
+        not any(covers(entry, shared) for task in kept for entry in task.file_scope)
+        for shared in proposal.unowned_shared_files()
+    ):
+        issues.append("SHARED_FILE_UNOWNED")
+    if confirmed and confirmed.get("stack_profile") != proposal.project.stack_profile:
+        issues.append("PROJECT_PROFILE_CHANGED")
+    owned = [entry for task in kept for entry in task.file_scope]
+    new = [entry for task in proposal.tasks for entry in task.file_scope]
+    if any(overlaps(a, b) for a in owned for b in new):
+        issues.append("FILE_SCOPE_OVERLAP")
+    return issues
+
+
 async def confirm_plan_draft(
     session: AsyncSession,
     access: WorkspaceAccess,
@@ -595,6 +624,11 @@ async def confirm_plan_draft(
     active = [t for t in await repository.list_tasks(session, workflow) if t.removed_at is None]
     if active and existing_tasks is None:
         raise ExistingTasksModeRequiredError(details={"existing_tasks": len(active)})
+    project_issues = _project_issues(
+        workflow, proposal, active if existing_tasks == "append" else []
+    )
+    if project_issues:
+        raise PlanDraftInvalidError(details={"codes": project_issues})
 
     await _open_plan_for_edit(session, workflow)
     removed = 0
@@ -615,6 +649,8 @@ async def confirm_plan_draft(
         else []
     )
     workflow.confirmed_plan_version = version
+    if proposal.project is not None:
+        workflow.project_spec = proposal.project.model_dump(mode="json")
     record_event(
         session,
         workflow,
@@ -660,6 +696,8 @@ async def _add_planned_tasks(
             acceptance_criteria=[c.model_dump() for c in planned.acceptance_criteria],
             deliverables=list(planned.deliverables),
             priority=planned.priority,
+            file_scope=list(planned.file_scope),
+            effort_points=planned.effort_points,
             required=planned.required,
             status=T.PENDING,
             revision=1,
@@ -746,6 +784,11 @@ async def _confirm_replan(
     )
     if report.has_errors:
         raise PlanDraftInvalidError(details={"codes": [i.code for i in report.issues]})
+    project_issues = _project_issues(
+        workflow, proposal, [t for t in active if t.status == T.COMPLETED]
+    )
+    if project_issues:
+        raise PlanDraftInvalidError(details={"codes": project_issues})
     warnings = sorted({i.code for i in report.issues if i.severity == "warning"})
     if warnings and not acknowledge_warnings:
         raise PlanWarningsNotAcknowledgedError(details={"codes": warnings})

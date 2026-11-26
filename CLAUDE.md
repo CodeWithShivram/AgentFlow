@@ -191,6 +191,10 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   names go through `safe_filename`, media types through `media_type_for`. Only platform code creates artifacts
   (`records.store_artifact`; no upload API). Downloads verify size and SHA-256 first; a trigger allows only
   AVAILABLE -> DELETED. Never return storage keys or paths to clients.
+- Software projects (ADR-0048): `workflows.kind = SOFTWARE_PROJECT` plans with schema version 2 (`project` + per-task
+  `file_scope`/`effort_points`) on a curated profile from `app/projects/profiles.py` (immutable; new deps = new id).
+  Scope matching lives only in `app/projects/scope.py` (case-insensitive; folders end in `/`); scopes of different
+  tasks never overlap and every profile shared file has exactly one owner. General workflows keep version 1 plans.
 - Workflow events are append-only.
 
 ## Security

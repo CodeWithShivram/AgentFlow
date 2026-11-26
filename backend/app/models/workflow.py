@@ -70,6 +70,13 @@ class PlanStatus(StrEnum):
     FAILED = "FAILED"
 
 
+class WorkflowKind(StrEnum):
+    # ADR-0048: a general multi-agent workflow, or a software project (Phase 9) whose plan
+    # is a version 2 plan with a stack profile and file ownership.
+    GENERAL = "GENERAL"
+    SOFTWARE_PROJECT = "SOFTWARE_PROJECT"
+
+
 class AutonomyPolicy(StrEnum):
     # approval_required: a plan must be approved (AWAITING_APPROVAL) before it can run.
     # autonomous: a submitted plan goes straight to READY.
@@ -152,6 +159,9 @@ class Workflow(Base):
             "(status = 'PAUSED') = (pause_reason IS NOT NULL AND paused_at IS NOT NULL)",
             name="paused_iff_reason",
         ),
+        CheckConstraint(
+            "project_spec IS NULL OR kind = 'SOFTWARE_PROJECT'", name="project_spec_for_projects"
+        ),
         Index("ix_workflows_workspace_id_created_at", "workspace_id", "created_at"),
         Index("ix_workflows_workspace_id_status", "workspace_id", "status"),
     )
@@ -196,6 +206,13 @@ class Workflow(Base):
     allow_dynamic_agent_proposals: Mapped[bool] = mapped_column(
         server_default=text("false"), default=False
     )
+    kind: Mapped[WorkflowKind] = mapped_column(
+        str_enum(WorkflowKind, "kind"),
+        default=WorkflowKind.GENERAL,
+        server_default=text("'GENERAL'"),
+    )
+    # A software project's ProjectSpec from its confirmed plan (ADR-0048); NULL otherwise.
+    project_spec: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True))
     # Optimistic concurrency for user edits; mutations also lock the row (ADR-0009).
     revision: Mapped[int] = mapped_column(server_default=text("1"), default=1)
     created_at: Mapped[datetime] = created_at_column()
@@ -241,6 +258,9 @@ class WorkflowTask(Base):
         CheckConstraint("revision >= 1", name="revision_positive"),
         # A task removed from the plan stays as history, CANCELLED.
         CheckConstraint("removed_at IS NULL OR status = 'CANCELLED'", name="removed_is_cancelled"),
+        CheckConstraint(
+            "effort_points IS NULL OR effort_points BETWEEN 1 AND 13", name="effort_points_range"
+        ),
         Index("ix_workflow_tasks_workflow_id_status", "workflow_id", "status"),
         Index("ix_workflow_tasks_workspace_id_status", "workspace_id", "status"),
     )
@@ -254,6 +274,9 @@ class WorkflowTask(Base):
     required_skills: Mapped[list[str]] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
     input_references: Mapped[list[Any]] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
     expected_output_schema: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    # Software projects only (ADR-0048): the files this task alone may write, and its effort.
+    file_scope: Mapped[list[str]] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
+    effort_points: Mapped[int | None]
     # Expected deliverables, part of the task contract (ADR-0018).
     deliverables: Mapped[list[str]] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
     acceptance_criteria: Mapped[list[Any]] = mapped_column(

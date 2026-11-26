@@ -2,8 +2,36 @@
 
 ## Current position
 - Phase: 9 — Software project generation (ADR-0046; Phases 2–7 and Steps 8.1–8.2 complete; Phase 1 released as `v0.1.0`)
-- Last completed step: 9.1 — Artifact storage (was 8.3)
-- Next step: 9.2 — Software project kind and plan schema v2
+- Last completed step: 9.2 — Software project kind and plan schema v2
+- Next step: 9.3 — Project workspace (the platform applies verified proposals with ownership checks)
+
+## Step 9.2 — software project workflows and plan schema v2 (ADR-0048)
+- **Kind:** migration `0031` adds:
+  - `workflows.kind` (GENERAL by default) and `workflows.project_spec` (software projects only, check constraint);
+  - `workflow_tasks.file_scope` and `effort_points` (1–13, check constraint).
+
+  The API takes `kind` on creation and returns the new fields.
+- **Stack profiles** (`app/projects/profiles.py`): `python-3.12` and `node-24-typescript`, each with fixed dependencies, shared files and test folders.
+- **Scopes** (`app/projects/scope.py`): exact files or folders ending in `/`, compared case-insensitively, with the Developer path rules. `outputs._safe_relative_path` became the public `safe_relative_path`.
+- **Plan schema v2:**
+  - every task has a scope and an effort, and scopes are disjoint;
+  - `unowned_shared_files()` reports the profile files no task owns;
+  - version 1 stays as it was.
+- **Planner:**
+  - prompt `software_plan/v1` with `<stack_profiles>` as delimited data;
+  - kind, profile and shared-file checks retry wrong-kind replies;
+  - deterministic mock project plans and replans.
+- **Confirmation:**
+  - copies scope, effort and project;
+  - refuses wrong-kind plans, profile changes, overlaps with kept tasks, and unowned shared files.
+- **Tests:** the shared `jobs` fixture moved from `test_plan_generation.py` into `tests/integration/conftest.py`.
+- **Not yet:** the frontend does not offer the kind (Step 9.7), and the contract does not yet carry the scope (Step 9.3).
+
+## Checks (Step 9.2)
+- **Targeted:** `tests/unit/test_project_plans.py` (20), `tests/integration/test_software_projects.py` (4) and `test_plan_generation.py` (18): 42 passed.
+- **Full backend gate:** format, lint, `mypy app tests alembic` and `alembic check` all clean; `uv run pytest` **1255 passed, 1 skipped** (15 min 25 s).
+- **Dev database:** upgraded to `0031` and roles re-provisioned.
+- **Frontend:** unchanged in this step (the new response fields are additive).
 
 ## Step 9.1 — artifact storage (ADR-0047)
 - **Storage:** `app/artifacts/storage.py` (`LocalArtifactStorage`), under `ARTIFACT_STORAGE_ROOT` (default `~/.agentflow/artifacts`; must be absolute and outside the repository).

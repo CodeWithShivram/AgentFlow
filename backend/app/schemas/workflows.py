@@ -26,6 +26,7 @@ from app.models import (
     ToolInvocationStatus,
     VerificationOutcome,
     WorkflowEventType,
+    WorkflowKind,
     WorkflowStatus,
 )
 from app.schemas.agents import Capability, SafeText, Slug, not_blank
@@ -69,6 +70,8 @@ class WorkflowCreateRequest(BaseModel):
     model_config = _FORBID
 
     prompt: Annotated[str, StringConstraints(min_length=1, max_length=MAX_PROMPT_LENGTH)]
+    # SOFTWARE_PROJECT plans a software project with a stack profile (ADR-0048).
+    kind: WorkflowKind = WorkflowKind.GENERAL
     settings: WorkflowSettings = WorkflowSettings()
 
     @field_validator("prompt")
@@ -220,6 +223,9 @@ class WorkflowResponse(BaseModel):
     updated_at: datetime
     started_at: datetime | None
     completed_at: datetime | None
+    kind: WorkflowKind = WorkflowKind.GENERAL
+    # A software project's confirmed ProjectSpec (ADR-0048).
+    project_spec: dict[str, Any] | None = None
     # Set while PAUSED (ADR-0036). `pause_note` is a person's text: plain text only.
     pause_reason: PauseReason | None = None
     paused_by_user_id: uuid.UUID | None = None
@@ -250,6 +256,9 @@ class TaskResponse(BaseModel):
     updated_at: datetime
     started_at: datetime | None
     completed_at: datetime | None
+    # Software projects only (ADR-0048).
+    file_scope: list[str] = []
+    effort_points: int | None = None
 
 
 class WorkflowEventResponse(BaseModel):

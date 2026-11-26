@@ -30,7 +30,7 @@ _MAX_SEGMENTS = 12
 _MAX_DELIVERABLE_NOTE = 20_000
 
 
-def _safe_relative_path(value: str) -> str:
+def safe_relative_path(value: str) -> str:
     """A relative POSIX path inside a workspace: no traversal, absolute paths, drive letters,
     Windows separators, alternate data streams or secret-holding folders."""
     if value != value.strip() or "\\" in value or value.startswith("/"):
@@ -60,7 +60,7 @@ class ProposedFile(BaseModel):
     purpose: Text
     content: Annotated[SafeText, StringConstraints(max_length=50_000)]
 
-    _path = field_validator("path")(_safe_relative_path)
+    _path = field_validator("path")(safe_relative_path)
 
 
 def _deliverable_notes(model: BaseModel) -> None:

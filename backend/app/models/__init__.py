@@ -51,6 +51,7 @@ from app.models.workflow import (
     Workflow,
     WorkflowEvent,
     WorkflowEventType,
+    WorkflowKind,
     WorkflowStatus,
     WorkflowTask,
 )
@@ -108,6 +109,7 @@ __all__ = [
     "WorkflowEvent",
     "WorkflowEventType",
     "WorkflowPlan",
+    "WorkflowKind",
     "WorkflowStatus",
     "WorkflowTask",
     "Workspace",

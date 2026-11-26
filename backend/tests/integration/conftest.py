@@ -263,3 +263,50 @@ def admin_factory(api_settings: Settings) -> Iterator[Any]:
         yield create_worker_session_factory(engine)
     finally:
         engine.dispose()
+
+
+# --- planning jobs -----------------------------------------------------------------------------
+
+
+@pytest.fixture
+def jobs(api_settings: Settings, worker_factory: Any) -> dict[str, Any]:
+    """Runs the analysis or plan job for one outbox event, as the restricted worker role, with
+    the mock model provider (or a given `MockModelAdapter`)."""
+    from functools import partial
+
+    from app.db.sync_session import session_scope
+    from app.llm.gateway import ModelGateway
+    from app.llm.mock import MockModelAdapter
+    from app.models import OutboxEvent
+    from app.planning import analysis, plan
+    from app.services.usage import record_model_call
+
+    def gateway(adapter: MockModelAdapter | None) -> ModelGateway:
+        recorder = partial(record_model_call, worker_factory)
+        return ModelGateway(api_settings, adapter or MockModelAdapter(), recorder)
+
+    def run_analysis(event: OutboxEvent, adapter: MockModelAdapter | None = None) -> str:
+        assert event.workflow_id is not None
+        with session_scope(worker_factory) as s:
+            job = analysis.claim(
+                s, event_id=event.id, workspace_id=event.workspace_id, workflow_id=event.workflow_id
+            )
+        if isinstance(job, analysis.Skipped):
+            return job.value
+        outcome = analysis.analyse(gateway(adapter), job, sleep=lambda _: None)
+        with session_scope(worker_factory) as s:
+            return analysis.finish(s, job, outcome)
+
+    def run_plan(event: OutboxEvent, adapter: MockModelAdapter | None = None) -> str:
+        assert event.workflow_id is not None
+        with session_scope(worker_factory) as s:
+            job = plan.claim(
+                s, event_id=event.id, workspace_id=event.workspace_id, workflow_id=event.workflow_id
+            )
+        if isinstance(job, plan.Skipped):
+            return job.value
+        outcome = plan.generate(gateway(adapter), job, sleep=lambda _: None)
+        with session_scope(worker_factory) as s:
+            return plan.finish(s, job, outcome)
+
+    return {"analysis": run_analysis, "plan": run_plan}

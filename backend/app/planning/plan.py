@@ -42,11 +42,13 @@ from app.models import (
     TaskStatus,
     Workflow,
     WorkflowEventType,
+    WorkflowKind,
     WorkflowPlan,
     WorkflowStatus,
     WorkflowTask,
 )
 from app.planning.schema import MAX_TASKS, PlannedTask, PlanProposal
+from app.projects.profiles import PROFILES
 from app.workflows import engine
 
 __all__ = [
@@ -73,6 +75,8 @@ PURPOSE = "plan_generation"
 # v2 (ADR-0035): people's answers to the analysis questions are part of the input.
 PROMPT_VERSION = "plan_generation/v2"
 REPLAN_PROMPT_VERSION = "replan/v2"
+# ADR-0048: software project plans (schema version 2).
+SOFTWARE_PROMPT_VERSION = "software_plan/v1"
 # Workflows whose remaining work is replanned instead of planned (ADR-0033).
 REPLAN_STATUSES = frozenset({WorkflowStatus.PAUSED, WorkflowStatus.BLOCKED})
 CONSUMER = "plan_workflow"
@@ -109,6 +113,36 @@ This is a replan: the workflow already ran. Plan only the work that remains.
 
 def _delimited(tag: str, text: str) -> str:
     return f"<{tag}>\n{text.replace(f'</{tag}>', f'</ {tag}>')}\n</{tag}>"
+
+
+# Software projects (ADR-0048): a version 2 plan on a curated stack profile.
+_SOFTWARE = """
+This is a SOFTWARE PROJECT: plan a coherent, runnable, tested source-code project.
+- Return schema_version 2 with a `project`: a short slug `name`, a `stack_profile` from
+  <stack_profiles>, an `architecture` summary and explicit `assumptions`.
+- Use only the language runtime and third-party dependencies of the chosen profile.
+- Every task owns a `file_scope`: exact files (`pyproject.toml`) or folders ending in `/`
+  (`src/app/`). No two tasks may own overlapping files, and each of the profile's shared files
+  is owned by exactly one task (usually a first setup task the others depend on).
+- Give every task `effort_points` from 1 (trivial) to 13 (largest).
+- Include tests under the profile's test folders and a README with setup, run and test steps.
+- Never plan secrets, real credentials or files named .env; use .env.example placeholders."""
+
+
+def _profiles_section(stack_profile: str | None) -> str:
+    profiles = [PROFILES[stack_profile]] if stack_profile else list(PROFILES.values())
+    data = [
+        {
+            "id": p.id,
+            "title": p.title,
+            "runtime": p.runtime,
+            "dependencies": list(p.dependencies),
+            "shared_files": list(p.shared_files),
+            "test_paths": list(p.test_paths),
+        }
+        for p in profiles
+    ]
+    return _delimited("stack_profiles", json.dumps(data, sort_keys=True))
 
 
 def replan_basis(
@@ -155,6 +189,31 @@ def answered_clarifications(session: Session, workflow: Workflow) -> list[dict[s
     ]
 
 
+def confirmed_profile(workflow: Workflow) -> str | None:
+    """The stack profile of a software project's confirmed plan, if any."""
+    profile = (workflow.project_spec or {}).get("stack_profile")
+    return profile if isinstance(profile, str) and profile in PROFILES else None
+
+
+def project_issue(
+    kind: WorkflowKind,
+    stack_profile: str | None,
+    proposal: PlanProposal,
+    *,
+    replan: bool = False,
+) -> str | None:
+    """Why a valid proposal is still the wrong kind of plan for its workflow (ADR-0048)."""
+    if kind != WorkflowKind.SOFTWARE_PROJECT:
+        return "PLAN_PROJECT_UNEXPECTED" if proposal.project is not None else None
+    if proposal.project is None:
+        return "PLAN_PROJECT_MISSING"
+    if stack_profile is not None and proposal.project.stack_profile != stack_profile:
+        return "PLAN_PROFILE_CHANGED"
+    if not replan and proposal.unowned_shared_files():
+        return "PLAN_SHARED_FILE_UNOWNED"
+    return None
+
+
 def build_request(
     workflow: Workflow,
     replan: tuple[list[dict[str, Any]], list[dict[str, Any]]] | None = None,
@@ -174,6 +233,10 @@ def build_request(
     ]
     if clarifications:
         parts.append(_delimited("clarifications", json.dumps(clarifications, sort_keys=True)))
+    if workflow.kind == WorkflowKind.SOFTWARE_PROJECT:
+        system += _SOFTWARE
+        # A confirmed project keeps its profile: replans see only that one.
+        parts.append(_profiles_section(confirmed_profile(workflow)))
     if replan is not None:
         basis, unfinished = replan
         system += _REPLAN
@@ -230,10 +293,84 @@ def mock_replan(text: str) -> str:
     return json.dumps(plan)
 
 
+def _mock_task(
+    key: str, title: str, scope: list[str], effort: int, depends_on: list[str]
+) -> dict[str, Any]:
+    return {
+        "key": key,
+        "title": title,
+        "description": f"{title} (planned by the mock model provider; no real model).",
+        "required_skills": ["code_generation"],
+        "deliverables": [f"Files for: {title}"],
+        "acceptance_criteria": [{"id": "c1", "description": f"{title} is complete and tested."}],
+        "priority": 0,
+        "required": True,
+        "depends_on": depends_on,
+        "file_scope": scope,
+        "effort_points": effort,
+    }
+
+
+def mock_software_plan(text: str) -> str:
+    """A deterministic version 2 plan on the first offered profile: setup (owning the shared
+    files), the application code, then its tests."""
+    profiles = _section("stack_profiles", text)
+    profile = profiles[0] if profiles else {"id": "python-3.12", "shared_files": []}
+    shared = list(profile.get("shared_files", []))
+    plan = {
+        "schema_version": 2,
+        "summary": "Mock software project plan",
+        "project": {
+            "name": "mock-project",
+            "stack_profile": profile["id"],
+            "architecture": "A small application module with automated tests.",
+            "assumptions": ["Drafted by the mock model provider (no real model)."],
+        },
+        "tasks": [
+            _mock_task("t1", "Set up the project", [*shared, ".env.example"], 2, []),
+            _mock_task("t2", "Implement the application", ["src/"], 5, ["t1"]),
+            _mock_task("t3", "Write the automated tests", ["tests/"], 3, ["t2"]),
+        ],
+        "risks": ["Plan drafted by the mock model provider (no real model)."],
+    }
+    return json.dumps(plan)
+
+
+def mock_software_replan(text: str) -> str:
+    """A version 2 replan: one task per unfinished task, each in its own folder."""
+    profiles = _section("stack_profiles", text)
+    profile_id = profiles[0]["id"] if profiles else "python-3.12"
+    unfinished = _section("unfinished_tasks", text) or [{"title": "Finish the project"}]
+    completed = [c["key"] for c in _section("completed_tasks", text)]
+    tasks = []
+    for index, item in enumerate(unfinished[:MAX_TASKS], start=1):
+        task = _mock_task(
+            f"t{index}", f"Redo: {str(item['title'])[:280]}", [f"src/part{index}/"], 3, []
+        )
+        task["depends_on_completed"] = completed
+        tasks.append(task)
+    plan = {
+        "schema_version": 2,
+        "summary": "Replan of the remaining work",
+        "project": {
+            "name": "mock-project",
+            "stack_profile": profile_id,
+            "architecture": "Unchanged.",
+        },
+        "tasks": tasks,
+        "risks": ["Replan drafted by the mock model provider (no real model)."],
+    }
+    return json.dumps(plan)
+
+
 def mock_plan(request: ModelRequest) -> str:
     """A plausible, deterministic draft derived from the analysis in the request: one task per
     requirement, run in parallel, then a consolidation task that depends on all of them."""
     text = request.messages[-1].content
+    if "<stack_profiles>" in text:
+        if "<unfinished_tasks>" in text:
+            return mock_software_replan(text)
+        return mock_software_plan(text)
     if "<unfinished_tasks>" in text:
         return mock_replan(text)
     match = re.search(r"<analysis>\n(.*?)\n</analysis>", text, re.S)
@@ -303,6 +440,9 @@ class PlanJob:
     workflow_id: uuid.UUID
     context: CallContext
     request: ModelRequest
+    # Software projects (ADR-0048): the workflow kind and a confirmed plan's stack profile.
+    kind: WorkflowKind = WorkflowKind.GENERAL
+    stack_profile: str | None = None
     # A replan's completed tasks (ADR-0033); None for a plan.
     basis: list[dict[str, Any]] | None = None
 
@@ -359,6 +499,8 @@ def claim(
         context=CallContext(workspace_id=workflow.workspace_id, workflow_id=workflow.id),
         request=build_request(workflow, replan, answered_clarifications(session, workflow)),
         basis=replan[0] if replan else None,
+        kind=workflow.kind,
+        stack_profile=confirmed_profile(workflow),
     )
     session.commit()
     return job
@@ -378,6 +520,12 @@ def generate(
             continue
         if response.parsed is None:  # a response_format was requested, so this cannot happen
             raise RuntimeError("gateway returned no parsed output")
+        issue = project_issue(
+            job.kind, job.stack_profile, response.parsed, replan=job.basis is not None
+        )
+        if issue is not None:
+            last_code = issue  # invalid output: retried
+            continue
         known = {item["key"] for item in job.basis or []}
         if any(set(t.depends_on_completed) - known for t in response.parsed.tasks):
             last_code = "PLAN_UNKNOWN_COMPLETED_TASK"  # invalid output: retried
@@ -418,7 +566,13 @@ def finish(session: Session, job: PlanJob, outcome: PlanProposal | PlanFailure) 
         ).scalar_one()
         version = (latest or 0) + 1
         replan = job.basis is not None
-        prompt_version = REPLAN_PROMPT_VERSION if replan else PROMPT_VERSION
+        prompt_version = (
+            REPLAN_PROMPT_VERSION
+            if replan
+            else SOFTWARE_PROMPT_VERSION
+            if outcome.project is not None
+            else PROMPT_VERSION
+        )
         session.add(
             WorkflowPlan(
                 workspace_id=workflow.workspace_id,
