@@ -2,8 +2,32 @@
 
 ## Current position
 - Phase: 9 — Software project generation (ADR-0046; Phases 2–7 and Steps 8.1–8.2 complete; Phase 1 released as `v0.1.0`)
-- Last completed step: 9.0 — Rebaseline and Phase 9 plan (docs only)
-- Next step: 9.1 — Artifact storage (was 8.3)
+- Last completed step: 9.1 — Artifact storage (was 8.3)
+- Next step: 9.2 — Software project kind and plan schema v2
+
+## Step 9.1 — artifact storage (ADR-0047)
+- **Storage:** `app/artifacts/storage.py` (`LocalArtifactStorage`), under `ARTIFACT_STORAGE_ROOT` (default `~/.agentflow/artifacts`; must be absolute and outside the repository).
+  - Keys are `<workspace_id>/<artifact_id>` only; their containment is checked.
+  - Symlinks and junctions are refused.
+  - Writes are atomic and size-limited (`ARTIFACT_MAX_BYTES`, default 200 MiB) and hashed with SHA-256.
+  - Reads verify size and SHA-256 first.
+- **Records:** migration `0030` adds `artifacts`:
+  - composite FKs, RLS tenant and platform policies, worker SELECT/INSERT/UPDATE;
+  - a trigger that keeps identity immutable and allows only AVAILABLE → DELETED.
+  - Only platform code creates artifacts (`app/artifacts/records.store_artifact`), and there is no upload API.
+- **API:** `GET …/workflows/{id}/artifacts`, `GET …/artifacts/{id}` and `GET …/artifacts/{id}/download` (VIEWER), and `DELETE …/artifacts/{id}` (ADMIN).
+  - Downloads are verified, served as attachments with `nosniff`, `no-store`, a sandbox CSP and `X-Checksum-SHA256`.
+  - Storage keys and paths are never returned.
+- **Not built:** an orphan-file sweep (tracked for 8.6) and automatic retention.
+
+## Checks (Step 9.1)
+- **Targeted:**
+  - `uv run pytest tests/unit/test_artifact_storage.py`: 25 passed, 1 skipped (symlinked file: Windows needs a privilege; the directory case runs through a junction);
+  - `tests/integration/test_artifacts.py`, `test_row_level_security.py` and `test_migrations.py`: 25 passed.
+- **Full backend gate:** `ruff format --check`, `ruff check`, `mypy app tests alembic` and `alembic check` all clean; `uv run pytest` **1231 passed, 1 skipped** (18 min 29 s).
+- **Smoke:** API on :8010 (`uvicorn … --port 8010`); `/health/live` returned 200 and an unauthenticated artifacts list returned 401; the server was stopped by PID.
+- **Dev database:** upgraded to `0030` and roles re-provisioned.
+- **Frontend:** unchanged in this step.
 
 ## Step 9.0 — rebaseline and product direction (ADR-0046)
 - **Trigger:** the owner supplied `docs/AgentFlow_Claude_Code_Master_Playbook.txt` (2026-11-26). Its repository snapshot (HEAD at Step 1.8) was stale; the repository at `a1ca9cc` (Step 8.2) is the source of truth.

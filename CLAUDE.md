@@ -186,6 +186,11 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
 - Analytics and report UI (ADR-0045): `tz` (validated IANA name, bound parameter) only cuts days for
   `group_by=day`. Charts plot one measure on one axis, never a cost summed across bases, and always have a table
   view. The report's timeline drops people's free text (event `reason`).
+- Artifacts (ADR-0047, `app/artifacts/`): bytes only in `LocalArtifactStorage` under `ARTIFACT_STORAGE_ROOT` (outside
+  the repo), metadata in `artifacts` (RLS). Keys are `<workspace_id>/<artifact_id>` from UUIDs, never from names; file
+  names go through `safe_filename`, media types through `media_type_for`. Only platform code creates artifacts
+  (`records.store_artifact`; no upload API). Downloads verify size and SHA-256 first; a trigger allows only
+  AVAILABLE -> DELETED. Never return storage keys or paths to clients.
 - Workflow events are append-only.
 
 ## Security

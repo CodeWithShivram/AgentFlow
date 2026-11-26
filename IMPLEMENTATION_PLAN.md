@@ -207,7 +207,7 @@ Inserted by the owner on 2026-11-26 from `docs/AgentFlow_Claude_Code_Master_Play
 | Step | Title | Status |
 |---|---|---|
 | 9.0 | Rebaseline, product direction ADR and Phase 9 plan (docs only) | DONE (ADR-0046) |
-| 9.1 | Artifact storage: storage interface, local root, checksums, RLS-scoped metadata, download API (was 8.3) | NOT_STARTED |
+| 9.1 | Artifact storage: storage interface, local root, checksums, RLS-scoped metadata, download API (was 8.3) | DONE (ADR-0047) |
 | 9.2 | Software project kind and plan schema v2 (stack profile, file ownership, effort) | NOT_STARTED |
 | 9.3 | Project workspace: platform applies verified proposals in dependency order with ownership checks | NOT_STARTED |
 | 9.4 | Docker sandbox runner and stack profile images (fail closed; threat model) | NOT_STARTED |

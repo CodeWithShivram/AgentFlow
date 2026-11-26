@@ -61,6 +61,8 @@ WORKER_GRANTS: dict[str, tuple[str, ...]] = {
     "human_interventions": ("SELECT", "INSERT", "UPDATE"),
     # Approval audit records (ADR-0038): written when a request expires; read to bind approvals.
     "approval_decisions": ("SELECT", "INSERT"),
+    # Stored artifacts (ADR-0047): created by platform jobs; deletion marks the row.
+    "artifacts": ("SELECT", "INSERT", "UPDATE"),
     # LangGraph checkpoints (ADR-0026): the library upserts; the hourly cleanup deletes.
     "checkpoints": ("SELECT", "INSERT", "UPDATE", "DELETE"),
     "checkpoint_blobs": ("SELECT", "INSERT", "UPDATE", "DELETE"),

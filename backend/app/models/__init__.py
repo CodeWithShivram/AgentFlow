@@ -9,6 +9,7 @@ from app.models.agent import (
     AgentStatus,
     AgentVersion,
 )
+from app.models.artifact import Artifact, ArtifactKind, ArtifactStatus
 from app.models.auth import (
     AuthSession,
     RefreshToken,
@@ -55,6 +56,9 @@ from app.models.workflow import (
 )
 
 __all__ = [
+    "Artifact",
+    "ArtifactKind",
+    "ArtifactStatus",
     "Agent",
     "AgentExecution",
     "AgentAuditAction",

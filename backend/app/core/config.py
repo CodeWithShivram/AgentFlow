@@ -60,6 +60,14 @@ class Settings(BaseSettings):
     # a rejection (ADR-0037; default 24 h, max 30 days).
     intervention_approval_ttl_hours: int = Field(default=24, ge=1, le=720)
 
+    # --- Artifact storage (ADR-0047) ---
+    # Where stored artifacts live: a local folder outside the repository, created on first use.
+    artifact_storage_root: Path = Field(
+        default_factory=lambda: Path.home() / ".agentflow" / "artifacts"
+    )
+    # The largest artifact stored, in bytes (default 200 MiB, at most 2 GiB).
+    artifact_max_bytes: int = Field(default=200 * 1024 * 1024, ge=1024, le=2 * 1024 * 1024 * 1024)
+
     # --- Authentication (ADR-0007) ---
     # Key ring as JSON: {"<key id>": "<secret>"}. Tokens are signed with the active key and
     # verified with any key in the ring, so keys can be rotated without logging users out.
@@ -139,6 +147,16 @@ class Settings(BaseSettings):
             insecure = [o for o in self.cors_allowed_origins if not o.startswith("https://")]
             if insecure:
                 raise ValueError(f"production CORS origins must use https: {', '.join(insecure)}")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_artifact_root(self) -> "Settings":
+        # Artifacts are user deliverables: never inside the source tree (handoff section 3).
+        root = self.artifact_storage_root
+        if not root.is_absolute():
+            raise ValueError("ARTIFACT_STORAGE_ROOT must be an absolute path")
+        if root.resolve().is_relative_to(REPO_ROOT_ENV_FILE.parent.resolve()):
+            raise ValueError("ARTIFACT_STORAGE_ROOT must be outside the repository")
         return self
 
     @model_validator(mode="after")

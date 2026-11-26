@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
 
 from app.api.v1.router import api_router
+from app.artifacts.records import storage_from_settings
 from app.core.config import Settings, get_settings
 from app.core.cookies import CSRF_HEADER
 from app.core.errors import register_exception_handlers
@@ -56,6 +57,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         openapi_url="/openapi.json" if docs else None,
     )
     app.state.settings = settings
+    app.state.artifact_storage = storage_from_settings(settings)
     # Added innermost first: requests pass RequestId -> CORS -> OriginCheck -> routes.
     app.add_middleware(OriginCheckMiddleware, allowed_origins=settings.cors_allowed_origins)
     app.add_middleware(

@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from app.api.v1 import (
     agents,
     analytics,
+    artifacts,
     auth,
     health,
     interventions,
@@ -22,3 +23,4 @@ api_router.include_router(interventions.router)
 api_router.include_router(interventions.approvals_router)
 api_router.include_router(pricing.router)
 api_router.include_router(analytics.router)
+api_router.include_router(artifacts.router)
