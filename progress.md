@@ -2,8 +2,37 @@
 
 ## Current position
 - Phase: 9 — Software project generation (ADR-0046; Phases 2–7 and Steps 8.1–8.2 complete; Phase 1 released as `v0.1.0`)
-- Last completed step: 9.7 — Project experience, progress and time remaining
-- Next step: 9.8 — End-to-end prompt → ZIP journey and release v0.2.0
+- Last completed step: 9.8 — End-to-end journey and release v0.2.0 (Phase 9 complete)
+- Next step: 8.4 — Safe workflow replay (then 8.5–8.7), or the Phase 9 follow-ups below; needs the owner's go-ahead
+
+## Step 9.8 — end-to-end journey and release v0.2.0 (ADR-0054)
+- **Gap found by the journey:** software project tasks needed a person to pre-assign agents.
+  - ADR-0054: on confirming a software project's plan (or replan), the platform pre-assigns each new task to the top-ranked eligible agent (`selection/v1`).
+  - The stored rationale has no deciding person, and a `TASK_ASSIGNED` event is written with `automatic: true`.
+  - General workflows are unchanged.
+- **E2E:**
+  - `frontend/e2e/projects.spec.ts` (journey 15): New project → plan → confirm (agents pre-assigned) → approve → start → the project page reaches Completed at 100% with a Verified package → the ZIP downloads, with its report, manifest and test file checked.
+  - This runs on the real stack: API, Celery worker and Beat, the mock model, Git workspaces, and the Docker sandbox running compile and pytest.
+  - `e2e/support/stack.ts` points `ARTIFACT_STORAGE_ROOT` and `PROJECT_WORKSPACE_ROOT` at an OS temp folder, emptied each run.
+- **Regression found and fixed:** journey 8/9 still expected `deterministic/v1`. The verifier became v2 in Step 9.3, and Steps 9.3–9.7 did not run Playwright. Updated to v2.
+- **Fix from Step 9.7:** the `Graph` import in `tests/integration/test_project_progress.py` (see the 9.7 correction).
+- **Release:** version 0.2.0 (backend `pyproject.toml`, `uv.lock` and app version; frontend `package.json` and lock); CHANGELOG `[0.2.0]`; README "Software projects" section; local annotated tag `v0.2.0`, not pushed.
+
+## Checks (Step 9.8)
+- **Backend full gate** (every line inspected): `ruff format --check` (268 files), `ruff check`, `mypy app tests alembic` (no issues) and `alembic check` all clean; `uv run pytest` **1337 passed, 2 skipped** (31 min, under load).
+- **Frontend:** `npm run lint` and `npm run typecheck` passed; `npm test` **191/191**; `npm run build` passed.
+- **Playwright, full suite:** 17 passed and 1 failed (journey 8/9, the stale `deterministic/v1` expectation).
+  - After the fix, `e2e/workflows.spec.ts` was re-run: 4/4 passed.
+  - All **18 journeys** passed, including journey 15 (prompt to verified ZIP, 1.4 min).
+
+## Phase 9 follow-ups (not started)
+- **Automatic targeted rework** after a failed integration (ADR-0051 defers it).
+- **Plan approval on the project page**, instead of the workflow controls.
+- **More stack profiles.**
+- **Live provider path** verification and real-provider prices.
+- **Orphan file sweep** for artifacts and workspaces (ADR-0047).
+- **Sandbox hardening** (gVisor or rootless Docker) before hosted use (ADR-0050).
+- **OD-14, OD-19, OD-20.**
 
 ## Step 9.7 — project experience, progress and time remaining (ADR-0053)
 - **Backend:**
@@ -20,7 +49,8 @@
 - **Built by a delegated subagent** (frontend only); its diff was reviewed and every gate re-run here.
 
 ## Checks (Step 9.7)
-- **Backend:** `tests/unit/test_progress.py` (4) and `tests/integration/test_project_progress.py` (2) pass. Full gate: format, lint, `mypy app tests alembic` and `alembic check` clean; `uv run pytest` **1337 passed, 2 skipped** (19 min 5 s, under concurrent frontend builds).
+- **Backend:** `tests/unit/test_progress.py` (4) and `tests/integration/test_project_progress.py` (2) pass. Full gate: format, lint and `alembic check` clean; `uv run pytest` **1337 passed, 2 skipped** (19 min 5 s, under concurrent frontend builds).
+- **Correction (recorded in Step 9.8):** this step was committed with `mypy app tests alembic` reporting **1 error**, an implicit re-export of `Graph` in `tests/integration/test_project_progress.py`. Only the last lines of the gate output were checked. Fixed in Step 9.8 by importing `Graph` from its defining module.
 - **Frontend** (run here from `C:\…\frontend`): `npm run lint` and `npm run typecheck` passed; `npm test` **191/191** (24 files, 17 new in `features/projects/projects.test.tsx`); `npm run build` passed, including the three new routes.
 - **Not run:** Playwright E2E (Step 9.8).
 

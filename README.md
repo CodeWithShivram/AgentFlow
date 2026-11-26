@@ -404,6 +404,38 @@ How delivery behaves:
 - On failure, a task becomes `REWORK_REQUIRED`, or `FAILED` after the 3rd attempt.
 - Each attempt is kept in `agent_executions`.
 
+## Software projects (Phase 9)
+
+Describe software in one prompt and AgentFlow plans it, builds it with agents, checks it in a sandbox and packages a ZIP ([ADR-0046](docs/ADR/0046-software-project-generation.md)).
+
+1. **New project** (web app, **Projects → New project**): one prompt, creating a workflow of kind `SOFTWARE_PROJECT`.
+2. **Plan** ("Plan & controls" on the project page):
+   - **Start planning:** the planner drafts a version 2 plan on a curated stack profile (`python-3.12` or `node-24-typescript`), where every task owns a file scope and an effort estimate ([ADR-0048](docs/ADR/0048-software-project-plans.md)).
+   - **Confirm the draft:** the platform pre-assigns each task to the best eligible agent ([ADR-0054](docs/ADR/0054-automatic-pre-assignment.md)).
+   - **Approve, then start.**
+3. **Build:**
+   - agents propose files;
+   - platform verification accepts each task only if its files stay inside its scope;
+   - accepted files are committed to the project's Git workspace by the platform ([ADR-0049](docs/ADR/0049-project-workspaces.md)).
+4. **Integrate:** once all work is applied, the profile's checks (compile and pytest, or tsc and vitest) run in an offline, non-root, resource-limited Docker container ([ADR-0050](docs/ADR/0050-docker-sandbox.md)). Only a pass completes the project. A failure or an unavailable sandbox blocks it; resume to retry ([ADR-0051](docs/ADR/0051-integration-gate.md)).
+5. **Download:** the verified project is packaged and offered on the project page ([ADR-0052](docs/ADR/0052-deliverable-packaging.md)). The package contains:
+   - only platform-written files, after a secret scan;
+   - `AGENTFLOW_BUILD_REPORT.md`;
+   - `AGENTFLOW_MANIFEST.json` with SHA-256 checksums.
+
+   Admins may explicitly ask for a **PARTIAL** package of a project that did not pass.
+
+The project page shows the phase, progress weighted by effort (only verified work counts), a time-remaining range with a confidence level, task and integration status, and the downloads ([ADR-0053](docs/ADR/0053-project-progress-and-ux.md)).
+
+**Additional requirements:**
+- **Docker images.** Docker Desktop must be running and the sandbox images built once:
+
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File scripts/sandbox.ps1 build
+  ```
+- **Git.** Git must be on the workers' PATH.
+- **Storage folders.** Workspaces and artifacts are stored outside the repository, by default under `~/.agentflow/` (`PROJECT_WORKSPACE_ROOT`, `ARTIFACT_STORAGE_ROOT`).
+
 ## Frontend
 
 The web application (ADR-0011): sign-in, workspaces, dashboard, workflows (planning, dependencies, assignment, lifecycle, live execution monitoring), agents and versions, agent proposals, members and invitations.
@@ -443,6 +475,7 @@ What the run does:
 - **Database.** It resets a disposable database, `agentflow_e2e`, then migrates it, seeds the built-in agents and provisions the API and worker roles, so the API runs under row-level security as in production. It refuses any database name not ending in `_e2e`.
 - **Processes.** It starts the API on :8011, a Celery worker and Beat (Redis databases 2 and 3), and a production build on :3100. All of them are stopped afterwards.
 - **Logs.** Backend logs go to `frontend/test-results/e2e-backend/`.
+- **Software project journey** (`e2e/projects.spec.ts`). It needs Docker and the sandbox images (`scripts/sandbox.ps1 build`). Workspaces and artifacts go to an OS temp folder, emptied each run.
 - **Browser.** It uses the installed Google Chrome. Set `PLAYWRIGHT_CHANNEL=""` to use Playwright's Chromium instead (`npx playwright install chromium`).
 
 ## All checks

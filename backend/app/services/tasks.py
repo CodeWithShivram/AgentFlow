@@ -643,6 +643,8 @@ async def confirm_plan_draft(
         raise PlanLimitError(f"A workflow may have at most {MAX_TASKS_PER_WORKFLOW} tasks.")
 
     created = await _add_planned_tasks(session, access, workflow, proposal, version, {})
+    if workflow.kind == WorkflowKind.SOFTWARE_PROJECT:
+        await _pre_assign_project_tasks(session, workflow, created)
     proposals = (
         await _propose_for_unassignable(session, workflow, created)
         if workflow.allow_dynamic_agent_proposals
@@ -825,6 +827,8 @@ async def _confirm_replan(
     created = await _add_planned_tasks(
         session, access, workflow, proposal, draft.version, completed
     )
+    if workflow.kind == WorkflowKind.SOFTWARE_PROJECT:
+        await _pre_assign_project_tasks(session, workflow, created)
     proposals = (
         await _propose_for_unassignable(session, workflow, created)
         if workflow.allow_dynamic_agent_proposals
@@ -850,6 +854,54 @@ async def _confirm_replan(
     workflow.revision += 1
     await session.commit()
     return workflow
+
+
+async def _pre_assign_project_tasks(
+    session: AsyncSession, workflow: Workflow, created: list[WorkflowTask]
+) -> int:
+    """Software projects (ADR-0054): the platform pre-assigns each new task to the top-ranked
+    eligible agent of the rule-based selection (ADR-0023), recording the same server-computed
+    rationale with no deciding person, as for automatic reassignment (ADR-0032). People approved
+    the plan; they may still change any assignment before or after starting. Tasks without an
+    eligible agent stay unassigned (and may get a platform proposal)."""
+    assigned = 0
+    for task in created:
+        ranked = await selection_service.rank_for_task(
+            session, workspace_id=workflow.workspace_id, task=task
+        )
+        top = next((c for c in ranked if c.rank == 1 and c.eligible), None)
+        if top is None:
+            continue
+        selection = selection_service.record_selection(
+            session,
+            workflow,
+            task,
+            ranked,
+            agent_id=top.agent_id,
+            agent_version_id=top.agent_version_id,
+            user_id=None,
+        )
+        task.assigned_agent_id = top.agent_id
+        task.assigned_agent_version_id = top.agent_version_id
+        task.revision += 1
+        record_event(
+            session,
+            workflow,
+            WorkflowEventType.TASK_ASSIGNED,
+            task_id=task.id,
+            payload={
+                "actor": Actor.SCHEDULER.value,
+                "pre_assigned": True,
+                "automatic": True,
+                "agent_id": str(top.agent_id),
+                "agent_version_id": str(top.agent_version_id),
+                "agent_version": top.agent_version,
+                "selection_id": str(selection.id),
+                "selection_rank": selection.rank,
+            },
+        )
+        assigned += 1
+    return assigned
 
 
 async def _propose_for_unassignable(

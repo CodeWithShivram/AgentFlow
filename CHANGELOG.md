@@ -2,6 +2,41 @@
 
 All notable changes to AgentFlow. Versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] — 2026-11-26 — Phases 2–9: from prompt to a tested software project
+
+AgentFlow now turns one natural-language prompt into a planned, agent-built, sandbox-verified software project that members download as a ZIP. Phases 2–8.2 (planning, specialised agents, orchestration, verification, human intervention, observability and analytics) were completed after 0.1.0. Phase 9 adds software project generation.
+
+### Added (Phase 9)
+- **Artifact storage** ([ADR-0047](docs/ADR/0047-artifact-storage.md)):
+  - local, checksummed, workspace-scoped storage;
+  - downloads verified against the stored checksum.
+- **Software project workflows** ([ADR-0048](docs/ADR/0048-software-project-plans.md)):
+  - curated stack profiles;
+  - plan schema v2 with per-task file ownership and effort.
+- **Project workspaces** ([ADR-0049](docs/ADR/0049-project-workspaces.md)):
+  - the platform commits accepted, in-scope agent proposals to a hardened per-project Git repository;
+  - contract v4 gives tasks their scope and their dependencies' files.
+- **Docker sandbox** ([ADR-0050](docs/ADR/0050-docker-sandbox.md)):
+  - offline, read-only, non-root, resource-limited containers from pinned, locally built images;
+  - fails closed when it cannot run.
+- **Integration gate** ([ADR-0051](docs/ADR/0051-integration-gate.md)): a project completes only after its checks pass on the composed tree.
+- **Deliverable packaging** ([ADR-0052](docs/ADR/0052-deliverable-packaging.md)):
+  - a reproducible ZIP with a build report and a SHA-256 manifest;
+  - a secret scan and a denylist;
+  - VERIFIED or explicitly PARTIAL packages.
+- **Projects UI** ([ADR-0053](docs/ADR/0053-project-progress-and-ux.md)):
+  - a one-prompt project creation form;
+  - effort-weighted, verified-only progress;
+  - a time-remaining range with confidence;
+  - integration runs and downloads.
+- **Automatic pre-assignment** ([ADR-0054](docs/ADR/0054-automatic-pre-assignment.md)): software project tasks are pre-assigned to the top-ranked eligible agent when the plan is confirmed.
+
+### Known limitations
+- **Mock-provider verification only.** The live model path has been exercised only offline. Real providers need prices in `app/llm/pricing.json`.
+- **No automatic targeted rework.** A failed integration blocks the project for a person to retry or replan.
+- **Two stack profiles** (`python-3.12`, `node-24-typescript`). Plan approval still uses the workflow controls.
+- **Before any hosted deployment:** OD-14, OD-19 and OD-20 must be settled, and the sandbox hardened (gVisor or rootless Docker) per ADR-0050.
+
 ## [0.1.0] — 2026-11-12 — Phase 1: Foundation
 
 The first release: the platform's foundation, end to end. People can register, work in shared workspaces, manage agents, plan workflows as task graphs, and watch tasks run in the background. A **mock agent** executes the tasks: there is no LLM call yet, and that arrives in Phase 2.

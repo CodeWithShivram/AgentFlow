@@ -73,7 +73,8 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   weights or factors only with a new version. Unmeasured factors are `not_scored`, never guessed. Assignments always
   store a server-computed `agent_selections` row (append-only, RLS) in the same transaction; never trust a client
   rationale. People decide; the platform only suggests, except the bounded automatic reassignment of ADR-0032
-  (`decided_by_user_id` NULL).
+  (`decided_by_user_id` NULL). Software projects are pre-assigned to the top eligible agent at plan confirmation
+  (ADR-0054, `_pre_assign_project_tasks`, same rules, no deciding person).
 - Platform proposals (ADR-0024): only `agents.propose_specialists`, from plan confirmation when the workflow allows
   proposals and a task has no eligible agent. The template is fixed (task skills, `builtin://general/v1`, no tools);
   the platform never proposes tools or instructions. `requested_by` is NULL; approval stays ADMIN-only and creates an

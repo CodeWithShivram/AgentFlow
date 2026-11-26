@@ -14,11 +14,11 @@ from app.models import Workflow, WorkspaceRole
 from app.projects.workspace import ProjectWorkspaces
 from app.services.authorization import WorkspaceAccess
 from app.services.progress import ProgressResponse, project_progress
+from tests.integration.test_execution_scenarios import Graph
 from tests.integration.test_project_integration import _FakeSandbox, _integrate
 from tests.integration.test_project_packaging import _package
 from tests.integration.test_project_workspace import (
     SCOPES,
-    Graph,
     _apply,
     _events,
     _run_task,

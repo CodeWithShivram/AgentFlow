@@ -4,6 +4,7 @@
 
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { createWriteStream, mkdirSync, rmSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 export const API_PORT = 8011;
@@ -14,6 +15,8 @@ export const WEB_URL = `http://localhost:${WEB_PORT}`;
 const FRONTEND_DIR = path.resolve(__dirname, "..", "..");
 const BACKEND_DIR = path.resolve(FRONTEND_DIR, "..", "backend");
 const RUN_DIR = path.join(FRONTEND_DIR, "test-results", "e2e-backend");
+// Outside the repository (the backend refuses storage roots inside it); emptied each run.
+const E2E_DATA_DIR = path.join(os.tmpdir(), "agentflow-e2e-data");
 
 /** Overrides layered on the repo-root .env; secrets still come from .env, never from here. */
 export function backendEnv(): NodeJS.ProcessEnv {
@@ -30,6 +33,9 @@ export function backendEnv(): NodeJS.ProcessEnv {
     // Deterministic, free model replies even when .env configures a real provider (ADR-0020).
     MODEL_PROVIDER: "mock",
     MODEL_NAME: "mock-1",
+    // Deliverables and project workspaces (ADR-0047, ADR-0049) must live outside the repository.
+    ARTIFACT_STORAGE_ROOT: path.join(E2E_DATA_DIR, "artifacts"),
+    PROJECT_WORKSPACE_ROOT: path.join(E2E_DATA_DIR, "workspaces"),
     PYTHONUNBUFFERED: "1",
   };
 }
@@ -86,6 +92,7 @@ async function waitForApi(timeoutMs: number): Promise<void> {
 
 export async function startBackend(): Promise<ChildProcess[]> {
   rmSync(RUN_DIR, { recursive: true, force: true });
+  rmSync(E2E_DATA_DIR, { recursive: true, force: true });
   mkdirSync(RUN_DIR, { recursive: true });
   prepareDatabase();
   const processes = [

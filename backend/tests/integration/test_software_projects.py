@@ -81,6 +81,12 @@ def test_a_software_project_is_planned_and_confirmed_with_ownership(
     assert scopes["Set up the project"] == (["pyproject.toml", "README.md", ".env.example"], 2)
     assert scopes["Implement the application"] == (["src/"], 5)
     assert scopes["Write the automated tests"] == (["tests/"], 3)
+    # The platform pre-assigned every task to the top-ranked eligible agent (ADR-0054).
+    tasks = _tasks(owner, workflow_id)
+    assert all(t["assigned_agent_id"] and t["status"] == "PENDING" for t in tasks)
+    events = owner.get(_url(owner, workflow_id, "/events")).json()["items"]
+    automatic = [e for e in events if e["event_type"] == "TASK_ASSIGNED"]
+    assert len(automatic) == 3 and all(e["payload"]["automatic"] for e in automatic)
 
 
 def test_the_planner_retries_plans_of_the_wrong_kind(
