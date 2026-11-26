@@ -201,3 +201,10 @@ def test_shutdown_closes_database_and_redis_connections(
 
     assert _eventually(lambda: _postgres_connections(settings) == 0)
     assert _eventually(lambda: _redis_connections(settings) == 0)
+
+
+def test_tests_never_use_a_real_model_provider() -> None:
+    # Whatever the developer's .env configures, the test session forces the mock (conftest).
+    settings = Settings(app_env="test")
+    assert settings.model_provider == "mock"
+    assert settings.model_api_key is None or settings.model_api_key.get_secret_value() == ""

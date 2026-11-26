@@ -1581,6 +1581,19 @@ None.
 2. **Step 8.3 (artifact management):** present a short plan and get the owner's go-ahead.
 3. **Before any hosted deployment:** settle OD-14, OD-19 and OD-20.
 
+## Live model provider: Gemini (2026-11-26)
+- **Configuration** (local `.env` only, gitignored, never committed): `MODEL_PROVIDER=litellm`, `MODEL_NAME=gemini/gemini-3.5-flash-lite`, the owner's `MODEL_API_KEY`, `MODEL_TIMEOUT_SECONDS=180`.
+- **Key check:** the key lists Gemini models (HTTP 200).
+- **Model availability:**
+  - `gemini-2.5-flash` is retired for new users (404, Google recommends `gemini-3.8-flash`);
+  - `gemini-3.8-flash`, `gemini-3.5-flash` and `gemini-3.1-flash-lite` returned 503 "high demand" during the test window;
+  - `gemini-3.5-flash-lite` answered.
+- **Live smoke test:** a structured call through `LiteLLMAdapter` (LiteLLM 1.109.1 reports schema support for these models) returned schema-valid JSON in 2.2 s, with provider-reported usage (26 input, 41 output tokens).
+- **Not yet done:**
+  - a full project on the live model;
+  - prices: Gemini isn't in `app/llm/pricing.json`, so its calls are recorded unpriced and don't count toward budgets until published prices are added under a new price-list version.
+- **Test isolation:** `tests/conftest.py` now forces `MODEL_PROVIDER=mock` and blanks `MODEL_API_KEY` for the whole test session, so a real key in `.env` can never be used by tests. A guard test in `test_infrastructure.py` checks this.
+
 ## Post-release fix — sandbox cleanup on Linux (CI)
 - **Push:** `main` (`a1ca9cc..6332bcc`) and tag `v0.2.0` were pushed on the owner's go-ahead (2026-11-26). `frontend-ci` passed.
 - **`backend-ci` failure:** 1 of 1338 tests failed: `test_the_mock_project_passes_its_real_sandbox_checks` with `PermissionError: Operation not permitted`. The owner supplied the CI log line.

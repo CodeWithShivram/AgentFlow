@@ -1,7 +1,16 @@
 import asyncio
 import json
+import os
 import socket
 from typing import Any
+
+# Tests never call a real model provider, whatever the developer's .env configures (ADR-0020):
+# real environment variables take precedence over .env, so these force the mock provider for
+# every Settings() built in this test session, including in-process workers.
+os.environ["MODEL_PROVIDER"] = "mock"
+os.environ["MODEL_NAME"] = "mock-1"
+os.environ["MODEL_API_KEY"] = ""  # overrides any real key in .env
+os.environ.pop("MODEL_API_BASE", None)
 
 import pytest
 from fastapi import FastAPI
