@@ -385,7 +385,20 @@ export interface WorkflowSettings {
 
 export interface WorkflowInput {
   prompt: string;
+  /** SOFTWARE_PROJECT plans a software project with a stack profile (ADR-0048). */
+  kind?: WorkflowKind;
   settings: WorkflowSettings;
+}
+
+export const WORKFLOW_KINDS = ["GENERAL", "SOFTWARE_PROJECT"] as const;
+export type WorkflowKind = (typeof WORKFLOW_KINDS)[number];
+
+/** A software project's confirmed spec (ADR-0048). Model-derived text: plain text only. */
+export interface ProjectSpec {
+  name: string;
+  stack_profile: string;
+  architecture: string;
+  assumptions?: string[];
 }
 
 export interface Workflow {
@@ -416,6 +429,9 @@ export interface Workflow {
   paused_by_user_id?: Uuid | null;
   paused_at?: IsoDateTime | null;
   pause_note?: string | null;
+  kind?: WorkflowKind;
+  /** Set once a software project's plan is confirmed (ADR-0048). */
+  project_spec?: ProjectSpec | null;
 }
 
 /** Why a workflow is paused. Only AWAITING_DECISION is lifted by the platform itself. */
@@ -704,6 +720,10 @@ export interface Task {
   updated_at: IsoDateTime;
   started_at: IsoDateTime | null;
   completed_at: IsoDateTime | null;
+  /** Software projects: the paths the task may change (ADR-0048). */
+  file_scope?: string[];
+  /** Relative effort estimate that weights progress (ADR-0053); null without one. */
+  effort_points?: number | null;
 }
 
 export interface TaskInput {
@@ -850,4 +870,84 @@ export interface AgentSubmission {
   assumptions: string[];
   limitations: string[];
   open_questions: string[];
+}
+
+// --- software projects (ADR-0051, ADR-0052, ADR-0053) ---------------------------------------
+
+export const PROJECT_PHASES = [
+  "PLANNING",
+  "AWAITING_APPROVAL",
+  "BUILDING",
+  "INTEGRATING",
+  "PACKAGING",
+  "COMPLETED",
+  "NEEDS_ATTENTION",
+  "FAILED",
+  "CANCELLED",
+] as const;
+export type ProjectPhase = (typeof PROJECT_PHASES)[number];
+
+export type MilestoneState = "not_applicable" | "pending" | "running" | "passed" | "failed" | "ready";
+export type EstimateConfidence = "none" | "low" | "medium" | "high";
+
+/** Weighted, verified-only progress and a time-remaining range (ADR-0053). */
+export interface ProjectProgress {
+  phase: ProjectPhase;
+  percent: number;
+  explanation: string;
+  tasks: { total: number; completed: number; in_progress: number; waiting: number; needs_attention: number };
+  completed_weight: number;
+  total_weight: number;
+  integration: MilestoneState;
+  package: MilestoneState;
+  open_requests: number;
+  remaining: {
+    low_seconds: number | null;
+    high_seconds: number | null;
+    confidence: EstimateConfidence;
+    samples: number;
+    explanation: string;
+  };
+}
+
+export type IntegrationStatus = "RUNNING" | "PASSED" | "FAILED" | "NOT_RUN";
+
+/** One integration check. `output` is untrusted tool text: plain text only. */
+export interface IntegrationCheck {
+  name: string;
+  outcome: "passed" | "failed" | "not_run";
+  exit_code?: number | null;
+  timed_out?: boolean | null;
+  duration_ms?: number | null;
+  output?: string | null;
+}
+
+export interface IntegrationRun {
+  id: Uuid;
+  workflow_id: Uuid;
+  head_sha: string;
+  stack_profile: string;
+  status: IntegrationStatus;
+  checks: IntegrationCheck[];
+  error_code: string | null;
+  created_at: IsoDateTime;
+  finished_at: IsoDateTime | null;
+}
+
+export type PackageLabel = "VERIFIED" | "PARTIAL";
+export type PackageStatus = "READY" | "FAILED";
+
+/** A packaging attempt (ADR-0052). Archives are downloaded through the artifacts API. */
+export interface ProjectPackage {
+  id: Uuid;
+  workflow_id: Uuid;
+  head_sha: string;
+  label: PackageLabel;
+  status: PackageStatus;
+  error_code: string | null;
+  archive_artifact_id: Uuid | null;
+  report_artifact_id: Uuid | null;
+  file_count: number;
+  excluded_count: number;
+  created_at: IsoDateTime;
 }

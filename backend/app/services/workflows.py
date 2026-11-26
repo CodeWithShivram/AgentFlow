@@ -21,6 +21,7 @@ from app.models import (
     Workflow,
     WorkflowEvent,
     WorkflowEventType,
+    WorkflowKind,
     WorkflowPlan,
     WorkflowStatus,
     WorkspaceRole,
@@ -199,9 +200,15 @@ async def list_workflows(
     status: WorkflowStatus | None,
     limit: int,
     offset: int,
+    kind: WorkflowKind | None = None,
 ) -> tuple[list[Workflow], int]:
     return await repository.list_workflows(
-        session, workspace_id=access.workspace_id, status=status, limit=limit, offset=offset
+        session,
+        workspace_id=access.workspace_id,
+        status=status,
+        limit=limit,
+        offset=offset,
+        kind=kind,
     )
 
 

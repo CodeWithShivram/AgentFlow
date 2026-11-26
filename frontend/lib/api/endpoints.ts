@@ -31,6 +31,9 @@ import type {
   Proposal,
   ProposalInput,
   ProposalStatus,
+  IntegrationRun,
+  ProjectPackage,
+  ProjectProgress,
   SessionInfo,
   Task,
   TaskInput,
@@ -38,6 +41,7 @@ import type {
   Uuid,
   Workflow,
   WorkflowInput,
+  WorkflowKind,
   WorkflowCosts,
   WorkflowReport,
   WorkflowStatus,
@@ -119,8 +123,10 @@ export function createEndpoints(client: ApiClient) {
     },
 
     workflows: {
-      list: (workspaceId: Uuid, query: PageQuery & { status?: WorkflowStatus } = {}) =>
-        client.get<Page<Workflow>>(`${ws(workspaceId)}/workflows`, { query: { ...query } }),
+      list: (
+        workspaceId: Uuid,
+        query: PageQuery & { status?: WorkflowStatus; kind?: WorkflowKind } = {},
+      ) => client.get<Page<Workflow>>(`${ws(workspaceId)}/workflows`, { query: { ...query } }),
       get: (workspaceId: Uuid, workflowId: Uuid) => client.get<Workflow>(wf(workspaceId, workflowId)),
       /** `idempotencyKey` must stay the same when the same submission is retried. */
       create: (workspaceId: Uuid, body: WorkflowInput, idempotencyKey: string) =>
@@ -174,6 +180,28 @@ export function createEndpoints(client: ApiClient) {
         client.post<Workflow>(`${wf(workspaceId, workflowId)}/cancel`, { revision, reason }),
       events: (workspaceId: Uuid, workflowId: Uuid, query: { after?: number; limit?: number } = {}) =>
         client.get<EventPage>(`${wf(workspaceId, workflowId)}/events`, { query: { ...query } }),
+    },
+
+    /** Software projects (ADR-0051, ADR-0052, ADR-0053). */
+    projects: {
+      /** Phase, weighted verified progress and a time-remaining range. */
+      progress: (workspaceId: Uuid, workflowId: Uuid) =>
+        client.get<ProjectProgress>(`${wf(workspaceId, workflowId)}/progress`),
+      /** Integration gate runs, newest first. */
+      integrations: (workspaceId: Uuid, workflowId: Uuid) =>
+        client.get<IntegrationRun[]>(`${wf(workspaceId, workflowId)}/integrations`),
+      /** Packaging attempts, newest first. */
+      packages: (workspaceId: Uuid, workflowId: Uuid) =>
+        client.get<ProjectPackage[]>(`${wf(workspaceId, workflowId)}/packages`),
+      /** Queues a package of the current state (ADMIN); PARTIAL unless it passed integration. */
+      requestPackage: (workspaceId: Uuid, workflowId: Uuid) =>
+        client.post<void>(`${wf(workspaceId, workflowId)}/packages`),
+      /**
+       * The download URL of a stored artifact. Used as a plain link: the browser downloads the
+       * attachment itself with the session cookie, and the file never passes through JS memory.
+       */
+      artifactDownloadUrl: (workspaceId: Uuid, workflowId: Uuid, artifactId: Uuid) =>
+        client.urlFor(`${wf(workspaceId, workflowId)}/artifacts/${enc(artifactId)}/download`),
     },
 
     /** Requests that need a person (ADR-0035). */

@@ -213,7 +213,7 @@ Inserted by the owner on 2026-11-26 from `docs/AgentFlow_Claude_Code_Master_Play
 | 9.4 | Docker sandbox runner and stack profile images (fail closed; threat model) | DONE (ADR-0050) |
 | 9.5 | Execution checks and project integration gate feeding verification and rework | DONE (ADR-0051; automatic targeted rework deferred) |
 | 9.6 | Secure ZIP packaging, README and build report, download | DONE (ADR-0052) |
-| 9.7 | Project UX, weighted progress and time-remaining range | NOT_STARTED |
+| 9.7 | Project UX, weighted progress and time-remaining range | DONE (ADR-0053) |
 | 9.8 | End-to-end prompt → ZIP journey (mock provider); release v0.2.0 | NOT_STARTED |
 
 Acceptance (phase): the playbook's §16 test passes with the mock provider. A project is COMPLETED only when every required task and the integration gate pass; otherwise it is shown as FAILED, BLOCKED or PARTIAL with reasons. Each step refines its acceptance criteria at its start.

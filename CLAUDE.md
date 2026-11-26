@@ -211,6 +211,9 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
 - Packaging (ADR-0052, `app/projects/packaging.py`, `package_job.py`): only Git-tracked workspace files; denylist, secret
   scan (any hit fails the whole package), limits, fixed-time archive re-verified, manifest and build report. VERIFIED
   only for the commit of the latest PASSED integration; PARTIAL only on an ADMIN request. Archives are artifacts.
+- Progress (ADR-0053, `app/services/progress.py`): weighted by effort, only verified (COMPLETED) work counts, software
+  projects add integration and package milestones, 100% only when truly done; time remaining is a range with a
+  confidence label from stored attempt durations, or no estimate (`confidence: none`). Never show a countdown.
 - Workflow events are append-only.
 
 ## Security

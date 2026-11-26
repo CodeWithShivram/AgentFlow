@@ -2,8 +2,27 @@
 
 ## Current position
 - Phase: 9 — Software project generation (ADR-0046; Phases 2–7 and Steps 8.1–8.2 complete; Phase 1 released as `v0.1.0`)
-- Last completed step: 9.6 — Deliverable packaging
-- Next step: 9.7 — Project UX, weighted progress and time-remaining range
+- Last completed step: 9.7 — Project experience, progress and time remaining
+- Next step: 9.8 — End-to-end prompt → ZIP journey and release v0.2.0
+
+## Step 9.7 — project experience, progress and time remaining (ADR-0053)
+- **Backend:**
+  - `GET …/workflows/{id}/progress` (VIEWER, `app/services/progress.py`): progress weighted by effort, counting only verified (COMPLETED) work; integration and package milestones (15% and 5%); 100% only when truly done;
+  - phases derived from stored state;
+  - time remaining as a range from observed attempt durations per effort point (p25 to p75 × 1.5, ÷ parallelism) with a `none`/`low`/`medium`/`high` confidence;
+  - `GET …/workflows?kind=SOFTWARE_PROJECT` filter.
+- **Frontend** (`features/projects/`):
+  - a **Projects** nav entry;
+  - a list, **New project** (one prompt, advanced settings collapsed, `kind: SOFTWARE_PROJECT`, Idempotency-Key);
+  - a project page that polls with backoff, showing: the phase badge, a progress bar (`role=progressbar`, "Estimate"), the time-remaining range with confidence (or an explanation), task counts and scopes, a needs-attention callout, integration runs (plain-text output), and deliverables (Verified or Partial, failed-package explanations, `<a download>` links to the artifacts API);
+  - an ADMIN partial-package action with a confirmation.
+  - Planning, approval and start stay on the existing workflow page ("Plan & controls").
+- **Built by a delegated subagent** (frontend only); its diff was reviewed and every gate re-run here.
+
+## Checks (Step 9.7)
+- **Backend:** `tests/unit/test_progress.py` (4) and `tests/integration/test_project_progress.py` (2) pass. Full gate: format, lint, `mypy app tests alembic` and `alembic check` clean; `uv run pytest` **1337 passed, 2 skipped** (19 min 5 s, under concurrent frontend builds).
+- **Frontend** (run here from `C:\…\frontend`): `npm run lint` and `npm run typecheck` passed; `npm test` **191/191** (24 files, 17 new in `features/projects/projects.test.tsx`); `npm run build` passed, including the three new routes.
+- **Not run:** Playwright E2E (Step 9.8).
 
 ## Step 9.6 — deliverable packaging (ADR-0052)
 - **Trigger:** a PASSED integration completes the project and requests `project.package`. An ADMIN may request a package with `POST …/packages` (BLOCKED, PAUSED or COMPLETED software projects only).

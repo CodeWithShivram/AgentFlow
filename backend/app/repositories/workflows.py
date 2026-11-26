@@ -18,6 +18,7 @@ from app.models import (
     Workflow,
     WorkflowEvent,
     WorkflowEventType,
+    WorkflowKind,
     WorkflowPlan,
     WorkflowStatus,
     WorkflowTask,
@@ -31,10 +32,13 @@ async def list_workflows(
     status: WorkflowStatus | None,
     limit: int,
     offset: int,
+    kind: WorkflowKind | None = None,
 ) -> tuple[list[Workflow], int]:
     filters: list[Any] = [Workflow.workspace_id == workspace_id]
     if status is not None:
         filters.append(Workflow.status == status)
+    if kind is not None:
+        filters.append(Workflow.kind == kind)
     rows = await session.execute(
         select(Workflow)
         .where(*filters)

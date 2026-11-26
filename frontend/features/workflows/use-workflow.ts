@@ -63,7 +63,8 @@ export function pollDelay(unchangedPolls: number, failed: boolean): number {
   return Math.min(2_000 * 1.5 ** unchangedPolls, 15_000);
 }
 
-async function fetchAllTasks(workspaceId: Uuid, workflowId: Uuid): Promise<Task[]> {
+/** Every task of the workflow, page by page. */
+export async function fetchAllTasks(workspaceId: Uuid, workflowId: Uuid): Promise<Task[]> {
   const tasks: Task[] = [];
   for (let offset = 0; ; offset += TASK_PAGE) {
     const page = await api.tasks.list(workspaceId, workflowId, { limit: TASK_PAGE, offset });

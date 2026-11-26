@@ -155,6 +155,11 @@ export class ApiClient {
     return payload as T;
   }
 
+  /** The absolute URL of an API path, for plain links such as file downloads. */
+  urlFor(path: string, query?: Record<string, QueryValue>): string {
+    return this.url(path, query);
+  }
+
   private url(path: string, query?: Record<string, QueryValue>): string {
     const url = `${this.baseUrl}/api/v1${path}`;
     if (!query) return url;

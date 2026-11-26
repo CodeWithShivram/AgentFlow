@@ -92,6 +92,7 @@ export function PlainShell({ children }: { children: React.ReactNode }) {
 
 const SECTION_LABELS: Record<string, string> = {
   dashboard: "Dashboard",
+  projects: "Projects",
   workflows: "Workflows",
   requests: "Requests",
   approvals: "Approval history",
@@ -103,7 +104,7 @@ const SECTION_LABELS: Record<string, string> = {
   settings: "Settings",
 };
 
-const DETAIL_LABELS: Record<string, string> = { workflows: "Workflow", agents: "Agent" };
+const DETAIL_LABELS: Record<string, string> = { projects: "Project", workflows: "Workflow", agents: "Agent" };
 
 function ShellHeader({ workspace }: { workspace: CurrentWorkspace }) {
   const pathname = usePathname();

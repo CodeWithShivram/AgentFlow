@@ -14,7 +14,13 @@ from fastapi.responses import JSONResponse
 
 from app.agents.selection import RULES_VERSION
 from app.api.deps import DbSession, SettingsDep, workspace_role
-from app.models import VerificationResult, WorkflowStatus, WorkflowTask, WorkspaceRole
+from app.models import (
+    VerificationResult,
+    WorkflowKind,
+    WorkflowStatus,
+    WorkflowTask,
+    WorkspaceRole,
+)
 from app.repositories import workflows as repository
 from app.schemas.costs import WorkflowCostsResponse
 from app.schemas.report import WorkflowReport
@@ -130,11 +136,12 @@ async def list_workflows(
     access: Viewer,
     session: DbSession,
     status_filter: Annotated[WorkflowStatus | None, Query(alias="status")] = None,
+    kind: WorkflowKind | None = None,
     limit: Limit = 50,
     offset: Offset = 0,
 ) -> Page[WorkflowResponse]:
     workflows, total = await service.list_workflows(
-        session, access, status=status_filter, limit=limit, offset=offset
+        session, access, status=status_filter, limit=limit, offset=offset, kind=kind
     )
     items = [service.workflow_response(w) for w in workflows]
     return Page(items=items, total=total, limit=limit, offset=offset)

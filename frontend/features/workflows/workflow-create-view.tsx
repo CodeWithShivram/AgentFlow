@@ -5,7 +5,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { Controller, useForm } from "react-hook-form";
+import { Controller, useForm, type UseFormReturn } from "react-hook-form";
 import { toast } from "sonner";
 import { z } from "zod";
 
@@ -57,8 +57,20 @@ export const workflowSchema = z.object({
     .string()
     .refine((v) => v === "" || new Date(v).getTime() > Date.now(), "The deadline must be in the future."),
 });
-type FormInput = z.input<typeof workflowSchema>;
-type Values = z.output<typeof workflowSchema>;
+export type WorkflowFormInput = z.input<typeof workflowSchema>;
+export type WorkflowFormValues = z.output<typeof workflowSchema>;
+type FormInput = WorkflowFormInput;
+type Values = WorkflowFormValues;
+
+export const workflowFormDefaults: FormInput = {
+  prompt: "",
+  autonomyPolicy: "approval_required",
+  budgetLimit: "",
+  currency: "USD",
+  maxParallelTasks: "3",
+  allowDynamicAgentProposals: false,
+  deadline: "",
+};
 
 export function toWorkflowInput(values: Values): WorkflowInput {
   return {
@@ -84,15 +96,7 @@ export function WorkflowCreateView() {
   const [idempotencyKey] = useState(newIdempotencyKey);
   const form = useForm<FormInput, unknown, Values>({
     resolver: zodResolver(workflowSchema),
-    defaultValues: {
-      prompt: "",
-      autonomyPolicy: "approval_required",
-      budgetLimit: "",
-      currency: "USD",
-      maxParallelTasks: "3",
-      allowDynamicAgentProposals: false,
-      deadline: "",
-    },
+    defaultValues: workflowFormDefaults,
   });
   const { errors } = form.formState;
 
@@ -134,84 +138,7 @@ export function WorkflowCreateView() {
               />
             </FormField>
 
-            <div className="grid gap-5 sm:grid-cols-2">
-              <FormField
-                id="autonomyPolicy"
-                label="Plan approval"
-                hint="Approval required: an admin approves the plan before it can run."
-              >
-                <Controller
-                  control={form.control}
-                  name="autonomyPolicy"
-                  render={({ field }) => (
-                    <Select value={field.value} onValueChange={field.onChange}>
-                      <SelectTrigger {...controlProps("autonomyPolicy", undefined, true)} className="w-full">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="approval_required">Approval required</SelectItem>
-                        <SelectItem value="autonomous">Autonomous</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  )}
-                />
-              </FormField>
-              <FormField id="maxParallelTasks" label="Maximum parallel tasks" error={errors.maxParallelTasks?.message}>
-                <Input
-                  type="number"
-                  inputMode="numeric"
-                  min={1}
-                  max={100}
-                  {...controlProps("maxParallelTasks", errors.maxParallelTasks?.message)}
-                  {...form.register("maxParallelTasks")}
-                />
-              </FormField>
-              <FormField
-                id="budgetLimit"
-                label="Budget limit (optional)"
-                error={errors.budgetLimit?.message}
-                hint="A cap recorded with the workflow. Spend is not measured until Phase 2."
-              >
-                <Input
-                  inputMode="decimal"
-                  placeholder="No limit"
-                  {...controlProps("budgetLimit", errors.budgetLimit?.message, true)}
-                  {...form.register("budgetLimit")}
-                />
-              </FormField>
-              <FormField id="currency" label="Currency" error={errors.currency?.message}>
-                <Input
-                  maxLength={3}
-                  autoCapitalize="characters"
-                  className="uppercase"
-                  {...controlProps("currency", errors.currency?.message)}
-                  {...form.register("currency")}
-                />
-              </FormField>
-              <FormField id="deadline" label="Deadline (optional)" error={errors.deadline?.message}>
-                <Input
-                  type="datetime-local"
-                  {...controlProps("deadline", errors.deadline?.message)}
-                  {...form.register("deadline")}
-                />
-              </FormField>
-              <div className="flex items-center gap-3 self-end pb-2">
-                <Controller
-                  control={form.control}
-                  name="allowDynamicAgentProposals"
-                  render={({ field }) => (
-                    <Switch
-                      id="allowDynamicAgentProposals"
-                      checked={field.value}
-                      onCheckedChange={field.onChange}
-                    />
-                  )}
-                />
-                <label htmlFor="allowDynamicAgentProposals" className="text-sm">
-                  Allow agent proposals during this workflow
-                </label>
-              </div>
-            </div>
+            <WorkflowSettingsFields form={form} />
 
             <div className="flex flex-wrap gap-2">
               <Button type="submit" disabled={create.isPending} aria-busy={create.isPending}>
@@ -224,6 +151,91 @@ export function WorkflowCreateView() {
           </form>
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+/** The workflow settings fields (everything but the prompt), shared with the new-project form. */
+export function WorkflowSettingsFields({ form }: { form: UseFormReturn<FormInput, unknown, Values> }) {
+  const { errors } = form.formState;
+  return (
+    <div className="grid gap-5 sm:grid-cols-2">
+      <FormField
+        id="autonomyPolicy"
+        label="Plan approval"
+        hint="Approval required: an admin approves the plan before it can run."
+      >
+        <Controller
+          control={form.control}
+          name="autonomyPolicy"
+          render={({ field }) => (
+            <Select value={field.value} onValueChange={field.onChange}>
+              <SelectTrigger {...controlProps("autonomyPolicy", undefined, true)} className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="approval_required">Approval required</SelectItem>
+                <SelectItem value="autonomous">Autonomous</SelectItem>
+              </SelectContent>
+            </Select>
+          )}
+        />
+      </FormField>
+      <FormField id="maxParallelTasks" label="Maximum parallel tasks" error={errors.maxParallelTasks?.message}>
+        <Input
+          type="number"
+          inputMode="numeric"
+          min={1}
+          max={100}
+          {...controlProps("maxParallelTasks", errors.maxParallelTasks?.message)}
+          {...form.register("maxParallelTasks")}
+        />
+      </FormField>
+      <FormField
+        id="budgetLimit"
+        label="Budget limit (optional)"
+        error={errors.budgetLimit?.message}
+        hint="A cap recorded with the workflow. Spend is not measured until Phase 2."
+      >
+        <Input
+          inputMode="decimal"
+          placeholder="No limit"
+          {...controlProps("budgetLimit", errors.budgetLimit?.message, true)}
+          {...form.register("budgetLimit")}
+        />
+      </FormField>
+      <FormField id="currency" label="Currency" error={errors.currency?.message}>
+        <Input
+          maxLength={3}
+          autoCapitalize="characters"
+          className="uppercase"
+          {...controlProps("currency", errors.currency?.message)}
+          {...form.register("currency")}
+        />
+      </FormField>
+      <FormField id="deadline" label="Deadline (optional)" error={errors.deadline?.message}>
+        <Input
+          type="datetime-local"
+          {...controlProps("deadline", errors.deadline?.message)}
+          {...form.register("deadline")}
+        />
+      </FormField>
+      <div className="flex items-center gap-3 self-end pb-2">
+        <Controller
+          control={form.control}
+          name="allowDynamicAgentProposals"
+          render={({ field }) => (
+            <Switch
+              id="allowDynamicAgentProposals"
+              checked={field.value}
+              onCheckedChange={field.onChange}
+            />
+          )}
+        />
+        <label htmlFor="allowDynamicAgentProposals" className="text-sm">
+          Allow agent proposals during this workflow
+        </label>
+      </div>
     </div>
   );
 }

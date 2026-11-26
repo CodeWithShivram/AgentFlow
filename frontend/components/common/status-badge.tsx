@@ -10,7 +10,7 @@ import type {
 import { humanize } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
-type Tone = "neutral" | "info" | "progress" | "success" | "warning" | "danger";
+export type Tone = "neutral" | "info" | "progress" | "success" | "warning" | "danger";
 
 const TONE_CLASSES: Record<Tone, string> = {
   neutral: "bg-muted text-muted-foreground",
@@ -58,6 +58,15 @@ const TONES: Partial<Record<AnyStatus, Tone>> = {
 
 export function statusTone(status: AnyStatus): Tone {
   return TONES[status] ?? "neutral";
+}
+
+/** A label with a tone, for statuses that are not API status enums. Text carries the meaning. */
+export function ToneBadge({ tone, className, children }: { tone: Tone; className?: string; children: React.ReactNode }) {
+  return (
+    <Badge variant="secondary" className={cn("border-transparent font-medium", TONE_CLASSES[tone], className)}>
+      {children}
+    </Badge>
+  );
 }
 
 /** A status label. The text carries the meaning; colour is only a secondary cue. */

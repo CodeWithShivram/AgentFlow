@@ -14,6 +14,7 @@ from app.schemas.projects import (
     PackageResponse,
     WorkspaceApplicationResponse,
 )
+from app.services import progress as progress_service
 from app.services import projects as service
 from app.services.authorization import WorkspaceAccess
 
@@ -53,3 +54,11 @@ async def request_package(workflow_id: uuid.UUID, access: Admin, session: DbSess
     commit passed the integration gate; verified projects are packaged automatically."""
     await service.request_partial_package(session, access, workflow_id)
     return Response(status_code=status.HTTP_202_ACCEPTED)
+
+
+@router.get("/progress")
+async def get_progress(
+    workflow_id: uuid.UUID, access: Viewer, session: DbSession
+) -> progress_service.ProgressResponse:
+    """Phase, weighted verified progress and a time-remaining range with its confidence."""
+    return await progress_service.project_progress(session, access, workflow_id)
