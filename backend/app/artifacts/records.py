@@ -21,6 +21,7 @@ _MEDIA_TYPES = {
     ".md": "text/markdown; charset=utf-8",
     ".json": "application/json",
     ".txt": "text/plain; charset=utf-8",
+    ".png": "image/png",
 }
 DEFAULT_MEDIA_TYPE = "application/octet-stream"
 

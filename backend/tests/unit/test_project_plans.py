@@ -262,3 +262,30 @@ def test_the_project_schema_requires_scope_and_effort_per_task() -> None:
     no_effort = _plan(tasks=[_task("t1", ["pyproject.toml", "README.md"], effort_points=None)])
     with pytest.raises(ValidationError):
         ProjectPlanProposal.model_validate(no_effort)
+
+
+def test_ui_development_is_allowed_only_on_profiles_that_offer_it() -> None:
+    # Step 9.10 (ADR-0057): the web profile adds the Frontend Developer's skill.
+    ui = _task("t4", ["static/"], required_skills=["ui_development"], depends_on=["t2"])
+    web = _plan(
+        project={**VALID["project"], "stack_profile": "python-3.12-web"},
+        tasks=[*VALID["tasks"], ui],
+    )
+    assert PlanProposal.model_validate(web).tasks[-1].required_skills == ["ui_development"]
+    with pytest.raises(ValidationError, match="not ui_development"):
+        PlanProposal.model_validate(_plan(tasks=[*VALID["tasks"], ui]))
+
+
+def test_the_web_profile_checks_the_page_and_keeps_a_screenshot() -> None:
+    web = PROFILES["python-3.12-web"]
+    names = [name for name, _ in web.checks]
+    assert names == ["compile", "tests", "web", "ui"]
+    assert web.preview == ("ui", ".agentflow/ui-preview.png")
+    assert all(profile.preview is None for key, profile in PROFILES.items() if key != web.id)
+
+
+def test_the_mock_web_plan_gives_the_page_to_the_frontend_developer() -> None:
+    section = plan._profiles_section("python-3.12-web")
+    proposal = PlanProposal.model_validate_json(plan.mock_plan(_request(section)))
+    ui = [t for t in proposal.tasks if "ui_development" in t.required_skills]
+    assert len(ui) == 1 and ui[0].file_scope == ["static/"]

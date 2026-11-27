@@ -410,20 +410,22 @@ Describe software in one prompt and AgentFlow plans it, builds it with agents, c
 
 1. **New project** (web app, **Projects → New project**): one prompt, creating a workflow of kind `SOFTWARE_PROJECT`.
 2. **Plan** ("Plan & controls" on the project page):
-   - **Start planning:** the planner drafts a version 2 plan on a curated stack profile (`python-3.12` or `node-24-typescript`), where every task owns a file scope and an effort estimate ([ADR-0048](docs/ADR/0048-software-project-plans.md)).
+   - **Start planning:** the planner drafts a version 2 plan on a curated stack profile (`python-3.12`, `node-24-typescript`, or `python-3.12-web` for websites), where every task owns a file scope and an effort estimate ([ADR-0048](docs/ADR/0048-software-project-plans.md)).
    - **Confirm the draft:** the platform pre-assigns each task to the best eligible agent ([ADR-0054](docs/ADR/0054-automatic-pre-assignment.md)).
    - **Approve, then start.**
 3. **Build:**
    - agents propose files;
    - platform verification accepts each task only if its files stay inside its scope;
    - accepted files are committed to the project's Git workspace by the platform ([ADR-0049](docs/ADR/0049-project-workspaces.md)).
-4. **Integrate:** once all work is applied, the profile's checks (compile and pytest, or tsc and vitest) run in an offline, non-root, resource-limited Docker container ([ADR-0050](docs/ADR/0050-docker-sandbox.md)). Only a pass completes the project. A failure or an unavailable sandbox blocks it; resume to retry ([ADR-0051](docs/ADR/0051-integration-gate.md)).
+4. **Integrate:** once all work is applied, the profile's checks (compile and pytest, or tsc and vitest; websites add static HTML/JS checks and a headless-browser check) run in an offline, non-root, resource-limited Docker container ([ADR-0050](docs/ADR/0050-docker-sandbox.md)). Only a pass completes the project. A failure or an unavailable sandbox blocks it; resume to retry ([ADR-0051](docs/ADR/0051-integration-gate.md)).
 5. **Download:** the verified project is packaged and offered on the project page ([ADR-0052](docs/ADR/0052-deliverable-packaging.md)). The package contains:
    - only platform-written files, after a secret scan;
    - `AGENTFLOW_BUILD_REPORT.md`;
    - `AGENTFLOW_MANIFEST.json` with SHA-256 checksums.
 
    Admins may explicitly ask for a **PARTIAL** package of a project that did not pass.
+
+**Websites** ([ADR-0057](docs/ADR/0057-web-ui-projects.md)): ask for a website and the planner picks `python-3.12-web`, a FastAPI API that serves a plain HTML/CSS/JS UI from `static/`, which the **Frontend Developer** agent builds. The sandbox loads the page in headless Chromium and fails it on console errors, broken requests or unlabelled form fields. Its screenshot appears on the project page and in the package (`AGENTFLOW_UI_PREVIEW.png`).
 
 The project page shows the phase, progress weighted by effort (only verified work counts), a time-remaining range with a confidence level, task and integration status, and the downloads ([ADR-0053](docs/ADR/0053-project-progress-and-ux.md)).
 

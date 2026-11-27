@@ -123,12 +123,13 @@ class PlanProposal(BaseModel):
             return self
         if self.schema_version != 2:
             raise ValueError("a project plan has schema_version 2")
+        allowed = PROJECT_TASK_SKILLS | set(PROFILES[self.project.stack_profile].extra_task_skills)
         for task in self.tasks:
-            outside = sorted(set(task.required_skills) - PROJECT_TASK_SKILLS)
+            outside = sorted(set(task.required_skills) - allowed)
             if outside:
                 raise ValueError(
                     f"task {task.key} of a software project may only require "
-                    f"{', '.join(sorted(PROJECT_TASK_SKILLS))} (not {', '.join(outside)})"
+                    f"{', '.join(sorted(allowed))} (not {', '.join(outside)})"
                 )
             if not task.file_scope:
                 raise ValueError(f"task {task.key} needs a file_scope")

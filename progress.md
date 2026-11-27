@@ -2,8 +2,22 @@
 
 ## Current position
 - Phase: 9 — Software project generation (ADR-0046; Phases 2–7 and Steps 8.1–8.2 complete; Phase 1 released as `v0.1.0`)
-- Last completed step: 9.8 — End-to-end journey and release v0.2.0 (Phase 9 complete)
+- Last completed step: 9.10 — Web UI projects (after 9.9 integration rework; Phase 9 complete since 9.8)
 - Next step: 8.4 — Safe workflow replay (then 8.5–8.7), or the Phase 9 follow-ups below; needs the owner's go-ahead
+
+## Step 9.10 — web UI projects (ADR-0057, 2026-11-27)
+- **Owner's request:** projects that create a basic UI/UX in HTML/CSS/JS; the full scope was chosen.
+- **What was added:**
+  - **Profile `python-3.12-web`:** FastAPI serves `/api/` and the static UI in `static/`. Its image `agentflow-sandbox/python-3.12-web:1` adds Playwright Chromium, html5lib and Node.js for `node --check`.
+  - **Checks:** `compile` and `tests` as before, plus `web` (doctype, HTML parse errors, no external URLs, JS syntax) and `ui` (headless Chromium: console and page errors, failed or 4xx/5xx requests, title, `lang`, labelled form controls, full-page screenshot).
+  - **Frontend Developer** built-in agent (`builtin://frontend/v1`, `ui_development`). The web profile allows that skill (`extra_task_skills`); prompt `software_plan/v6`.
+  - **Preview:** the sandbox returns the screenshot (`collect`). It is stored as a `UI_PREVIEW` artifact (migration 0036) and linked from the `ui` check. The project page shows it (UI preview card), and a VERIFIED ZIP includes `AGENTFLOW_UI_PREVIEW.png`, named in the build report.
+- **Bug found by the new test:** storing the preview flushed the run while it was half-updated (`ck_project_integrations_finished_unless_running`); the preview is now stored first.
+- **Dev database:** migrated to 0036; `app.agents.seed` created "Frontend Developer".
+- **Checks:**
+  - Backend gate run alone: format, lint, `mypy app tests alembic` and `alembic check` clean; `uv run pytest` 1357 passed, 2 skipped, 4 failed. The 4 failures were exact built-in lists and counts that still expected six agents. They were updated to seven, and their files were re-run: 92 tests passed, including all 10 RLS tests.
+  - `tests/integration/test_web_ui_checks.py` (4 tests on the real image) passes.
+  - Frontend: lint, typecheck, `npm test` 193/193, and `npm run build` passed.
 
 ## Step 9.8 — end-to-end journey and release v0.2.0 (ADR-0054)
 - **Gap found by the journey:** software project tasks needed a person to pre-assign agents.

@@ -22,6 +22,7 @@ import { ProjectCreateView } from "./project-create-view";
 import { ProjectDetailView } from "./project-detail-view";
 import { PhaseBadge, ProgressSummary } from "./project-progress";
 import { ProjectsListView } from "./projects-list-view";
+import { latestPreview, UiPreview } from "./ui-preview";
 
 const router = { replace: vi.fn(), push: vi.fn() };
 vi.mock("next/navigation", () => ({
@@ -371,5 +372,33 @@ describe("ProjectDetailView", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "Todo API" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Package current state (partial)" })).toBeNull();
     expect(screen.queryByText(/waiting for a person/)).toBeNull();
+  });
+});
+
+describe("UiPreview", () => {
+  const run = (id: string, previewId: string | null, outcome: "passed" | "failed" = "passed") => ({
+    id,
+    workflow_id: "wf-1",
+    head_sha: "a".repeat(40),
+    stack_profile: "python-3.12-web",
+    status: outcome === "passed" ? ("PASSED" as const) : ("FAILED" as const),
+    checks: [
+      { name: "tests", outcome: "passed" as const },
+      { name: "ui", outcome, preview_artifact_id: previewId },
+    ],
+    error_code: null,
+    created_at: "2026-11-27T10:00:00Z",
+    finished_at: "2026-11-27T10:00:30Z",
+  });
+
+  it("shows the newest screenshot from the artifacts API, and nothing without one", () => {
+    expect(latestPreview([run("r-1", null)])).toBeNull();
+    renderWith(<UiPreview workflowId="wf-1" runs={[run("r-2", "img-2", "failed"), run("r-1", "img-1")]} />);
+    const image = screen.getByRole("img", { name: /Screenshot of the project's web page/ });
+    expect(image).toHaveAttribute(
+      "src",
+      "http://localhost:8000/api/v1/workspaces/ws-1/workflows/wf-1/artifacts/img-2/download",
+    );
+    expect(screen.getByText(/UI checks did not pass yet/)).toBeInTheDocument();
   });
 });

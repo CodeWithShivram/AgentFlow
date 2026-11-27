@@ -33,6 +33,8 @@ class ArtifactKind(StrEnum):
     BUILD_REPORT = "BUILD_REPORT"
     # Any other file produced for one task attempt.
     TASK_OUTPUT = "TASK_OUTPUT"
+    # A screenshot of a web project's page from its integration run (ADR-0057).
+    UI_PREVIEW = "UI_PREVIEW"
 
 
 class ArtifactStatus(StrEnum):

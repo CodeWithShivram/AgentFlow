@@ -207,8 +207,8 @@ async def test_seeding_is_idempotent_and_versions_changed_definitions(engine: As
     first = await _run(engine, seed_builtin_agents)
     second = await _run(engine, seed_builtin_agents)
 
-    assert len(first.created) == 6 and not first.updated
-    assert len(second.unchanged) == 6 and not second.created and not second.updated
+    assert len(first.created) == 7 and not first.updated
+    assert len(second.unchanged) == 7 and not second.created and not second.updated
 
     definitions = load_definitions()
     writer = next(d for d in definitions if d.name == "Writer")

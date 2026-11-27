@@ -29,6 +29,9 @@ MAX_TOTAL_BYTES = 50 * 1024 * 1024
 FIXED_TIMESTAMP = (2026, 1, 1, 0, 0, 0)
 REPORT_NAME = "AGENTFLOW_BUILD_REPORT.md"
 MANIFEST_NAME = "AGENTFLOW_MANIFEST.json"
+# A web project's page as the sandbox browser rendered it (ADR-0057); platform bytes, not a
+# project file, so it is outside the manifest like the report.
+PREVIEW_NAME = "AGENTFLOW_UI_PREVIEW.png"
 
 _DENIED_SEGMENTS = frozenset(
     {".git", "node_modules", ".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache",
@@ -103,7 +106,7 @@ def select_files(project: Path, tracked: Iterable[str]) -> Selection:
         pure = PurePosixPath(relative)
         if pure.is_absolute() or ".." in pure.parts or "\\" in relative or not relative:
             raise PackagingError("PATH_REFUSED")
-        if denied(relative) or relative in (REPORT_NAME, MANIFEST_NAME):
+        if denied(relative) or relative in (REPORT_NAME, MANIFEST_NAME, PREVIEW_NAME):
             selection.excluded += 1
             continue
         path = project / relative
@@ -149,6 +152,7 @@ def build_report(
     setup: list[str],
     entries: list[ManifestEntry],
     excluded: int,
+    preview: bool = False,
 ) -> str:
     """The human-readable build report. Task titles and project text come from the plan (model
     output) and are written as plain Markdown text; check output is not included (it can be
@@ -188,6 +192,8 @@ def build_report(
         out += [f"- `{line(c['name'])}`: {line(c['outcome'])}" for c in checks]
     else:
         out += ["- No integration checks ran."]
+    if preview:
+        out += [f"- Page screenshot from the headless-browser check: `{PREVIEW_NAME}`"]
     out += [
         "",
         "## Known limitations",
@@ -245,6 +251,7 @@ def package(
     *,
     folder: str,
     report: Callable[[list[ManifestEntry], int], str],
+    preview: bytes | None = None,
 ) -> tuple[list[ManifestEntry], int]:
     """Selects, scans and archives the project into `target`, then verifies the archive.
     Returns the manifest and the number of excluded files."""
@@ -254,11 +261,9 @@ def package(
         {"files": [e.__dict__ for e in entries]}, indent=2, sort_keys=True
     ).encode()
     report_text = report(entries, selection.excluded).encode()
-    write_archive(
-        target,
-        folder,
-        selection.files,
-        [(REPORT_NAME, report_text), (MANIFEST_NAME, manifest_json)],
-    )
+    extras = [(REPORT_NAME, report_text), (MANIFEST_NAME, manifest_json)]
+    if preview is not None:
+        extras.append((PREVIEW_NAME, preview))
+    write_archive(target, folder, selection.files, extras)
     verify_archive(target, folder, {e.path: e.sha256 for e in entries})
     return entries, selection.excluded

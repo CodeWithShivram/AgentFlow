@@ -3,6 +3,7 @@ profile's checks pass in the sandbox on the composed workspace; failures and an 
 sandbox block it, and resuming retries on the current tree."""
 
 import uuid
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -45,7 +46,9 @@ class _FakeSandbox(DockerSandbox):
         super().__init__()
         self.succeed, self.unavailable, self.calls = succeed, unavailable, 0
 
-    def run(self, image: str, project: Path, command: list[str]) -> SandboxResult:  # type: ignore[override]
+    def run(
+        self, image: str, project: Path, command: Sequence[str], collect: Sequence[str] = ()
+    ) -> SandboxResult:
         self.calls += 1
         if self.unavailable:
             raise SandboxUnavailableError("DOCKER_UNAVAILABLE")

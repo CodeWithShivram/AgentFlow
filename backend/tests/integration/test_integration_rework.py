@@ -2,6 +2,7 @@
 for fixes, bounded in rounds; fix tasks run like any task and the gate runs again."""
 
 import uuid
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -42,7 +43,9 @@ class _FailingSandbox(_FakeSandbox):
         super().__init__(succeed=False)
         self.output = output
 
-    def run(self, image: str, project: Path, command: list[str]) -> SandboxResult:  # type: ignore[override]
+    def run(
+        self, image: str, project: Path, command: Sequence[str], collect: Sequence[str] = ()
+    ) -> SandboxResult:
         return SandboxResult(exit_code=1, timed_out=False, output=self.output, duration_ms=5)
 
 

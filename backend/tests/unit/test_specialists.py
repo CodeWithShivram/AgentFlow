@@ -16,6 +16,7 @@ from app.agents.specialists import (
     AgentRuntimeUnavailableError,
     AnalystAgent,
     DeveloperAgent,
+    FrontendAgent,
     GeneralAgent,
     QAAgent,
     ResearchAgent,
@@ -121,6 +122,7 @@ def test_runtimes_come_only_from_built_in_instruction_references() -> None:
         "builtin://general/v1": GeneralAgent,
         "builtin://developer/v1": DeveloperAgent,  # Step 3.5
         "builtin://qa/v1": QAAgent,  # Step 3.5
+        "builtin://frontend/v1": FrontendAgent,  # Step 9.10
     }
     assert set(RUNTIMES) == set(INSTRUCTIONS)
     for ref in ("workspace://prompts/w/v1", "builtin://unknown/v1", "builtin://writer/v2"):

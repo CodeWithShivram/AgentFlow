@@ -16,6 +16,7 @@ that cannot run is NOT_RUN, never passed. People can retry by resuming the block
 or replan its work (ADR-0033).
 """
 
+import io
 import logging
 import uuid
 from dataclasses import dataclass
@@ -26,9 +27,12 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.artifacts.records import store_artifact
+from app.artifacts.storage import ArtifactStorageError, LocalArtifactStorage
 from app.execution import outbox
 from app.models import (
     AgentExecution,
+    ArtifactKind,
     ExecutionStatus,
     IntegrationStatus,
     ProjectIntegration,
@@ -69,6 +73,8 @@ class IntegrationOutcome:
     status: IntegrationStatus
     checks: list[dict[str, Any]]
     error_code: str | None
+    # Web profiles (ADR-0057): the page screenshot the preview check left, if any.
+    preview: bytes | None = None
 
 
 def _lock(session: Session, workspace_id: uuid.UUID, workflow_id: uuid.UUID) -> Workflow | None:
@@ -190,9 +196,11 @@ def execute(sandbox: DockerSandbox, job: IntegrationJob) -> IntegrationOutcome:
     evidence is complete; the gate passes only if each one did."""
     profile = PROFILES[job.stack_profile]
     checks: list[dict[str, Any]] = []
+    preview: bytes | None = None
     for name, command in profile.checks:
+        collect = [profile.preview[1]] if profile.preview and profile.preview[0] == name else []
         try:
-            result = sandbox.run(profile.image, job.project_path, list(command))
+            result = sandbox.run(profile.image, job.project_path, list(command), collect)
         except SandboxUnavailableError as error:
             checks.append({"name": name, "outcome": "not_run"})
             return IntegrationOutcome(IntegrationStatus.NOT_RUN, checks, error.code)
@@ -206,9 +214,11 @@ def execute(sandbox: DockerSandbox, job: IntegrationJob) -> IntegrationOutcome:
                 "output": result.output,
             }
         )
+        if collect and collect[0] in result.files:
+            preview = result.files[collect[0]]
     if all(check["outcome"] == "passed" for check in checks):
-        return IntegrationOutcome(IntegrationStatus.PASSED, checks, None)
-    return IntegrationOutcome(IntegrationStatus.FAILED, checks, "CHECKS_FAILED")
+        return IntegrationOutcome(IntegrationStatus.PASSED, checks, None, preview)
+    return IntegrationOutcome(IntegrationStatus.FAILED, checks, "CHECKS_FAILED", preview)
 
 
 def finish(
@@ -216,14 +226,18 @@ def finish(
     workspaces: ProjectWorkspaces,
     job: IntegrationJob,
     outcome: IntegrationOutcome,
+    storage: LocalArtifactStorage | None = None,
 ) -> str:
     workflow = _lock(session, job.workspace_id, job.workflow_id)
     integration = session.get(ProjectIntegration, job.integration_id)
     if workflow is None or integration is None or integration.status != IntegrationStatus.RUNNING:
         session.commit()
         return "stale"
+    # Before any change to the run: storing the preview flushes, and a finished run needs all
+    # its fields at once (ck_project_integrations_finished_unless_running).
+    checks = _with_preview(session, storage, workflow, integration, outcome)
     integration.status = outcome.status
-    integration.checks = outcome.checks
+    integration.checks = checks
     integration.error_code = outcome.error_code
     integration.finished_at = datetime.now(UTC)
     session.flush()
@@ -260,3 +274,36 @@ def finish(
         extra={"workflow_id": str(job.workflow_id), "outcome": result, "note": result_note},
     )
     return "fixes_requested" if result_note else result
+
+
+def _with_preview(
+    session: Session,
+    storage: LocalArtifactStorage | None,
+    workflow: Workflow,
+    integration: ProjectIntegration,
+    outcome: IntegrationOutcome,
+) -> list[dict[str, Any]]:
+    """Stores a web project's page screenshot as a UI_PREVIEW artifact (ADR-0057) and links it
+    from its check. Without storage or a screenshot, the checks are returned unchanged."""
+    checks = [dict(check) for check in outcome.checks]
+    if storage is None or not outcome.preview:
+        return checks
+    profile = PROFILES[integration.stack_profile]
+    if profile.preview is None:
+        return checks
+    try:
+        artifact = store_artifact(
+            session,
+            storage,
+            workspace_id=workflow.workspace_id,
+            workflow_id=workflow.id,
+            kind=ArtifactKind.UI_PREVIEW,
+            filename=f"ui-preview-{integration.head_sha[:8]}.png",
+            source=io.BytesIO(outcome.preview),
+        )
+    except ArtifactStorageError:
+        return checks  # the run's result stands; only the picture is missing
+    for check in checks:
+        if check.get("name") == profile.preview[0]:
+            check["preview_artifact_id"] = str(artifact.id)
+    return checks

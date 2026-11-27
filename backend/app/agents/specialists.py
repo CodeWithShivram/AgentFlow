@@ -270,6 +270,12 @@ class DeveloperAgent(ModelAgent):
     note_unless_tools = frozenset({"workspace_files_write", "test_runner"})
 
 
+class FrontendAgent(DeveloperAgent):
+    """The Developer runtime with UI/UX instructions (ADR-0057): same outputs and checks."""
+
+    instruction_ref = "builtin://frontend/v1"
+
+
 class QAAgent(ModelAgent):
     instruction_ref = "builtin://qa/v1"
     outputs_model = QAOutputs
@@ -295,6 +301,7 @@ RUNTIMES: dict[str, type[BaseAgent]] = {
         WriterAgent,
         GeneralAgent,
         DeveloperAgent,
+        FrontendAgent,
         QAAgent,
     )
 }
@@ -325,12 +332,66 @@ _MOCK_FILE_CONTENT = {
 }
 
 
+# The python-3.12-web profile (ADR-0057): an app serving static/, an accessible page and a test.
+_MOCK_WEB_APP = """from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+
+app = FastAPI()
+
+
+@app.get("/api/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+app.mount("/", StaticFiles(directory="static", html=True), name="static")
+"""
+_MOCK_INDEX_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mock project</title>
+  <style>body { font-family: system-ui, sans-serif; margin: 2rem; }</style>
+</head>
+<body>
+  <main>
+    <h1>Mock project</h1>
+    <form>
+      <label for="name">Name</label>
+      <input id="name" name="name">
+      <button type="submit">Save</button>
+    </form>
+  </main>
+</body>
+</html>
+"""
+_MOCK_WEB_TEST = """from fastapi.testclient import TestClient
+
+from mock_app.main import app
+
+
+def test_health() -> None:
+    assert TestClient(app).get("/api/health").json() == {"status": "ok"}
+"""
+# A fix marker in each file type's comment syntax, so a revised file stays valid.
+_REVISED = {".html": "<!-- revised -->\n", ".css": "/* revised */\n", ".js": "// revised\n",
+            ".ts": "// revised\n", ".py": "# revised\n"}  # fmt: skip
+
+
 def _mock_scoped_file(entry: str, profile: str | None) -> tuple[str, str]:
     """A deterministic file for one scope entry: the entry itself for exact files, or a module
     (or a test, under a test folder) inside a folder entry."""
     node = profile is not None and profile.startswith("node")
+    web = profile == "python-3.12-web"
     if not entry.endswith("/"):
         return entry, _MOCK_FILE_CONTENT.get(entry.rsplit("/", 1)[-1], "Mock content.\n")
+    if web and entry == "static/":
+        return f"{entry}index.html", _MOCK_INDEX_HTML
+    if web and entry == "src/":
+        return f"{entry}mock_app/main.py", _MOCK_WEB_APP
+    if web and entry == "tests/":
+        return f"{entry}test_mock_app.py", _MOCK_WEB_TEST
     if entry.split("/", 1)[0] == "tests":
         if node:
             return f"{entry}mock.test.ts", (
@@ -353,7 +414,6 @@ def _mock_developer_outputs(contract: dict[str, Any]) -> dict[str, Any]:
         if contract.get("integration_feedback"):
             # An integration fix (ADR-0056) must change its files: mark them as revised.
             # Each round builds on the scope's current content, so every fix changes something.
-            marker = "//" if profile and str(profile).startswith("node") else "#"
             current = {
                 str(f.get("path")): str(f.get("content", ""))
                 for f in contract.get("current_files", [])
@@ -363,7 +423,8 @@ def _mock_developer_outputs(contract: dict[str, Any]) -> dict[str, Any]:
                     path,
                     text
                     if path.endswith((".json", ".md"))
-                    else f"{current.get(path, text)}{marker} revised\n",
+                    else current.get(path, text)
+                    + _REVISED.get(path[path.rfind(".") :], "# revised\n"),
                 )
                 for path, text in files
             ]

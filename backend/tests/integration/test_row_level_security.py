@@ -228,8 +228,8 @@ def test_without_a_user_context_no_workspace_rows_are_visible(
     assert _as_user(api_engine, None, "SELECT count(*) FROM workspaces") == [(0,)]
     assert _as_user(api_engine, None, "SELECT count(*) FROM workspace_members") == [(0,)]
     # Built-in agents and their versions are shared, read-only platform data.
-    assert _as_user(api_engine, None, "SELECT count(*) FROM agents") == [(6,)]
-    assert _as_user(api_engine, None, "SELECT count(*) FROM agent_versions") == [(6,)]
+    assert _as_user(api_engine, None, "SELECT count(*) FROM agents") == [(7,)]
+    assert _as_user(api_engine, None, "SELECT count(*) FROM agent_versions") == [(7,)]
 
 
 def test_built_in_agents_are_read_only_for_the_api(

@@ -125,7 +125,7 @@ def workspace(owner: TestClient) -> str:
 # --- built-ins ------------------------------------------------------------------------------
 
 
-def test_every_workspace_sees_the_six_active_builtins(owner: TestClient, workspace: str) -> None:
+def test_every_workspace_sees_the_seven_active_builtins(owner: TestClient, workspace: str) -> None:
     page = owner.get(agents_url(workspace)).json()
 
     builtins = [a for a in page["items"] if a["is_builtin"]]
@@ -133,6 +133,7 @@ def test_every_workspace_sees_the_six_active_builtins(owner: TestClient, workspa
         "Researcher",
         "Analyst",
         "Developer",
+        "Frontend Developer",  # Step 9.10
         "Writer",
         "QA",
         "General",
@@ -558,6 +559,6 @@ def test_agent_and_version_lists_are_paginated(owner: TestClient, workspace: str
     page = owner.get(agents_url(workspace), params={"limit": 2, "offset": 0}).json()
     filtered = owner.get(agents_url(workspace), params={"status": "INACTIVE"}).json()
 
-    assert page["total"] == 6 and len(page["items"]) == 2
+    assert page["total"] == 7 and len(page["items"]) == 2
     assert filtered["total"] == 0
     assert owner.get(agents_url(workspace), params={"limit": 0}).status_code == 422

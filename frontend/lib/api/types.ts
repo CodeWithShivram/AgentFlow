@@ -920,6 +920,8 @@ export interface IntegrationCheck {
   timed_out?: boolean | null;
   duration_ms?: number | null;
   output?: string | null;
+  // Web projects (ADR-0057): the stored screenshot of the page, on the check that took it.
+  preview_artifact_id?: Uuid | null;
 }
 
 export interface IntegrationRun {

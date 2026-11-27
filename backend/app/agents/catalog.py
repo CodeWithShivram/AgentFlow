@@ -53,6 +53,7 @@ CAPABILITIES: frozenset[str] = frozenset(
         "calculation",
         "data_interpretation",
         "code_generation",
+        "ui_development",
         "debugging",
         "implementation",
         "report_writing",

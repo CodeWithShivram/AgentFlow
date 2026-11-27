@@ -373,7 +373,9 @@ def integrate_project(event_id: str, workspace_id: str, workflow_id: str) -> str
         return job
     outcome = integration_job.execute(DockerSandbox(), job)
     with session_scope(factory) as session:
-        return integration_job.finish(session, workspaces, job, outcome)
+        return integration_job.finish(
+            session, workspaces, job, outcome, storage_from_settings(settings)
+        )
 
 
 @celery_app.task(name="agentflow.package_project", soft_time_limit=300, time_limit=360)

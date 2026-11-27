@@ -16,6 +16,7 @@ import { useCan, useWorkspace } from "@/lib/workspace";
 
 import { Deliverables, PackageNowAction } from "./deliverables";
 import { IntegrationRuns } from "./integration-runs";
+import { latestPreview, UiPreview } from "./ui-preview";
 import { PACKAGEABLE_STATUSES, projectName } from "./phase";
 import { PhaseBadge, ProgressSummary } from "./project-progress";
 import { ProjectTasks } from "./project-tasks";
@@ -102,6 +103,19 @@ export function ProjectDetailView() {
           )}
         </CardContent>
       </Card>
+
+      {integrations.data && latestPreview(integrations.data) ? (
+        <Card role="region" aria-label="UI preview">
+          <CardHeader>
+            <CardTitle>
+              <h2>UI preview</h2>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <UiPreview workflowId={wf.id} runs={integrations.data} />
+          </CardContent>
+        </Card>
+      ) : null}
 
       <Card role="region" aria-label="Deliverables">
         <CardHeader>

@@ -219,6 +219,11 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
 - Progress (ADR-0053, `app/services/progress.py`): weighted by effort, only verified (COMPLETED) work counts, software
   projects add integration and package milestones, 100% only when truly done; time remaining is a range with a
   confidence label from stored attempt durations, or no estimate (`confidence: none`). Never show a countdown.
+- Web UI projects (ADR-0057): profile `python-3.12-web` (FastAPI serving `static/` HTML/CSS/JS, no frameworks or
+  external URLs) adds `web` (static) and `ui` (headless Chromium in the sandbox) checks and `ui_development` for the
+  Frontend Developer (`builtin://frontend/v1`). The `ui` screenshot comes back via `DockerSandbox.run(collect=...)`, is
+  stored as a `UI_PREVIEW` artifact linked from its check, shown on the project page and packaged as
+  `AGENTFLOW_UI_PREVIEW.png`. Losing the picture never changes a run's result.
 - Workflow events are append-only.
 
 ## Security

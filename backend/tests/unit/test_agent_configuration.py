@@ -128,13 +128,14 @@ def test_code_execution_tools_are_high_risk_and_unavailable_in_phase_1() -> None
         assert not TOOLS[name].available_in_phase_1
 
 
-def test_builtin_definitions_are_the_six_specialists_and_valid() -> None:
+def test_builtin_definitions_are_the_seven_specialists_and_valid() -> None:
     definitions = load_definitions()
 
     assert [d.name for d in definitions] == [
         "Researcher",
         "Analyst",
         "Developer",
+        "Frontend Developer",  # Step 9.10
         "Writer",
         "QA",
         "General",

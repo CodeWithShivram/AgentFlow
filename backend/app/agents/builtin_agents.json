@@ -50,6 +50,19 @@
       }
     },
     {
+      "name": "Frontend Developer",
+      "category": "development",
+      "description": "Accessible, responsive web user interfaces in plain HTML, CSS and JavaScript.",
+      "configuration": {
+        "schema_version": 1,
+        "system_instruction_ref": "builtin://frontend/v1",
+        "model": {"profile": "default", "temperature": 0.2, "max_output_tokens": 8192},
+        "capabilities": ["ui_development"],
+        "tools": [],
+        "limits": {"timeout_seconds": 900}
+      }
+    },
+    {
       "name": "Writer",
       "category": "writing",
       "description": "Reports, documentation and editing.",

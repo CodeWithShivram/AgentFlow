@@ -90,6 +90,7 @@ jobs:
         run: |
           docker build --tag agentflow-sandbox/python-3.12:1 infrastructure/sandbox/python-3.12
           docker build --tag agentflow-sandbox/node-24-typescript:1 infrastructure/sandbox/node-24-typescript
+          docker build --tag agentflow-sandbox/python-3.12-web:1 infrastructure/sandbox/python-3.12-web
 
       - name: pytest
         run: uv run pytest

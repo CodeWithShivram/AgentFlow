@@ -197,7 +197,7 @@ def client(new_client: ClientFactory) -> TestClient:
 
 @pytest.fixture
 def seeded_builtins(api_settings: Settings) -> Settings:
-    """Seeds the six built-in agents into the test database (emptied after each test)."""
+    """Seeds the seven built-in agents into the test database (emptied after each test)."""
     from app.agents.seed import seed_builtin_agents
     from app.db.session import create_engine as create_app_engine
     from tests.conftest import LOOP_FACTORY

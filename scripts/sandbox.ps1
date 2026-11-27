@@ -12,6 +12,7 @@ $root = Split-Path -Parent $PSScriptRoot
 $images = @{
     'python-3.12'        = 'agentflow-sandbox/python-3.12:1'
     'node-24-typescript' = 'agentflow-sandbox/node-24-typescript:1'
+    'python-3.12-web'    = 'agentflow-sandbox/python-3.12-web:1'
 }
 switch ($Action) {
     'build' {

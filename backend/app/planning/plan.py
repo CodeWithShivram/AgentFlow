@@ -79,7 +79,7 @@ REPLAN_PROMPT_VERSION = "replan/v2"
 # v2: project tasks may only require the Developer's skills; v3: the schema requires the project
 # v4: the schema requires every task's file_scope and effort_points; v5: profiles carry their
 # layout conventions (live Gemini runs, ADR-0055).
-SOFTWARE_PROMPT_VERSION = "software_plan/v5"
+SOFTWARE_PROMPT_VERSION = "software_plan/v6"
 # Workflows whose remaining work is replanned instead of planned (ADR-0033).
 REPLAN_STATUSES = frozenset({WorkflowStatus.PAUSED, WorkflowStatus.BLOCKED})
 CONSUMER = "plan_workflow"
@@ -129,7 +129,9 @@ This is a SOFTWARE PROJECT: plan a coherent, runnable, tested source-code projec
   is owned by exactly one task (usually a first setup task the others depend on).
 - Give every task `effort_points` from 1 (trivial) to 13 (largest).
 - Every task produces files, so required_skills may only be code_generation, implementation or
-  debugging. Tests, README and configuration are written by these tasks too (in their scope).
+  debugging, plus a profile's extra_task_skills for the tasks they fit (ui_development for the
+  web UI). Tests, README and configuration are written by these tasks too (in their scope).
+- Choose python-3.12-web when the request asks for a website, web page or browser UI.
 - Include tests under the profile's test folders and a README with setup, run and test steps.
 - Never plan secrets, real credentials or files named .env; use .env.example placeholders."""
 
@@ -145,6 +147,7 @@ def _profiles_section(stack_profile: str | None) -> str:
             "shared_files": list(p.shared_files),
             "test_paths": list(p.test_paths),
             "conventions": p.conventions,
+            "extra_task_skills": list(p.extra_task_skills),
         }
         for p in profiles
     ]
@@ -305,13 +308,18 @@ def mock_replan(text: str) -> str:
 
 
 def _mock_task(
-    key: str, title: str, scope: list[str], effort: int, depends_on: list[str]
+    key: str,
+    title: str,
+    scope: list[str],
+    effort: int,
+    depends_on: list[str],
+    skills: tuple[str, ...] = ("code_generation",),
 ) -> dict[str, Any]:
     return {
         "key": key,
         "title": title,
         "description": f"{title} (planned by the mock model provider; no real model).",
-        "required_skills": ["code_generation"],
+        "required_skills": list(skills),
         "deliverables": [f"Files for: {title}"],
         "acceptance_criteria": [{"id": "c1", "description": f"{title} is complete and tested."}],
         "priority": 0,
@@ -340,6 +348,11 @@ def mock_software_plan(text: str) -> str:
         "tasks": [
             _mock_task("t1", "Set up the project", [*shared, ".env.example"], 2, []),
             _mock_task("t2", "Implement the application", ["src/"], 5, ["t1"]),
+            *(
+                [_mock_task("t4", "Build the web UI", ["static/"], 3, ["t2"], ("ui_development",))]
+                if profile["id"] == "python-3.12-web"
+                else []
+            ),
             _mock_task("t3", "Write the automated tests", ["tests/"], 3, ["t2"]),
         ],
         "risks": ["Plan drafted by the mock model provider (no real model)."],

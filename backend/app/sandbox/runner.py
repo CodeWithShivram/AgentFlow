@@ -23,7 +23,7 @@ import tempfile
 import time
 import uuid
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 DOCKER_TIMEOUT_SECONDS = 30
@@ -61,6 +61,8 @@ class SandboxResult:
     timed_out: bool
     output: str  # stdout and stderr, capped and redacted
     duration_ms: int
+    # Files the run left in the copy that the caller asked for (ADR-0057), by relative path.
+    files: dict[str, bytes] = field(default_factory=dict)
 
     @property
     def succeeded(self) -> bool:
@@ -145,7 +147,13 @@ class DockerSandbox:
         if self._quick("image", "inspect", image).returncode != 0:
             raise SandboxUnavailableError("IMAGE_MISSING")
 
-    def run(self, image: str, project: Path, command: Sequence[str]) -> SandboxResult:
+    def run(
+        self,
+        image: str,
+        project: Path,
+        command: Sequence[str],
+        collect: Sequence[str] = (),
+    ) -> SandboxResult:
         """Runs `command` (a fixed platform command) in a fresh container on a copy of
         `project`. Raises SandboxUnavailableError when it cannot run at all."""
         self.ensure_image(image)
@@ -205,9 +213,31 @@ class DockerSandbox:
             except OSError:
                 raise SandboxUnavailableError("DOCKER_UNAVAILABLE") from None
             duration = int((time.monotonic() - started) * 1000)
+            files = _collect(work, collect)
         return SandboxResult(
             exit_code=exit_code,
             timed_out=timed_out,
             output=_cap(redact(output), limits.output_chars),
             duration_ms=duration,
+            files=files,
         )
+
+
+MAX_COLLECTED_BYTES = 5 * 1024 * 1024
+
+
+def _collect(work: Path, paths: Sequence[str]) -> dict[str, bytes]:
+    """Reads files a run left in its copy: regular files only, inside the copy, size-capped.
+    Anything else is silently left out (the run's own output says what happened)."""
+    collected: dict[str, bytes] = {}
+    root = work.resolve()
+    for relative in paths:
+        target = work / relative
+        if target.is_symlink() or not target.is_file():
+            continue
+        if not target.resolve().is_relative_to(root):
+            continue
+        if target.stat().st_size > MAX_COLLECTED_BYTES:
+            continue
+        collected[relative] = target.read_bytes()
+    return collected

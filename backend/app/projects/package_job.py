@@ -24,9 +24,11 @@ from app.execution import outbox
 from app.models import (
     Artifact,
     ArtifactKind,
+    ArtifactStatus,
     IntegrationStatus,
     PackageLabel,
     PackageStatus,
+    ProjectIntegration,
     ProjectPackage,
     Workflow,
     WorkflowKind,
@@ -141,6 +143,7 @@ def run(
         {"name": c.get("name"), "outcome": c.get("outcome")}
         for c in (integration.checks if integration is not None else [])
     ]
+    preview = _preview(session, storage, integration) if verified else None
     stored: list[Artifact] = []
     savepoint = session.begin_nested()  # artifact rows roll back with their bytes
     try:
@@ -158,11 +161,12 @@ def run(
                     setup=setup_commands(profile),
                     entries=entries,
                     excluded=excluded,
+                    preview=preview is not None,
                 )
                 return report_text["text"]
 
             entries, excluded = packaging.package(
-                project, tracked, target, folder=name, report=report
+                project, tracked, target, folder=name, report=report, preview=preview
             )
             suffix = "" if label == PackageLabel.VERIFIED else "-partial"
             with target.open("rb") as archive:
@@ -206,3 +210,33 @@ def run(
         extra={"workflow_id": str(workflow.id), "outcome": outcome, "label": label.value},
     )
     return outcome
+
+
+def _preview(
+    session: Session, storage: LocalArtifactStorage, integration: ProjectIntegration | None
+) -> bytes | None:
+    """The page screenshot of the integration run being packaged (ADR-0057), verified against
+    its recorded size and SHA-256. A missing or damaged screenshot only leaves it out."""
+    if integration is None:
+        return None
+    ids = [c.get("preview_artifact_id") for c in integration.checks if c.get("preview_artifact_id")]
+    if not ids:
+        return None
+    try:
+        artifact = session.get(Artifact, uuid.UUID(str(ids[0])))
+    except ValueError:
+        return None
+    if (
+        artifact is None
+        or artifact.workflow_id != integration.workflow_id
+        or artifact.kind != ArtifactKind.UI_PREVIEW
+        or artifact.status != ArtifactStatus.AVAILABLE
+    ):
+        return None
+    try:
+        path = storage.verified_path(
+            artifact.storage_key, size_bytes=artifact.size_bytes, sha256=artifact.sha256
+        )
+        return path.read_bytes()
+    except (ArtifactStorageError, OSError):
+        return None
