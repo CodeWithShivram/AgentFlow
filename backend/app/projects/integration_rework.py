@@ -22,6 +22,7 @@ from app.models import (
     ProjectIntegration,
     TaskStatus,
     Workflow,
+    WorkflowEvent,
     WorkflowEventType,
     WorkflowTask,
 )
@@ -41,16 +42,42 @@ _FIX_DESCRIPTION = (
 )
 
 
+def _last_resumed(session: Session, workflow: Workflow) -> Any:
+    """When a person last resumed the project from BLOCKED, if ever."""
+    return session.execute(
+        select(func.max(WorkflowEvent.created_at)).where(
+            WorkflowEvent.workflow_id == workflow.id,
+            WorkflowEvent.workspace_id == workflow.workspace_id,
+            WorkflowEvent.payload["from"].astext == "BLOCKED",
+            WorkflowEvent.payload["to"].astext == "RUNNING",
+            WorkflowEvent.payload["actor"].astext == Actor.USER.value,
+        )
+    ).scalar_one_or_none()
+
+
 def fix_rounds(session: Session, workflow: Workflow) -> int:
-    """How many failed integrations already asked for fixes."""
-    count = session.execute(
-        select(func.count(func.distinct(WorkflowTask.fixes_integration_id))).where(
+    """How many failed integrations asked for fixes since a person last resumed the project (a
+    resume after a block grants fresh rounds)."""
+    since = _last_resumed(session, workflow)
+    query = (
+        select(func.count(func.distinct(WorkflowTask.fixes_integration_id)))
+        .join(ProjectIntegration, ProjectIntegration.id == WorkflowTask.fixes_integration_id)
+        .where(
             WorkflowTask.workflow_id == workflow.id,
             WorkflowTask.workspace_id == workflow.workspace_id,
-            WorkflowTask.fixes_integration_id.is_not(None),
         )
-    ).scalar_one()
-    return int(count)
+    )
+    if since is not None:
+        query = query.where(ProjectIntegration.created_at > since)
+    return int(session.execute(query).scalar_one())
+
+
+def _original_title(session: Session, target: WorkflowTask) -> str:
+    """The planned task's title, so fixes of fixes are not named 'Fix integration: Fix ...'."""
+    if target.fixes_task_id is None:
+        return target.title
+    original = session.get(WorkflowTask, target.fixes_task_id)
+    return original.title if original is not None else target.title
 
 
 def failed_output(integration: ProjectIntegration) -> str:
@@ -109,7 +136,7 @@ def schedule_fixes(
             id=uuid.uuid4(),
             workspace_id=workflow.workspace_id,
             workflow_id=workflow.id,
-            title=f"Fix integration: {target.title}"[:300],
+            title=f"Fix integration: {_original_title(session, target)}"[:300],
             description=_FIX_DESCRIPTION,
             required_skills=list(target.required_skills),
             input_references=[],

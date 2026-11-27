@@ -59,7 +59,7 @@ def _codes(report: deterministic.Report) -> list[str]:
 
 
 def test_the_verifier_is_versioned() -> None:
-    assert deterministic.VERIFIER == "deterministic/v3"
+    assert deterministic.VERIFIER == "deterministic/v4"
 
 
 def test_a_complete_submission_passes_and_records_every_check() -> None:
@@ -75,6 +75,7 @@ def test_a_complete_submission_passes_and_records_every_check() -> None:
         {"name": "runtime_outputs", "outcome": "skipped"},
         {"name": "platform_note", "outcome": "skipped"},
         {"name": "file_scope", "outcome": "skipped"},  # not a software project task
+        {"name": "fix_changes", "outcome": "skipped"},  # not an integration fix task
     ]
 
 
@@ -95,7 +96,7 @@ def test_an_unreadable_submission_fails_and_skips_the_rest(
 ) -> None:
     report = _verify(submission)
     assert not report.passed and _codes(report) == [code]
-    assert [outcome for _, outcome in report.checks[1:]] == [CheckOutcome.SKIPPED] * 7
+    assert [outcome for _, outcome in report.checks[1:]] == [CheckOutcome.SKIPPED] * 8
 
 
 def test_every_criterion_needs_exactly_one_claim_and_unknown_ids_are_not_stored() -> None:
@@ -310,3 +311,29 @@ def test_project_task_files_are_its_deliverables_and_extra_tests_only_warn() -> 
     assert report.issues_json() == [
         {"code": "TEST_OUTSIDE_SCOPE", "severity": "warning", "location": "1 file(s)"}
     ]
+
+
+def test_an_integration_fix_that_changes_nothing_is_refused() -> None:
+    submission = _developer_submission("src/a.py")
+    previous = {"src/a.py": "x = 1\n"}  # the content _developer_submission proposes
+
+    def verify_fix(previous_files: dict[str, str]) -> deterministic.Report:
+        return deterministic.verify(
+            deterministic.Subject(
+                submission=submission,
+                acceptance_criteria=[
+                    {"id": "c1", "description": "d"},
+                    {"id": "c2", "description": "e"},
+                ],
+                deliverables=["Report"],
+                output_schema=None,
+                configuration={},
+                file_scope=["src/"],
+                previous_files=previous_files,
+            )
+        )
+
+    unchanged = verify_fix(previous)
+    assert not unchanged.passed and _codes(unchanged) == ["FIX_UNCHANGED"]
+    changed = verify_fix({"src/a.py": "x = 0\n"})
+    assert changed.passed and ("fix_changes", CheckOutcome.PASSED) in changed.checks

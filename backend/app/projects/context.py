@@ -61,11 +61,12 @@ MAX_CURRENT_CHARS = 120_000
 
 def fix_context(
     session: Session, workflow: Workflow, task: WorkflowTask, workspaces: ProjectWorkspaces
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     """For an integration fix task (ADR-0056): the failed checks' output (already capped and
-    redacted by the sandbox, capped again here) and the current files of its scope."""
+    redacted by the sandbox, capped again here), the current files of its scope, and the rest of
+    the project's files as read-only context (a tests fix must see how the code it tests works)."""
     if task.fixes_integration_id is None:
-        return [], []
+        return [], [], []
     integration = session.get(ProjectIntegration, task.fixes_integration_id)
     feedback: list[dict[str, Any]] = []
     used = 0
@@ -83,6 +84,19 @@ def fix_context(
             max_files=MAX_CURRENT_FILES,
             max_chars=MAX_CURRENT_CHARS,
         )
+        everything = workspaces.read_scope(
+            project, None, max_files=MAX_DEPENDENCY_FILES * 2, max_chars=MAX_DEPENDENCY_CHARS * 2
+        )
     except WorkspaceError:
-        files = {}
-    return feedback, [{"path": p, "content": c} for p, c in files.items()]
+        files, everything = {}, {}
+    others = {p: c for p, c in everything.items() if p not in files}
+    selected: list[dict[str, Any]] = []
+    used = 0
+    for path in sorted(others):
+        content = others[path]
+        if len(selected) >= MAX_DEPENDENCY_FILES or used + len(content) > MAX_DEPENDENCY_CHARS:
+            break
+        selected.append({"path": path, "content": content})
+        used += len(content)
+    current = [{"path": p, "content": c} for p, c in files.items()]
+    return feedback, current, selected

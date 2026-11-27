@@ -35,6 +35,12 @@
 - **What happens next.** Fix tasks are verified like any task (`deterministic/v3` and semantic evaluation). Once accepted and applied, their files replace the scope (the newest commit wins), and the gate runs again.
 - **Workers** may now INSERT into `workflow_tasks`.
 
+### Lessons from the tempconv run (2026-11-27)
+- **Context.** A fix task also gets the rest of the project as read-only `dependency_files` (it has no planned dependencies). Without them, a tests fix could not see that `cli.py` used argparse while the tests assumed click, and Gemini returned the test file unchanged.
+- **No-op fixes are refused.** `deterministic/v4` adds `fix_changes`: a fix whose in-scope files equal the previous owner's accepted files fails with `FIX_UNCHANGED`. The task is retried with a fixed corrective sentence instead of spending an integration round on an identical commit.
+- **Fresh rounds after a resume.** Rounds count only failed runs since a person last resumed the project from BLOCKED, so a resume gives the project new rounds.
+- **Titles.** Fix tasks are titled after the original planned task (no "Fix integration: Fix integration: ...").
+
 ### Lost runs
 - **The recovery sweep** (Celery Beat, every 60 s) closes integration runs still RUNNING after `integration_job.STALE_AFTER` (30 min, beyond the job's hard limit) as NOT_RUN `WORKER_LOST`, and requests a new run while the project is RUNNING.
 - **Why.** In the live run, the gate crashed after claiming its run (the worker had not been re-provisioned with the new grant), and the project waited at "Integrating" with nothing to wake it.

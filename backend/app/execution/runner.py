@@ -303,9 +303,12 @@ def claim(
     ).scalars()
     dependency_ids = list(dependencies)
     project_files = dependency_files(session, workflow, dependency_ids) if task.file_scope else []
-    feedback, current_files = fix_context(
-        session, workflow, task, ProjectWorkspaces(get_settings().project_workspace_root)
+    feedback, current_files, project_context = fix_context(
+        session, workflow, task, project_workspaces()
     )
+    if task.fixes_integration_id is not None:
+        # A fix task has no planned dependencies: it reads the rest of the project instead.
+        project_files = project_context
     claimed = Claim(
         execution_id=execution.id,
         workspace_id=workflow.workspace_id,
@@ -335,6 +338,11 @@ def claim(
     )
     session.commit()
     return claimed
+
+
+def project_workspaces() -> ProjectWorkspaces:
+    """The configured project workspaces (ADR-0049); tests point this at their own root."""
+    return ProjectWorkspaces(get_settings().project_workspace_root)
 
 
 def build_contract(

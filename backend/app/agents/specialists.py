@@ -350,6 +350,23 @@ def _mock_developer_outputs(contract: dict[str, Any]) -> dict[str, Any]:
     if scope:  # a software project task (ADR-0049): stay inside the scope
         profile = contract.get("stack_profile")
         files = [_mock_scoped_file(str(entry), profile) for entry in scope]
+        if contract.get("integration_feedback"):
+            # An integration fix (ADR-0056) must change its files: mark them as revised.
+            # Each round builds on the scope's current content, so every fix changes something.
+            marker = "//" if profile and str(profile).startswith("node") else "#"
+            current = {
+                str(f.get("path")): str(f.get("content", ""))
+                for f in contract.get("current_files", [])
+            }
+            files = [
+                (
+                    path,
+                    text
+                    if path.endswith((".json", ".md"))
+                    else f"{current.get(path, text)}{marker} revised\n",
+                )
+                for path, text in files
+            ]
         language = "typescript" if profile and str(profile).startswith("node") else "python"
         return {
             "proposed_files": [

@@ -164,7 +164,7 @@ test("journeys 8 and 9: approve, start, assign an agent and monitor execution", 
   await expect(attempts.getByText("Mock model provider: no real model was used.")).toBeVisible();
   const checks = attempts.getByRole("region", { name: "Platform verification: deterministic checks" });
   await expect(checks.getByText("Passed", { exact: true })).toBeVisible();
-  await expect(checks.getByText("deterministic/v3")).toBeVisible();
+  await expect(checks.getByText("deterministic/v4")).toBeVisible();
   // Step 5.2: then the semantic evaluation (mock evaluator) judged each criterion.
   const evaluation = attempts.getByRole("region", { name: "Platform verification: semantic evaluation" });
   await expect(evaluation.getByText("Passed", { exact: true })).toBeVisible();

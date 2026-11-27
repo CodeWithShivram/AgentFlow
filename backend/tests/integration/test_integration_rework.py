@@ -84,9 +84,13 @@ def _apply_new(
 
 
 def test_a_failing_gate_asks_the_owner_for_a_fix_and_then_completes(
-    admin_factory: Factory, worker_factory: Factory, tmp_path: Path
+    admin_factory: Factory,
+    worker_factory: Factory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspaces = ProjectWorkspaces(tmp_path / "w")
+    monkeypatch.setattr(runner, "project_workspaces", lambda: workspaces)
     graph = _built_and_applied(admin_factory, worker_factory, workspaces)
     applied = {e.id for e in _events(admin_factory, graph, outbox.PROJECT_APPLY)}
 
@@ -109,12 +113,14 @@ def test_a_failing_gate_asks_the_owner_for_a_fix_and_then_completes(
         workflow = s.get(Workflow, graph.workflow_id)
         task = s.get(WorkflowTask, fix.id)
         assert workflow is not None and task is not None
-        feedback, current = fix_context(s, workflow, task, workspaces)
+        feedback, current, others = fix_context(s, workflow, task, workspaces)
     assert feedback == [
         {"check": "compile", "output": FAILURE},
         {"check": "tests", "output": FAILURE},
     ]
     assert [f["path"] for f in current] == ["tests/test_mock.py"]
+    # The rest of the project, read-only: a tests fix must see the code it tests.
+    assert {f["path"] for f in others} == {"pyproject.toml", "README.md", "src/mock_module.py"}
 
     _run_task_by_id(admin_factory, worker_factory, graph, fix.id)
     _apply_new(worker_factory, workspaces, admin_factory, graph, applied)
@@ -125,9 +131,14 @@ def test_a_failing_gate_asks_the_owner_for_a_fix_and_then_completes(
 
 
 def test_fix_rounds_are_bounded_then_people_decide(
-    admin_factory: Factory, worker_factory: Factory, tmp_path: Path
+    admin_factory: Factory,
+    worker_factory: Factory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspaces = ProjectWorkspaces(tmp_path / "w")
+    # Fix tasks read the current files from this test's workspace, as workers do from theirs.
+    monkeypatch.setattr(runner, "project_workspaces", lambda: workspaces)
     graph = _built_and_applied(admin_factory, worker_factory, workspaces)
     applied = {e.id for e in _events(admin_factory, graph, outbox.PROJECT_APPLY)}
     unattributed = "E   something failed somewhere"

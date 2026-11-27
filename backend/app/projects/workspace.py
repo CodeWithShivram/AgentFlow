@@ -149,14 +149,15 @@ class ProjectWorkspaces:
         return [path for path in output.split("\0") if path]
 
     def read_scope(
-        self, project: Path, scope: list[str], *, max_files: int, max_chars: int
+        self, project: Path, scope: list[str] | None, *, max_files: int, max_chars: int
     ) -> dict[str, str]:
-        """The committed files under a scope, read with the same path checks as writes, within
+        """The committed files under a scope (every committed file with None), read with the
+        same path checks as writes, within
         the given limits (in path order; what does not fit is left out)."""
         files: dict[str, str] = {}
         used = 0
         for relative in sorted(self.tracked_files(project)):
-            if not in_scope(scope, relative):
+            if scope is not None and not in_scope(scope, relative):
                 continue
             target = self._target(project, relative)
             if not target.is_file():

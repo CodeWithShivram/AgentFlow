@@ -655,7 +655,7 @@ def test_execution_history_lists_attempts_with_agent_versions(
     (attempt,) = owner.get(url).json()["items"]
     verification, evaluation = attempt["verifications"]
     assert verification["execution_id"] == attempt["id"]
-    assert verification["verifier"] == "deterministic/v3"
+    assert verification["verifier"] == "deterministic/v4"
     assert verification["outcome"] == "PASSED" and verification["issues"] == []
     assert {c["name"]: c["outcome"] for c in verification["checks"]} == {
         "submission": "passed",
@@ -666,6 +666,7 @@ def test_execution_history_lists_attempts_with_agent_versions(
         "runtime_outputs": "skipped",
         "platform_note": "skipped",
         "file_scope": "skipped",  # not a software project task (ADR-0049)
+        "fix_changes": "skipped",  # not an integration fix task (ADR-0056)
     }
     assert verification["findings"] is None
     assert evaluation["verifier"] == "semantic/v1" and evaluation["outcome"] == "PASSED"

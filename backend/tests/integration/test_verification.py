@@ -317,7 +317,7 @@ def test_a_passing_submission_is_evaluated_then_completes_and_starts_its_depende
         "task_id": str(world.task_id),
     }
     (checks,) = _results(admin_factory)
-    assert (checks.execution_id, checks.verifier) == (claim.execution_id, "deterministic/v3")
+    assert (checks.execution_id, checks.verifier) == (claim.execution_id, "deterministic/v4")
     assert checks.outcome == VerificationOutcome.PASSED and checks.issues == []
     assert checks.findings is None
     assert {c["name"]: c["outcome"] for c in checks.checks}["deliverables"] == "passed"
@@ -542,7 +542,7 @@ def test_an_evaluation_that_cannot_complete_escalates_without_costing_an_attempt
     assert _evaluate(admin_factory, worker_factory, world, adapter) == "escalated"
 
     assert _status(admin_factory, world.task_id) == TaskStatus.ESCALATED
-    assert [r.verifier for r in _results(admin_factory)] == ["deterministic/v3"]
+    assert [r.verifier for r in _results(admin_factory)] == ["deterministic/v4"]
     escalated = _escalation(admin_factory, world.task_id)
     assert escalated.payload["reason"] == "EVALUATION_UNAVAILABLE"
     assert escalated.payload["error_code"] == "MODEL_OUTPUT_INVALID"
@@ -610,7 +610,7 @@ def test_an_evaluation_finished_after_the_task_was_cancelled_changes_nothing(
     with session_scope(worker_factory) as s:
         assert semantic.finish(s, claimed, outcome) == semantic.Skipped.STALE
     assert _status(admin_factory, world.task_id) == TaskStatus.CANCELLED
-    assert [r.verifier for r in _results(admin_factory)] == ["deterministic/v3"]
+    assert [r.verifier for r in _results(admin_factory)] == ["deterministic/v4"]
 
 
 def test_recovery_resends_lost_evaluations_and_escalates_interrupted_ones(

@@ -30,6 +30,8 @@ from app.models import (
     Workflow,
     WorkflowTask,
 )
+from app.projects.apply_job import accepted_files
+from app.projects.workspace import WorkspaceError
 from app.verification import deterministic, rework
 from app.workflows import engine
 from app.workflows.state_machine import Actor
@@ -99,6 +101,7 @@ def run(
             output_schema=task.expected_output_schema,
             configuration=version.configuration if version else {},
             file_scope=list(task.file_scope),
+            previous_files=_previous_files(session, task),
         )
     )
     result = VerificationResult(
@@ -156,3 +159,31 @@ def run(
         extra={"task_id": str(task.id), "verifier": deterministic.VERIFIER, "outcome": outcome},
     )
     return outcome
+
+
+def _previous_files(session: Session, task: WorkflowTask) -> dict[str, str] | None:
+    """For an integration fix task (ADR-0056): the accepted files of the scope's previous owner
+    (the newest completed task with the same scope created before it), so a fix that changes
+    nothing is caught. None for other tasks."""
+    if task.fixes_task_id is None:
+        return None
+    previous = session.execute(
+        select(WorkflowTask)
+        .where(
+            WorkflowTask.workflow_id == task.workflow_id,
+            WorkflowTask.workspace_id == task.workspace_id,
+            WorkflowTask.status == TaskStatus.COMPLETED,
+            WorkflowTask.created_at <= task.created_at,
+            WorkflowTask.id != task.id,
+            WorkflowTask.file_scope == task.file_scope,
+        )
+        .order_by(WorkflowTask.created_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    execution = _latest_submission(session, previous) if previous is not None else None
+    if execution is None:
+        return None
+    try:
+        return accepted_files(execution.submission, list(task.file_scope))
+    except WorkspaceError:
+        return None

@@ -202,7 +202,7 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
 - Project workspaces (ADR-0049, `app/projects/`): only `apply_job` writes them, after a task is COMPLETED
   (`project.apply`), via `ProjectWorkspaces.apply` (scope sync, path re-checks, no links, hardened git: no global
   config, empty hooks, `add --force`). One `workspace_applications` row per attempt (append-only). Contract v4 carries
-  `file_scope`, `stack_profile` and capped `dependency_files`; `deterministic/v3` refuses files outside the scope (extra tests only warn and are not applied).
+  `file_scope`, `stack_profile` and capped `dependency_files`; `deterministic/v4` refuses files outside the scope (extra tests only warn and are not applied) and no-op integration fixes.
 - Sandbox (ADR-0050, `app/sandbox/runner.py`): the only way to execute generated code. Fixed platform commands in a
   fresh `agentflow-sandbox/<profile>:<n>` container (built by `scripts/sandbox.ps1 build`, never pulled) on a throwaway
   copy: no network, read-only root, non-root, no capabilities, limits, timeout. `SandboxUnavailableError` means the

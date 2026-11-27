@@ -39,7 +39,9 @@ from app.tools.registry import REGISTRY, ToolDefinition, usable_grants
 
 # v2 (ADR-0049): adds the `file_scope` check for software project tasks. v3 (ADR-0055 follow-up):
 # a project task's files are its deliverables, and extra tests outside its scope only warn.
-VERIFIER = "deterministic/v3"
+# v4 (ADR-0056):
+# an integration fix that changes nothing is refused (`fix_changes`).
+VERIFIER = "deterministic/v4"
 # Schema mismatches reported per verification; the rest are summarised by the count.
 MAX_SCHEMA_ISSUES = 20
 
@@ -85,6 +87,8 @@ class Subject:
     configuration: Mapping[str, Any]
     # Software project tasks only (ADR-0048): the files the task alone may write.
     file_scope: Sequence[str] = ()
+    # Integration fix tasks only (ADR-0056): the files the fix replaces, to refuse a no-op fix.
+    previous_files: Mapping[str, str] | None = None
 
 
 @dataclass
@@ -124,6 +128,7 @@ _CHECKS = (
     "runtime_outputs",
     "platform_note",
     "file_scope",
+    "fix_changes",
 )
 
 
@@ -150,6 +155,7 @@ def verify(subject: Subject, registry: Mapping[str, ToolDefinition] = REGISTRY) 
     report.record("runtime_outputs", _runtime_outputs(runtime, submission, expected))
     report.record("platform_note", _platform_note(runtime, configuration, submission, registry))
     report.record("file_scope", _file_scope(submission, subject.file_scope))
+    report.record("fix_changes", _fix_changes(submission, subject))
     return report
 
 
@@ -302,3 +308,21 @@ def _file_scope(submission: AgentSubmission, scope: Sequence[str]) -> list[Issue
             )
         )
     return issues
+
+
+def _fix_changes(submission: AgentSubmission, subject: Subject) -> list[Issue] | None:
+    """v4: an integration fix must change the files it replaces; resubmitting them unchanged
+    cannot make failing checks pass (ADR-0056). Skipped for other tasks."""
+    if subject.previous_files is None:
+        return None
+    try:
+        outputs = DeveloperOutputs.model_validate(submission.outputs or {})
+    except ValidationError:
+        return None  # reported by the file_scope check
+    proposed = {f.path: f.content for f in outputs.proposed_files}
+    proposed.update(
+        {t.path: t.content for t in outputs.proposed_tests if in_scope(subject.file_scope, t.path)}
+    )
+    if proposed == dict(subject.previous_files):
+        return [Issue("FIX_UNCHANGED")]
+    return []

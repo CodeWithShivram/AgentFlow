@@ -1594,6 +1594,20 @@ None.
   - prices: Gemini isn't in `app/llm/pricing.json`, so its calls are recorded unpriced and don't count toward budgets until published prices are added under a new price-list version.
 - **Test isolation:** `tests/conftest.py` now forces `MODEL_PROVIDER=mock` and blanks `MODEL_API_KEY` for the whole test session, so a real key in `.env` can never be used by tests. A guard test in `test_infrastructure.py` checks this.
 
+## Owner's tempconv project: rework improvements (2026-11-27)
+- **What happened.** The owner ran `tempconv` from the UI. The tests (written for click's `CliRunner`) did not match the CLI (argparse), and all 7 tests failed.
+  - **Round 1:** the tests' owner was asked, but saw only its own file and returned it unchanged (no commit), so the gate re-ran on the same commit.
+  - **Round 2:** it guessed again; the gate failed, and the project was BLOCKED.
+- **Fixes (ADR-0056, "Lessons from the tempconv run"):**
+  - fix tasks get the rest of the project as read-only `dependency_files`;
+  - `deterministic/v4` refuses no-op fixes (`FIX_UNCHANGED`, retried with a fixed corrective sentence);
+  - rounds count only since a person last resumed from BLOCKED;
+  - fix tasks are titled after the original task.
+
+  The mock Developer now changes its files for fixes, building on `current_files`. The runner reads workspaces through `runner.project_workspaces()`, which tests point at their own root.
+- **Checks:** a full backend gate. Format, lint, `mypy app tests alembic` and `alembic check` clean; `uv run pytest` **1353 passed, 2 skipped**. Frontend lint and typecheck pass.
+- **Result.** After deploying, the project was resumed as its owner. The gate failed and named `cli.py` and the tests, so two fix tasks were created, written by Gemini and applied. The **gate passed** (compile and tests), and the project was **COMPLETED with a VERIFIED package** (6 files).
+
 ## Live run 10: a real Gemini project completes on its own (2026-11-27)
 - **Plan:** 3 tasks, built, verified and applied in about 75 s, reaching 76%.
 - **First gate:** compile passed and tests failed. The fix task could not be created: the dev database's worker role had not been re-provisioned after Step 9.9 added its INSERT grant (`permission denied for table workflow_tasks`), and the run stayed RUNNING.

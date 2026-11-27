@@ -101,6 +101,10 @@ _ISSUE_SENTENCES = {
     "FILES_MISSING": (
         "Propose the task's files in outputs.proposed_files (and tests in proposed_tests)."
     ),
+    "FIX_UNCHANGED": (
+        "Your previous files were identical to the current ones, so the failing checks cannot "
+        "pass: change the files in your file_scope to fix what the integration feedback shows."
+    ),
     "FILE_OUTSIDE_SCOPE": (
         "Propose only files inside the contract's file_scope; other tasks own the rest."
     ),
