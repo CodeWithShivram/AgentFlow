@@ -10,7 +10,7 @@ shared files has at most one owner; a first plan must own them all, see `unowned
 Version 1 plans have neither.
 """
 
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import (
     AfterValidator,
@@ -112,6 +112,30 @@ class PlanProposal(BaseModel):
     risks: Annotated[list[Text], Field(max_length=10)] = []
     # Version 2 only: the software project (ADR-0048).
     project: ProjectSpec | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _specialist_skills_replace_the_developers(cls, data: Any) -> Any:
+        """A project task that needs a profile's extra skill (ADR-0057: `ui_development`) needs
+        only those skills. The specialist is a Developer runtime, so it writes the files anyway,
+        and listing the Developer's skills as well would leave the task with no eligible agent
+        (a live Gemini plan asked for `ui_development` and `code_generation` together)."""
+        if not isinstance(data, dict):
+            return data
+        project, tasks = data.get("project"), data.get("tasks")
+        if not isinstance(project, dict) or not isinstance(tasks, list):
+            return data
+        profile = PROFILES.get(str(project.get("stack_profile")))
+        if profile is None or not profile.extra_task_skills:
+            return data
+        extras = set(profile.extra_task_skills)
+        normalized = []
+        for task in tasks:
+            skills = task.get("required_skills") if isinstance(task, dict) else None
+            if isinstance(skills, list) and extras & set(skills):
+                task = {**task, "required_skills": [s for s in skills if s in extras]}
+            normalized.append(task)
+        return {**data, "tasks": normalized}
 
     @model_validator(mode="after")
     def _project_plan(self) -> "PlanProposal":

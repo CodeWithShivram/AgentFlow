@@ -5,6 +5,17 @@
 - Last completed step: 9.10 — Web UI projects (after 9.9 integration rework; Phase 9 complete since 9.8)
 - Next step: 8.4 — Safe workflow replay (then 8.5–8.7), or the Phase 9 follow-ups below; needs the owner's go-ahead
 
+## Live run: mini-shop website on Gemini (2026-11-27)
+- **Run 1:** Gemini chose `python-3.12-web` and gave `static/` its own task, but asked for `ui_development` *and* `code_generation`. No agent has both, so the UI task stayed READY without an agent (NEEDS_ATTENTION).
+  - **Fix:** in a project plan, a task needing a profile's extra skill needs only those skills (`PlanProposal` normalizes before validation). The Frontend Developer keeps only `ui_development`, because selection's workload factor would otherwise hand it backend tasks while the Developer is busy.
+  - Run 1's project stays stuck in the dev database (local data).
+- **Run 2:** 5 tasks.
+  - The first gate failed the new checks: no doctype, `/` returned 404 (static not mounted), no title or lang.
+  - Rework added fixes for the UI and the API owners, and the gate then **passed compile, tests, web and ui**.
+  - **COMPLETED, VERIFIED** package (10 files plus report, manifest and `AGENTFLOW_UI_PREVIEW.png`), about 3.5 minutes.
+  - The screenshot shows the product grid and an empty cart.
+- **Checks:** a full backend gate. Format, lint, mypy and alembic clean; `uv run pytest` 1360 passed, 2 skipped, 1 failed: `test_process_count_is_limited` raised `DOCKER_UNAVAILABLE` while the live run used Docker at the same time. Re-run alone, `test_sandbox.py` passed 12, skipped 1.
+
 ## Step 9.10 — web UI projects (ADR-0057, 2026-11-27)
 - **Owner's request:** projects that create a basic UI/UX in HTML/CSS/JS; the full scope was chosen.
 - **What was added:**

@@ -274,6 +274,12 @@ def test_ui_development_is_allowed_only_on_profiles_that_offer_it() -> None:
     assert PlanProposal.model_validate(web).tasks[-1].required_skills == ["ui_development"]
     with pytest.raises(ValidationError, match="not ui_development"):
         PlanProposal.model_validate(_plan(tasks=[*VALID["tasks"], ui]))
+    # Live Gemini plan (mini-shop): `ui_development` together with the Developer's skills left the
+    # UI task with no eligible agent; the specialist skill replaces the Developer's.
+    both = {**ui, "required_skills": ["ui_development", "code_generation"]}
+    mixed = PlanProposal.model_validate({**web, "tasks": [*VALID["tasks"], both]})
+    assert mixed.tasks[-1].required_skills == ["ui_development"]
+    assert mixed.tasks[1].required_skills == ["code_generation"]
 
 
 def test_the_web_profile_checks_the_page_and_keeps_a_screenshot() -> None:

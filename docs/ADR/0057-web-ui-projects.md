@@ -34,7 +34,7 @@
   - loading, empty and error states;
   - `fetch` with relative `/api/...` URLs;
   - `textContent` rather than `innerHTML` for data.
-- **Planning.** Profiles may add `extra_task_skills`; the web profile adds `ui_development`, so the planner can give `static/` to the Frontend Developer. The plan schema accepts it only on that profile. The prompt is `software_plan/v6`.
+- **Planning.** Profiles may add `extra_task_skills`; the web profile adds `ui_development`, so the planner can give `static/` to the Frontend Developer. The plan schema accepts it only on that profile. The prompt is `software_plan/v6`. A task that needs `ui_development` needs only that skill: the schema drops the Developer's skills listed with it. A live Gemini plan asked for both, which left the task with no eligible agent. Giving the Frontend Developer the Developer's skills instead would let selection's workload factor send it backend tasks.
 
 ### Preview
 - **Collecting the screenshot.** `DockerSandbox.run(..., collect=[...])` returns named regular files (≤ 5 MB) from the throwaway copy. Profiles name one check and path as `preview`.
