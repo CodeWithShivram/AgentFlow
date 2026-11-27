@@ -19,7 +19,7 @@ from app.models import (
     Workflow,
     WorkflowStatus,
 )
-from app.projects import integration_job
+from app.projects import integration_job, integration_rework
 from app.projects.workspace import ProjectWorkspaces
 from app.sandbox.runner import DockerSandbox, SandboxResult, SandboxUnavailableError
 from app.workflows import engine
@@ -139,8 +139,13 @@ def test_the_mock_project_passes_its_real_sandbox_checks(
 
 
 def test_failed_checks_block_and_resuming_retries(
-    admin_factory: Factory, worker_factory: Factory, tmp_path: Path
+    admin_factory: Factory,
+    worker_factory: Factory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Rework off: this test covers what happens when a failure blocks the project (ADR-0056).
+    monkeypatch.setattr(integration_rework, "MAX_FIX_ROUNDS", 0)
     workspaces = ProjectWorkspaces(tmp_path / "w")
     graph = _built_and_applied(admin_factory, worker_factory, workspaces)
     event = _events(admin_factory, graph, outbox.PROJECT_INTEGRATE)[-1]

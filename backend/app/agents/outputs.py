@@ -74,11 +74,15 @@ class DeveloperOutputs(BaseModel):
 
     model_config = _ALLOW_DELIVERABLES
 
-    proposed_files: Annotated[list[ProposedFile], Field(min_length=1, max_length=50)]
+    # Either list may be empty, but not both: a task that owns only tests proposes only tests
+    # (live Gemini run, ADR-0056 follow-up).
+    proposed_files: Annotated[list[ProposedFile], Field(max_length=50)] = []
     proposed_tests: Annotated[list[ProposedFile], Field(max_length=50)] = []
 
     @model_validator(mode="after")
     def _check(self) -> "DeveloperOutputs":
+        if not self.proposed_files and not self.proposed_tests:
+            raise ValueError("propose at least one file or test")
         paths = [f.path for f in (*self.proposed_files, *self.proposed_tests)]
         if len(set(paths)) != len(paths):
             raise ValueError("each proposed path may appear once")

@@ -40,6 +40,7 @@ from app.models import (
     WorkspaceApplication,
     WorkspaceApplicationStatus,
 )
+from app.projects import integration_rework
 from app.projects.profiles import PROFILES
 from app.projects.workspace import ProjectWorkspaces, WorkspaceError
 from app.sandbox.runner import DockerSandbox, SandboxUnavailableError
@@ -226,6 +227,7 @@ def finish(
     integration.error_code = outcome.error_code
     integration.finished_at = datetime.now(UTC)
     session.flush()
+    result_note = ""
     try:
         current = workspaces.head(job.project_path)
     except WorkspaceError:
@@ -237,6 +239,15 @@ def finish(
                 reason="integration checks passed",
             )  # fmt: skip
             engine.request_package(session, workflow)
+        elif (
+            outcome.error_code == "CHECKS_FAILED"
+            and integration_rework.fix_rounds(session, workflow) < integration_rework.MAX_FIX_ROUNDS
+        ):
+            # ADR-0056: ask the owners of the failing files for a fix; the gate runs again
+            # once the fixes are accepted and applied.
+            tracked = workspaces.tracked_files(job.project_path)
+            integration_rework.schedule_fixes(session, workflow, integration, tracked)
+            result_note = "fixes requested"
         else:
             engine.transition_workflow(
                 session, workflow, WorkflowStatus.BLOCKED, actor=Actor.SYSTEM,
@@ -246,6 +257,6 @@ def finish(
     result = outcome.status.value.lower()
     logger.info(
         "project integration finished",
-        extra={"workflow_id": str(job.workflow_id), "outcome": result},
+        extra={"workflow_id": str(job.workflow_id), "outcome": result, "note": result_note},
     )
-    return result
+    return "fixes_requested" if result_note else result

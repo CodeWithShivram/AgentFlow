@@ -40,6 +40,7 @@ from app.agents.contract import (
     TaskContract,
 )
 from app.agents.specialists import runtime_for
+from app.core.config import get_settings
 from app.db.sync_session import get_worker_session_factory, session_scope
 from app.execution import outbox
 from app.llm.gateway import ModelCaller, get_model_gateway
@@ -57,7 +58,8 @@ from app.models import (
     WorkflowTask,
     WorkspaceRole,
 )
-from app.projects.context import dependency_files
+from app.projects.context import dependency_files, fix_context
+from app.projects.workspace import ProjectWorkspaces
 from app.schemas.agents import AgentConfiguration
 from app.services.usage import record_tool_invocation
 from app.tools.gateway import InvocationRecord, InvocationRecorder, ToolGateway
@@ -123,6 +125,9 @@ class Claim:
     file_scope: list[str] = field(default_factory=list)
     stack_profile: str | None = None
     dependency_files: list[dict[str, Any]] = field(default_factory=list)
+    # Integration fix tasks (ADR-0056).
+    integration_feedback: list[dict[str, Any]] = field(default_factory=list)
+    current_files: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -298,6 +303,9 @@ def claim(
     ).scalars()
     dependency_ids = list(dependencies)
     project_files = dependency_files(session, workflow, dependency_ids) if task.file_scope else []
+    feedback, current_files = fix_context(
+        session, workflow, task, ProjectWorkspaces(get_settings().project_workspace_root)
+    )
     claimed = Claim(
         execution_id=execution.id,
         workspace_id=workflow.workspace_id,
@@ -322,6 +330,8 @@ def claim(
         file_scope=list(task.file_scope),
         stack_profile=(workflow.project_spec or {}).get("stack_profile"),
         dependency_files=project_files,
+        integration_feedback=feedback,
+        current_files=current_files,
     )
     session.commit()
     return claimed
@@ -357,6 +367,8 @@ def build_contract(
             "file_scope": claim.file_scope,
             "stack_profile": claim.stack_profile,
             "dependency_files": claim.dependency_files,
+            "integration_feedback": claim.integration_feedback,
+            "current_files": claim.current_files,
         }
     )
 

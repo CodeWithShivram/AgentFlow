@@ -196,8 +196,12 @@ class DockerSandbox:
                 timed_out, exit_code = True, None
                 stdout = expired.stdout or b""
                 output = stdout.decode("utf-8", "replace") if isinstance(stdout, bytes) else stdout
-                self._quick("kill", name)
-                self._quick("rm", "--force", name)
+                # Best effort: a slow Docker must not hide that the run timed out.
+                for cleanup in (("kill", name), ("rm", "--force", name)):
+                    try:
+                        self._quick(*cleanup)
+                    except SandboxUnavailableError:
+                        pass
             except OSError:
                 raise SandboxUnavailableError("DOCKER_UNAVAILABLE") from None
             duration = int((time.monotonic() - started) * 1000)

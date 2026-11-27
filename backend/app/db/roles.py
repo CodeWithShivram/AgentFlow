@@ -31,7 +31,8 @@ PLATFORM_GROUP = "agentflow_rls_platform"
 # Locking rows (SELECT ... FOR UPDATE) requires UPDATE on the table.
 WORKER_GRANTS: dict[str, tuple[str, ...]] = {
     "workflows": ("SELECT", "UPDATE"),
-    "workflow_tasks": ("SELECT", "UPDATE"),
+    # INSERT: the integration gate adds platform fix tasks (ADR-0056).
+    "workflow_tasks": ("SELECT", "INSERT", "UPDATE"),
     "task_dependencies": ("SELECT",),
     "workflow_events": ("SELECT", "INSERT"),
     "agents": ("SELECT",),

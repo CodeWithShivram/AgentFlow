@@ -59,6 +59,15 @@ class DependencyFile(BaseModel):
     content: str
 
 
+class IntegrationFeedback(BaseModel):
+    """One failed integration check (ADR-0056): its name and capped, redacted output."""
+
+    model_config = _STRICT
+
+    check: str
+    output: str
+
+
 class TaskContract(BaseModel):
     """Everything an agent may know about one attempt (handoff section 5.3). Built by the
     worker from the task, its pinned agent version and the workflow; never from agent input."""
@@ -67,7 +76,8 @@ class TaskContract(BaseModel):
 
     # v2 (ADR-0032): adds `rework_instructions`. v3 (ADR-0035): adds `approved_actions`.
     # v4 (ADR-0049): adds `file_scope`, `stack_profile` and `dependency_files`.
-    contract_version: Literal[4] = 4
+    # v5 (ADR-0056): adds `integration_feedback` and `current_files` for integration fix tasks.
+    contract_version: Literal[5] = 5
     workspace_id: uuid.UUID
     workflow_id: uuid.UUID
     task_id: uuid.UUID
@@ -98,6 +108,10 @@ class TaskContract(BaseModel):
     file_scope: list[str] = []
     stack_profile: str | None = None
     dependency_files: list[DependencyFile] = []
+    # Integration fix tasks only (ADR-0056): the failed checks' output (untrusted tool text,
+    # data) and the current content of this task's scope in the project workspace.
+    integration_feedback: list[IntegrationFeedback] = []
+    current_files: list[DependencyFile] = []
 
 
 class CriterionStatus(StrEnum):

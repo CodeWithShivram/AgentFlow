@@ -148,6 +148,26 @@ class ProjectWorkspaces:
         output = self._git(project, "ls-files", "-z")
         return [path for path in output.split("\0") if path]
 
+    def read_scope(
+        self, project: Path, scope: list[str], *, max_files: int, max_chars: int
+    ) -> dict[str, str]:
+        """The committed files under a scope, read with the same path checks as writes, within
+        the given limits (in path order; what does not fit is left out)."""
+        files: dict[str, str] = {}
+        used = 0
+        for relative in sorted(self.tracked_files(project)):
+            if not in_scope(scope, relative):
+                continue
+            target = self._target(project, relative)
+            if not target.is_file():
+                continue
+            content = target.read_bytes().decode("utf-8", "replace")
+            if len(files) >= max_files or used + len(content) > max_chars:
+                break
+            files[relative] = content
+            used += len(content)
+        return files
+
     def head(self, project: Path) -> str:
         sha = self._git(project, "rev-parse", "HEAD")
         if not _SHA.fullmatch(sha):

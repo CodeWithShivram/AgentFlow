@@ -11,6 +11,7 @@ from app.artifacts.storage import LocalArtifactStorage
 from app.db.sync_session import session_scope
 from app.execution import outbox
 from app.models import Workflow, WorkspaceRole
+from app.projects import integration_rework
 from app.projects.workspace import ProjectWorkspaces
 from app.services.authorization import WorkspaceAccess
 from app.services.progress import ProgressResponse, project_progress
@@ -79,8 +80,14 @@ async def test_progress_counts_only_verified_work_and_milestones(
 
 
 async def test_a_failed_gate_needs_attention(
-    engine: AsyncEngine, admin_factory: Factory, worker_factory: Factory, tmp_path: Path
+    engine: AsyncEngine,
+    admin_factory: Factory,
+    worker_factory: Factory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Rework off: this test covers what happens when a failure blocks the project (ADR-0056).
+    monkeypatch.setattr(integration_rework, "MAX_FIX_ROUNDS", 0)
     workspaces = ProjectWorkspaces(tmp_path / "w")
     graph = _start_project(admin_factory)
     for index in range(len(SCOPES)):

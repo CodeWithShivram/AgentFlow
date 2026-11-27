@@ -99,6 +99,8 @@ def test_unsafe_paths_are_rejected(path: str) -> None:
 
 def test_developer_outputs_need_files_unique_paths_and_text_deliverable_notes() -> None:
     assert parse_outputs(DeveloperOutputs, {"proposed_files": [_file()], "Notes": "ok"})
+    # A task that owns only tests may propose only tests (ADR-0056 follow-up).
+    assert parse_outputs(DeveloperOutputs, {"proposed_tests": [_file("tests/test_x.py")]})
     invalid: list[dict[str, Any]] = [
         {"proposed_files": []},
         {"proposed_files": [_file()], "proposed_tests": [_file()]},  # the same path twice

@@ -24,7 +24,7 @@ from app.models import (
     ProjectPackage,
     WorkflowStatus,
 )
-from app.projects import package_job
+from app.projects import integration_rework, package_job
 from app.projects.workspace import ProjectWorkspaces
 from tests.integration.api_helpers import API, csrf, member, my_workspace, new_email, register
 from tests.integration.test_project_integration import (
@@ -131,7 +131,10 @@ def test_unverified_projects_are_never_packaged_automatically(
     worker_factory: Factory,
     workspaces: ProjectWorkspaces,
     storage: LocalArtifactStorage,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Rework off: this test covers what happens when a failure blocks the project (ADR-0056).
+    monkeypatch.setattr(integration_rework, "MAX_FIX_ROUNDS", 0)
     graph = _built_and_applied(admin_factory, worker_factory, workspaces)
     integrate = _events(admin_factory, graph, outbox.PROJECT_INTEGRATE)[-1]
     assert (
@@ -157,7 +160,10 @@ def test_an_admin_can_ask_for_an_explicitly_partial_package(
     worker_factory: Factory,
     workspaces: ProjectWorkspaces,
     storage: LocalArtifactStorage,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Rework off: this test covers what happens when a failure blocks the project (ADR-0056).
+    monkeypatch.setattr(integration_rework, "MAX_FIX_ROUNDS", 0)
     graph = _built_and_applied(admin_factory, worker_factory, workspaces)
     integrate = _events(admin_factory, graph, outbox.PROJECT_INTEGRATE)[-1]
     _integrate(worker_factory, workspaces, _FakeSandbox(succeed=False), integrate)

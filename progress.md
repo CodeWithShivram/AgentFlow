@@ -1594,6 +1594,21 @@ None.
   - prices: Gemini isn't in `app/llm/pricing.json`, so its calls are recorded unpriced and don't count toward budgets until published prices are added under a new price-list version.
 - **Test isolation:** `tests/conftest.py` now forces `MODEL_PROVIDER=mock` and blanks `MODEL_API_KEY` for the whole test session, so a real key in `.env` can never be used by tests. A guard test in `test_infrastructure.py` checks this.
 
+## Step 9.9 — integration rework (ADR-0056, 2026-11-27)
+- **When the gate fails with `CHECKS_FAILED`,** instead of blocking (while fewer than `MAX_FIX_ROUNDS` = 2 failed runs have asked already), the platform adds a **fix task** for each current owner of the files the failing output names, or for every owner when none is named. Each fix task:
+  - keeps the same scope, skills, agent version and criteria, plus one `integration` criterion, and is required;
+  - is linked to the original task and the failed run (migration `0035`: `fixes_task_id` and `fixes_integration_id`);
+  - gets contract v5 with `integration_feedback` (the failed output, capped) and `current_files` (its scope's committed files, read with workspace path checks), both as delimited data.
+
+  Once accepted and applied, the gate runs again. Past the limit, or with `NOT_RUN`, the project blocks for people as before. Workers may INSERT into `workflow_tasks`.
+- **Also fixed:**
+  - **Test-only submissions** (live run 9): a task owning only test files may propose only tests (`DeveloperOutputs` needs at least one file or test, not a non-empty `proposed_files`).
+  - **A timed-out sandbox run** stays "timed out" even when the container cleanup's Docker calls are slow (cleanup is best-effort).
+- **Tests:** `tests/integration/test_integration_rework.py` (failing gate → fix for the named file's owner → fix task through the real jobs → gate passes → COMPLETED; the round limit → BLOCKED; newest-owner attribution). The tests of the blocking path turn rework off explicitly.
+- **Checks:** a full backend gate run alone. Format, lint, `mypy app tests alembic` and `alembic check` clean; `uv run pytest` **1351 passed, 2 skipped** (20 min 46 s).
+  - Two earlier gate runs were invalid or flaky. One overlapped a second test session on the shared test database (role passwords reset mid-run). The other was under heavy load (sandbox timeout cleanup, now fixed; a test helper claimed a stale dispatch, now hardened).
+- **Live Gemini run 9** (before the test-only fix) built 3 of 5 tasks, then escalated the tests-only task (`SCHEMA_INVALID`). The rework flow was not reached; the next live run follows this commit.
+
 ## First real-model project runs (Gemini, 2026-11-26)
 The full stack (API :8010, Celery worker and Beat) ran against the dev database with `gemini/gemini-3.5-flash-lite`, driven through the real API by a script. Eight runs; each one surfaced a gap that the mock model hid:
 

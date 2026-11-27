@@ -261,6 +261,15 @@ class WorkflowTask(Base):
         CheckConstraint(
             "effort_points IS NULL OR effort_points BETWEEN 1 AND 13", name="effort_points_range"
         ),
+        ForeignKeyConstraint(
+            ["workflow_id", "fixes_task_id"],
+            ["workflow_tasks.workflow_id", "workflow_tasks.id"],
+            ondelete="CASCADE",
+            name="fk_workflow_tasks_fixes_task",
+        ),
+        CheckConstraint(
+            "(fixes_task_id IS NULL) = (fixes_integration_id IS NULL)", name="fix_has_integration"
+        ),
         Index("ix_workflow_tasks_workflow_id_status", "workflow_id", "status"),
         Index("ix_workflow_tasks_workspace_id_status", "workspace_id", "status"),
     )
@@ -277,6 +286,12 @@ class WorkflowTask(Base):
     # Software projects only (ADR-0048): the files this task alone may write, and its effort.
     file_scope: Mapped[list[str]] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
     effort_points: Mapped[int | None]
+    # Integration rework (ADR-0056): a platform fix task names the task whose files it fixes and
+    # the failed integration run that asked for it. NULL for planned tasks.
+    fixes_task_id: Mapped[uuid.UUID | None]
+    fixes_integration_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("project_integrations.id", ondelete="CASCADE")
+    )
     # Expected deliverables, part of the task contract (ADR-0018).
     deliverables: Mapped[list[str]] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
     acceptance_criteria: Mapped[list[Any]] = mapped_column(

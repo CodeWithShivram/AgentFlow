@@ -13,9 +13,9 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import AgentExecution, ExecutionStatus, Workflow, WorkflowTask
+from app.models import AgentExecution, ExecutionStatus, ProjectIntegration, Workflow, WorkflowTask
 from app.projects.apply_job import accepted_files
-from app.projects.workspace import WorkspaceError
+from app.projects.workspace import ProjectWorkspaces, WorkspaceError
 
 MAX_DEPENDENCY_FILES = 40
 MAX_DEPENDENCY_CHARS = 120_000
@@ -52,3 +52,37 @@ def dependency_files(
             selected.append({"path": path, "content": content})
             used += len(content)
     return selected
+
+
+MAX_FEEDBACK_CHARS = 12_000
+MAX_CURRENT_FILES = 40
+MAX_CURRENT_CHARS = 120_000
+
+
+def fix_context(
+    session: Session, workflow: Workflow, task: WorkflowTask, workspaces: ProjectWorkspaces
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """For an integration fix task (ADR-0056): the failed checks' output (already capped and
+    redacted by the sandbox, capped again here) and the current files of its scope."""
+    if task.fixes_integration_id is None:
+        return [], []
+    integration = session.get(ProjectIntegration, task.fixes_integration_id)
+    feedback: list[dict[str, Any]] = []
+    used = 0
+    for check in integration.checks if integration is not None else []:
+        if check.get("outcome") != "failed":
+            continue
+        output = str(check.get("output") or "")[-max(MAX_FEEDBACK_CHARS - used, 0) :]
+        used += len(output)
+        feedback.append({"check": str(check.get("name")), "output": output})
+    try:
+        project = workspaces.project_path(workflow.workspace_id, workflow.id)
+        files = workspaces.read_scope(
+            project,
+            list(task.file_scope),
+            max_files=MAX_CURRENT_FILES,
+            max_chars=MAX_CURRENT_CHARS,
+        )
+    except WorkspaceError:
+        files = {}
+    return feedback, [{"path": p, "content": c} for p, c in files.items()]

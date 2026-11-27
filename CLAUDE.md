@@ -210,7 +210,9 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
 - Integration gate (ADR-0051, `app/projects/integration_job.py`): software projects never auto-complete; reconcile and the
   last apply request `project.integrate`; claim -> sandbox checks (`StackProfile.checks`) outside any transaction ->
   finish (PASSED completes, else BLOCKED). The engine refuses COMPLETED without a latest PASSED `project_integrations`
-  row (`INTEGRATION_REQUIRED`); NOT_RUN is never a pass.
+  row (`INTEGRATION_REQUIRED`); NOT_RUN is never a pass. A CHECKS_FAILED run adds fix tasks for the owners of the
+  failing files instead of blocking, at most `integration_rework.MAX_FIX_ROUNDS` times (ADR-0056); fix tasks carry
+  `fixes_task_id`/`fixes_integration_id` and get `integration_feedback` and `current_files` in contract v5.
 - Packaging (ADR-0052, `app/projects/packaging.py`, `package_job.py`): only Git-tracked workspace files; denylist, secret
   scan (any hit fails the whole package), limits, fixed-time archive re-verified, manifest and build report. VERIFIED
   only for the commit of the latest PASSED integration; PARTIAL only on an ADMIN request. Archives are artifacts.
