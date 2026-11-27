@@ -1594,6 +1594,18 @@ None.
   - prices: Gemini isn't in `app/llm/pricing.json`, so its calls are recorded unpriced and don't count toward budgets until published prices are added under a new price-list version.
 - **Test isolation:** `tests/conftest.py` now forces `MODEL_PROVIDER=mock` and blanks `MODEL_API_KEY` for the whole test session, so a real key in `.env` can never be used by tests. A guard test in `test_infrastructure.py` checks this.
 
+## Live run 10: a real Gemini project completes on its own (2026-11-27)
+- **Plan:** 3 tasks, built, verified and applied in about 75 s, reaching 76%.
+- **First gate:** compile passed and tests failed. The fix task could not be created: the dev database's worker role had not been re-provisioned after Step 9.9 added its INSERT grant (`permission denied for table workflow_tasks`), and the run stayed RUNNING.
+- **After re-provisioning** (`uv run python -m app.db.roles provision`) and a new integration request, the stale run closed as `WORKER_LOST` and:
+  - the gate failed;
+  - **one fix task** was created for the owner of the failing test file, written by Gemini, verified and applied;
+  - **the gate passed** (compile and tests);
+  - **the project was COMPLETED with a VERIFIED package** `wordcount-a2f12175.zip`: 6 files (`pyproject.toml`, `README.md`, `src/wordcount/__init__.py`, `cli.py`, `counter.py`, `tests/test_wordcount.py`) plus report and manifest, checksum verified.
+- **Follow-up fix:** the recovery sweep now closes integration runs left RUNNING past the stale limit and requests a new run (ADR-0056, "Lost runs"), so such a crash can no longer leave a project waiting.
+- **Lesson:** after any change to `WORKER_GRANTS`, re-provision the roles (`CLAUDE.md` already says so; the step was missed for the dev database).
+- **Checks:** a full backend gate run alone. Format, lint, `mypy app tests alembic` and `alembic check` clean; `uv run pytest` **1352 passed, 2 skipped** (17 min 13 s).
+
 ## Step 9.9 — integration rework (ADR-0056, 2026-11-27)
 - **When the gate fails with `CHECKS_FAILED`,** instead of blocking (while fewer than `MAX_FIX_ROUNDS` = 2 failed runs have asked already), the platform adds a **fix task** for each current owner of the files the failing output names, or for every owner when none is named. Each fix task:
   - keeps the same scope, skills, agent version and criteria, plus one `integration` criterion, and is required;

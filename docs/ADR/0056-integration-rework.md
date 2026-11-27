@@ -35,6 +35,10 @@
 - **What happens next.** Fix tasks are verified like any task (`deterministic/v3` and semantic evaluation). Once accepted and applied, their files replace the scope (the newest commit wins), and the gate runs again.
 - **Workers** may now INSERT into `workflow_tasks`.
 
+### Lost runs
+- **The recovery sweep** (Celery Beat, every 60 s) closes integration runs still RUNNING after `integration_job.STALE_AFTER` (30 min, beyond the job's hard limit) as NOT_RUN `WORKER_LOST`, and requests a new run while the project is RUNNING.
+- **Why.** In the live run, the gate crashed after claiming its run (the worker had not been re-provisioned with the new grant), and the project waited at "Integrating" with nothing to wake it.
+
 ## Consequences
 - **Typical failures fix themselves.** A wrong expected value or a missing import is fixed without people, within at most two extra rounds.
 - **Progress stays honest.** Fix tasks add their effort, so progress can step back while fixes run.

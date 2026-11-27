@@ -52,6 +52,7 @@ from app.models import (
     ExecutionStatus,
     HumanIntervention,
     InboxMessage,
+    IntegrationStatus,
     InterventionStatus,
     InterventionSubject,
     LlmUsage,
@@ -59,6 +60,7 @@ from app.models import (
     OutboxStatus,
     PauseReason,
     PlanStatus,
+    ProjectIntegration,
     TaskStatus,
     Workflow,
     WorkflowEvent,
@@ -67,6 +69,7 @@ from app.models import (
     WorkflowTask,
 )
 from app.planning import analysis, plan
+from app.projects import integration_job
 from app.verification import job as verification_job
 from app.verification import rework, semantic
 from app.workflows import engine
@@ -100,6 +103,7 @@ class RecoveryReport:
     paused_at_budget: int = 0
     interrupted_jobs: int = 0
     expired_requests: int = 0
+    lost_integrations: int = 0
 
 
 def recover_once(
@@ -172,6 +176,14 @@ def recover_once(
         with session_scope(factory) as session:
             report.expired_requests += expire_request(
                 session, workspace_id, workflow_id, intervention_id, now=now
+            )
+
+    with session_scope(factory) as session:
+        stale = _stale_integrations(session, now - integration_job.STALE_AFTER, batch_size)
+    for workspace_id, workflow_id, integration_id in stale:
+        with session_scope(factory) as session:
+            report.lost_integrations += recover_integration(
+                session, workspace_id, workflow_id, integration_id, now=now
             )
     return report
 
@@ -751,5 +763,56 @@ def fail_interrupted_job(
     logger.warning(
         "interrupted planning job failed",
         extra={"workflow_id": str(workflow_id), "kind": kind},
+    )
+    return 1
+
+
+def _stale_integrations(
+    session: Session, cutoff: datetime, limit: int
+) -> list[tuple[uuid.UUID, uuid.UUID, uuid.UUID]]:
+    """Integration runs still RUNNING long after any worker could be running them (ADR-0056)."""
+    rows = session.execute(
+        select(
+            ProjectIntegration.workspace_id, ProjectIntegration.workflow_id, ProjectIntegration.id
+        )
+        .where(
+            ProjectIntegration.status == IntegrationStatus.RUNNING,
+            ProjectIntegration.created_at < cutoff,
+        )
+        .order_by(ProjectIntegration.created_at)
+        .limit(limit)
+    ).all()
+    return [(r[0], r[1], r[2]) for r in rows]
+
+
+def recover_integration(
+    session: Session,
+    workspace_id: uuid.UUID,
+    workflow_id: uuid.UUID,
+    integration_id: uuid.UUID,
+    *,
+    now: datetime,
+) -> int:
+    """Closes a lost integration run as NOT_RUN (WORKER_LOST) and, while the project is still
+    RUNNING, asks for a new run, so a crash in the gate never leaves a project waiting forever."""
+    workflow = _lock_workflow(session, workspace_id, workflow_id)
+    integration = session.get(ProjectIntegration, integration_id)
+    if (
+        workflow is None
+        or integration is None
+        or integration.status != IntegrationStatus.RUNNING
+        or integration.workflow_id != workflow.id
+    ):
+        session.commit()
+        return 0
+    integration.status = IntegrationStatus.NOT_RUN
+    integration.error_code = WORKER_LOST
+    integration.finished_at = now
+    if workflow.status == WorkflowStatus.RUNNING:
+        engine.request_integration(session, workflow)
+    session.commit()
+    logger.info(
+        "lost integration run recovered",
+        extra={"workflow_id": str(workflow_id), "integration_id": str(integration_id)},
     )
     return 1

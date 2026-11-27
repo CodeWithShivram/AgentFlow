@@ -180,3 +180,39 @@ def test_responsible_tasks_prefer_the_newest_owner() -> None:
         [original, newer, tests], "Traceback: src/app.py line 3", ["src/app.py", "tests/t.py"]
     )
     assert chosen == [newer]
+
+
+def test_the_recovery_sweep_closes_a_lost_integration_run_and_asks_again(
+    admin_factory: Factory, worker_factory: Factory, tmp_path: Path
+) -> None:
+    # Live run: the gate crashed after claiming its run, leaving the project "Integrating".
+    from datetime import UTC, datetime, timedelta
+
+    from app.execution import recovery
+    from app.projects import integration_job
+
+    workspaces = ProjectWorkspaces(tmp_path / "w")
+    graph = _built_and_applied(admin_factory, worker_factory, workspaces)
+    event = _events(admin_factory, graph, outbox.PROJECT_INTEGRATE)[-1]
+    with session_scope(worker_factory) as s:
+        job = integration_job.claim(
+            s, workspaces, event_id=event.id, workspace_id=event.workspace_id,
+            workflow_id=graph.workflow_id,
+        )  # fmt: skip
+    assert isinstance(job, integration_job.IntegrationJob)  # claimed, then the worker is lost
+    before = len(_events(admin_factory, graph, outbox.PROJECT_INTEGRATE))
+
+    soon = recovery.recover_once(worker_factory, now=datetime.now(UTC) + timedelta(minutes=5))
+    assert soon.lost_integrations == 0  # still within the time a worker may need
+    later = recovery.recover_once(
+        worker_factory, now=datetime.now(UTC) + integration_job.STALE_AFTER + timedelta(minutes=1)
+    )
+    assert later.lost_integrations == 1
+    with session_scope(admin_factory) as s:
+        run = s.get(ProjectIntegration, job.integration_id)
+        assert run is not None
+        assert (run.status, run.error_code) == (IntegrationStatus.NOT_RUN, "WORKER_LOST")
+    retry = _events(admin_factory, graph, outbox.PROJECT_INTEGRATE)
+    assert len(retry) == before + 1
+    assert _integrate(worker_factory, workspaces, _FakeSandbox(), retry[-1]) == "passed"
+    assert _workflow(admin_factory, graph.workflow_id).status == WorkflowStatus.COMPLETED
