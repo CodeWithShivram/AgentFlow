@@ -4,7 +4,6 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
 import { Controller, useForm, type UseFormReturn } from "react-hook-form";
 import { toast } from "sonner";
 import { z } from "zod";
@@ -27,7 +26,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
 import { describeError } from "@/lib/api/errors";
 import type { WorkflowInput } from "@/lib/api/types";
-import { newIdempotencyKey } from "@/lib/format";
+import { useIdempotencyKey } from "@/lib/hooks/use-idempotency-key";
 import { workspacePath } from "@/lib/navigation";
 import { useCan, useWorkspace } from "@/lib/workspace";
 
@@ -93,7 +92,8 @@ export function WorkflowCreateView() {
   const router = useRouter();
   const queryClient = useQueryClient();
   // One key per form: a retried submission of the same form cannot create a second workflow.
-  const [idempotencyKey] = useState(newIdempotencyKey);
+  // The same key for a retried identical request; a new key once the request changes.
+  const idempotencyKeyFor = useIdempotencyKey();
   const form = useForm<FormInput, unknown, Values>({
     resolver: zodResolver(workflowSchema),
     defaultValues: workflowFormDefaults,
@@ -101,8 +101,10 @@ export function WorkflowCreateView() {
   const { errors } = form.formState;
 
   const create = useMutation({
-    mutationFn: (values: Values) =>
-      api.workflows.create(workspace.id, toWorkflowInput(values), idempotencyKey),
+    mutationFn: (values: Values) => {
+      const input = toWorkflowInput(values);
+      return api.workflows.create(workspace.id, input, idempotencyKeyFor(input));
+    },
     onSuccess: (workflow) => {
       void queryClient.invalidateQueries({ queryKey: ["workflows", workspace.id] });
       toast.success("Workflow created");

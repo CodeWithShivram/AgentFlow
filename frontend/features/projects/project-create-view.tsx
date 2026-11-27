@@ -25,7 +25,7 @@ import {
 import { api } from "@/lib/api";
 import { describeError } from "@/lib/api/errors";
 import type { WorkflowInput } from "@/lib/api/types";
-import { newIdempotencyKey } from "@/lib/format";
+import { useIdempotencyKey } from "@/lib/hooks/use-idempotency-key";
 import { workspacePath } from "@/lib/navigation";
 import { useCan, useWorkspace } from "@/lib/workspace";
 
@@ -38,7 +38,7 @@ const STEPS = [
   "AgentFlow plans the project: its stack, architecture and tasks.",
   "You review and approve the plan.",
   "Agents build it task by task; each change is verified.",
-  "The project is checked in a sandbox (install, build, tests).",
+  "The project is checked in an offline sandbox (compile or type-check, then its tests).",
   "You download it as a ZIP with a build report.",
 ];
 
@@ -47,8 +47,8 @@ export function ProjectCreateView() {
   const canCreate = useCan("MEMBER");
   const router = useRouter();
   const queryClient = useQueryClient();
-  // One key per form: a retried submission of the same form cannot create a second project.
-  const [idempotencyKey] = useState(newIdempotencyKey);
+  // The same key for a retried identical request; a new key once the request changes.
+  const idempotencyKeyFor = useIdempotencyKey();
   const form = useForm<WorkflowFormInput, unknown, WorkflowFormValues>({
     resolver: zodResolver(workflowSchema),
     defaultValues: workflowFormDefaults,
@@ -57,8 +57,10 @@ export function ProjectCreateView() {
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const create = useMutation({
-    mutationFn: (values: WorkflowFormValues) =>
-      api.workflows.create(workspace.id, toProjectInput(values), idempotencyKey),
+    mutationFn: (values: WorkflowFormValues) => {
+      const input = toProjectInput(values);
+      return api.workflows.create(workspace.id, input, idempotencyKeyFor(input));
+    },
     onSuccess: (workflow) => {
       void queryClient.invalidateQueries({ queryKey: ["workflows", workspace.id] });
       toast.success("Project created");
