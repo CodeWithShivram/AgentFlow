@@ -29,6 +29,7 @@ from app.models import (
     WorkspaceApplication,
     WorkspaceApplicationStatus,
 )
+from app.projects import changes
 from app.projects.integration_job import all_work_applied
 from app.projects.scope import in_scope
 from app.projects.workspace import ProjectWorkspaces, WorkspaceError
@@ -125,6 +126,7 @@ def run(
     )
     try:
         files = accepted_files(execution.submission, list(task.file_scope))
+        changes.seed_change_workspace(workspaces, workflow)  # ADR-0059; idempotent
         change = workspaces.apply(
             workflow.workspace_id,
             workflow.id,

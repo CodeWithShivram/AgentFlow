@@ -297,11 +297,17 @@ def jobs(api_settings: Settings, worker_factory: Any) -> dict[str, Any]:
         with session_scope(worker_factory) as s:
             return analysis.finish(s, job, outcome)
 
-    def run_plan(event: OutboxEvent, adapter: MockModelAdapter | None = None) -> str:
+    def run_plan(
+        event: OutboxEvent, adapter: MockModelAdapter | None = None, workspaces: Any = None
+    ) -> str:
         assert event.workflow_id is not None
         with session_scope(worker_factory) as s:
             job = plan.claim(
-                s, event_id=event.id, workspace_id=event.workspace_id, workflow_id=event.workflow_id
+                s,
+                event_id=event.id,
+                workspace_id=event.workspace_id,
+                workflow_id=event.workflow_id,
+                workspaces=workspaces,
             )
         if isinstance(job, plan.Skipped):
             return job.value

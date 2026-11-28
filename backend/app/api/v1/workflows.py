@@ -30,6 +30,7 @@ from app.schemas.workflows import (
     AgentSuggestion,
     AgentSuggestionList,
     AssignRequest,
+    ChangeRequest,
     DependencyRequest,
     EventPage,
     ExecutionList,
@@ -126,6 +127,27 @@ async def create_workflow(
     idempotency = IdempotencyService(ttl=timedelta(seconds=settings.idempotency_key_ttl_seconds))
     created = await service.create_workflow(
         session, access, body, idempotency=idempotency, idempotency_key=idempotency_key
+    )
+    headers = {"Idempotent-Replayed": "true"} if created.replayed else None
+    return JSONResponse(created.body, status_code=created.status_code, headers=headers)
+
+
+@router.post(
+    "/{workflow_id}/changes", status_code=status.HTTP_201_CREATED, response_model=WorkflowResponse
+)
+async def create_change(
+    workflow_id: uuid.UUID,
+    body: ChangeRequest,
+    access: Member,
+    session: DbSession,
+    settings: SettingsDep,
+    idempotency_key: IdempotencyKeyHeader = None,
+) -> JSONResponse:
+    """Starts a change project for a completed software project (ADR-0059): a new PENDING project
+    that builds on the base's verified code. Send `Idempotency-Key` to make retries safe."""
+    idempotency = IdempotencyService(ttl=timedelta(seconds=settings.idempotency_key_ttl_seconds))
+    created = await service.create_change(
+        session, access, workflow_id, body, idempotency=idempotency, idempotency_key=idempotency_key
     )
     headers = {"Idempotent-Replayed": "true"} if created.replayed else None
     return JSONResponse(created.body, status_code=created.status_code, headers=headers)

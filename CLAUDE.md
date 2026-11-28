@@ -227,6 +227,11 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
 - Deleting (ADR-0058): soft delete only (`workflows.deleted_at`, ADMIN, idle statuses only, check constraint);
   the workflow repository hides deleted rows from every API read; history (events, usage, audits) stays; a
   `workflow.purge` worker job removes artifacts' bytes (rows become DELETED) and the workspace. Never hard-delete.
+- Change projects (ADR-0059): `POST …/workflows/{id}/changes` makes a new PENDING project linked to a COMPLETED base
+  with a PASSED integration (`base_workflow_id`, `base_head_sha`; base spec and settings copied). The base is never
+  modified. `changes.seed_change_workspace` (plan job, apply job; idempotent) copies the base's files at that commit,
+  refusing BASE_CHANGED/BASE_UNAVAILABLE/BASE_TOO_LARGE. The planner gets `<current_project>` (`software_change/v1`);
+  shared files need no owner; every change task gets `current_files`, the rest of the project and a fixed `change_rule`.
 - Workflow events are append-only.
 
 ## Security

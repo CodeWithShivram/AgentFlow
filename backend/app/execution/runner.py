@@ -309,6 +309,10 @@ def claim(
     if task.fixes_integration_id is not None:
         # A fix task has no planned dependencies: it reads the rest of the project instead.
         project_files = project_context
+    elif workflow.base_workflow_id is not None:
+        # A change task (ADR-0059) also reads the project it changes, after its dependencies.
+        known = {f["path"] for f in project_files}
+        project_files = [*project_files, *(f for f in project_context if f["path"] not in known)]
     claimed = Claim(
         execution_id=execution.id,
         workspace_id=workflow.workspace_id,

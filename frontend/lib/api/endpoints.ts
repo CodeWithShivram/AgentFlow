@@ -133,6 +133,11 @@ export function createEndpoints(client: ApiClient) {
         client.post<Workflow>(`${ws(workspaceId)}/workflows`, body, {
           headers: { "Idempotency-Key": idempotencyKey },
         }),
+      /** Starts a change project for a completed software project (ADR-0059). */
+      createChange: (workspaceId: Uuid, baseId: Uuid, body: { prompt: string }, idempotencyKey: string) =>
+        client.post<Workflow>(`${wf(workspaceId, baseId)}/changes`, body, {
+          headers: { "Idempotency-Key": idempotencyKey },
+        }),
       transition: (
         workspaceId: Uuid,
         workflowId: Uuid,

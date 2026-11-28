@@ -432,6 +432,9 @@ export interface Workflow {
   kind?: WorkflowKind;
   /** Set once a software project's plan is confirmed (ADR-0048). */
   project_spec?: ProjectSpec | null;
+  /** Change projects (ADR-0059): the completed project this one changes, and its starting commit. */
+  base_workflow_id?: Uuid | null;
+  base_head_sha?: string | null;
 }
 
 /** Why a workflow is paused. Only AWAITING_DECISION is lifted by the platform itself. */

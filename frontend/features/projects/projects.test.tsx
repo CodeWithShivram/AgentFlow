@@ -402,6 +402,54 @@ describe("ProjectDetailView", () => {
   });
 });
 
+describe("change requests", () => {
+  const completed: Workflow = { ...WORKFLOW, status: "COMPLETED" };
+
+  function stub(workflow: Workflow) {
+    const fetchMock = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(async (url, init) => {
+      const path = new URL(url).pathname;
+      if (init?.method === "POST" && path.endsWith("/changes")) {
+        return json(201, { ...completed, id: "wf-2", status: "PENDING", base_workflow_id: "wf-1" });
+      }
+      if (path.endsWith("/workflows/wf-1")) return json(200, workflow);
+      if (path.endsWith("/progress")) return json(200, { ...PROGRESS, phase: "COMPLETED", percent: 100 });
+      if (path.endsWith("/tasks")) return json(200, { items: [], total: 0, limit: 100, offset: 0 });
+      if (path.endsWith("/integrations") || path.endsWith("/packages")) return json(200, []);
+      return json(404, {});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  it("starts a change project from a completed project, with an idempotency key", async () => {
+    const fetchMock = stub(completed);
+    renderWith(<ProjectDetailView />, "MEMBER");
+    const region = await screen.findByRole("region", { name: "Request a change" });
+    await userEvent.click(within(region).getByRole("button", { name: "Request change" }));
+    expect(within(region).getByText("Describe the change first.")).toBeInTheDocument();
+
+    await userEvent.type(within(region).getByLabelText("What should change?"), "Add a checkout page");
+    await userEvent.click(within(region).getByRole("button", { name: "Request change" }));
+    await waitFor(() => expect(router.push).toHaveBeenCalledWith("/w/ws-1/projects/wf-2"));
+    const [url, init] = fetchMock.mock.calls.find(([, i]) => i?.method === "POST")!;
+    expect(new URL(url).pathname).toBe("/api/v1/workspaces/ws-1/workflows/wf-1/changes");
+    expect(JSON.parse(String(init?.body))).toEqual({ prompt: "Add a checkout page" });
+    expect(new Headers(init?.headers).get("Idempotency-Key")).toBeTruthy();
+  });
+
+  it("is offered only on completed projects and links a change to its base", async () => {
+    stub({ ...WORKFLOW, base_workflow_id: "wf-0", base_head_sha: "0123456789abcdef" });
+    renderWith(<ProjectDetailView />, "MEMBER");
+    expect(await screen.findByRole("heading", { level: 1, name: "Todo API" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Request a change" })).toBeNull();
+    expect(screen.getByRole("link", { name: "the previous project" })).toHaveAttribute(
+      "href",
+      "/w/ws-1/projects/wf-0",
+    );
+    expect(screen.getByText("0123456789")).toBeInTheDocument();
+  });
+});
+
 describe("UiPreview", () => {
   const run = (id: string, previewId: string | null, outcome: "passed" | "failed" = "passed") => ({
     id,

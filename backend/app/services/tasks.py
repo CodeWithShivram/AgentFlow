@@ -572,7 +572,8 @@ def _project_issues(
         return ["PROJECT_PLAN_REQUIRED"]
     issues = []
     confirmed = workflow.project_spec or {}
-    if any(
+    # A change project's shared files already exist in its seeded workspace (ADR-0059).
+    if workflow.base_workflow_id is None and any(
         not any(covers(entry, shared) for task in kept for entry in task.file_scope)
         for shared in proposal.unowned_shared_files()
     ):

@@ -11,15 +11,18 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError
 from app.execution import outbox
 from app.models import (
     AnalysisStatus,
+    IntegrationStatus,
     InterventionStatus,
     InterventionSubject,
     PlanStatus,
+    ProjectIntegration,
     Workflow,
     WorkflowEvent,
     WorkflowEventType,
@@ -32,7 +35,7 @@ from app.planning.dag import DagReport, analyse_plan
 from app.planning.schema import PlanProposal
 from app.repositories import agents as agents_repository
 from app.repositories import workflows as repository
-from app.schemas.workflows import WorkflowCreateRequest, WorkflowResponse
+from app.schemas.workflows import ChangeRequest, WorkflowCreateRequest, WorkflowResponse
 from app.services.authorization import InsufficientRoleError, WorkspaceAccess, role_at_least
 from app.services.idempotency import IdempotencyService, NewRequest, StoredResponse
 from app.services.transitions import (
@@ -48,6 +51,7 @@ from app.workflows.state_machine import Actor
 logger = logging.getLogger("agentflow.workflows")
 
 CREATE_OPERATION = "workflows.create"
+CHANGE_OPERATION = "workflows.change"
 W = WorkflowStatus
 _ADMIN_TRANSITIONS = frozenset({(W.AWAITING_APPROVAL, W.READY), (W.BLOCKED, W.RUNNING)})
 _PLAN_DECISIONS = {
@@ -60,6 +64,12 @@ class WorkflowNotFoundError(AppError):
     status_code = 404
     code = "WORKFLOW_NOT_FOUND"
     message = "Workflow not found."
+
+
+class ChangeNotAvailableError(AppError):
+    status_code = 409
+    code = "CHANGE_NOT_AVAILABLE"
+    message = "Only a completed software project whose integration checks passed can be changed."
 
 
 class WorkflowActiveError(AppError):
@@ -204,6 +214,98 @@ async def create_workflow(
         await idempotency.complete(session, claim, status_code=201, body=body)
     await session.commit()
     logger.info("workflow created", extra={"workflow_id": str(workflow.id)})
+    return CreatedWorkflow(201, body, replayed=False)
+
+
+async def create_change(
+    session: AsyncSession,
+    access: WorkspaceAccess,
+    base_id: uuid.UUID,
+    request: ChangeRequest,
+    *,
+    idempotency: IdempotencyService,
+    idempotency_key: str | None,
+) -> CreatedWorkflow:
+    """Creates a PENDING change project for a completed software project (ADR-0059). It keeps the
+    base's settings and project spec (so its stack profile), and records the commit of the base's
+    latest passed integration, which its workspace starts from when it is first planned."""
+    claim: NewRequest | None = None
+    if idempotency_key is not None:
+        payload = {
+            "user_id": str(access.user_id),
+            "base_workflow_id": str(base_id),
+            "request": request.model_dump(mode="json"),
+        }
+        outcome = await idempotency.begin(
+            session,
+            workspace_id=access.workspace_id,
+            operation=CHANGE_OPERATION,
+            key=idempotency_key,
+            payload=payload,
+        )
+        if isinstance(outcome, StoredResponse):
+            await session.rollback()
+            return CreatedWorkflow(outcome.status_code, outcome.body, replayed=True)
+        claim = outcome
+
+    base = await get_workflow(session, access, base_id)
+    latest = (
+        await session.execute(
+            select(ProjectIntegration)
+            .where(
+                ProjectIntegration.workflow_id == base.id,
+                ProjectIntegration.workspace_id == base.workspace_id,
+            )
+            .order_by(ProjectIntegration.created_at.desc(), ProjectIntegration.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if (
+        base.kind != WorkflowKind.SOFTWARE_PROJECT
+        or base.status != W.COMPLETED
+        or base.project_spec is None
+        or latest is None
+        or latest.status != IntegrationStatus.PASSED
+    ):
+        raise ChangeNotAvailableError(details={"status": base.status.value})
+    workflow = Workflow(
+        id=uuid.uuid4(),
+        workspace_id=access.workspace_id,
+        created_by_user_id=access.user_id,
+        prompt=request.prompt,
+        kind=WorkflowKind.SOFTWARE_PROJECT,
+        status=W.PENDING,
+        autonomy_policy=base.autonomy_policy,
+        budget_limit=base.budget_limit,
+        currency=base.currency,
+        max_parallel_tasks=base.max_parallel_tasks,
+        allow_dynamic_agent_proposals=base.allow_dynamic_agent_proposals,
+        project_spec=dict(base.project_spec),
+        base_workflow_id=base.id,
+        base_head_sha=latest.head_sha,
+        revision=1,
+    )
+    session.add(workflow)
+    await session.flush()
+    record_event(
+        session,
+        workflow,
+        WorkflowEventType.WORKFLOW_CREATED,
+        payload={
+            "actor": Actor.USER.value,
+            "user_id": str(access.user_id),
+            "base_workflow_id": str(base.id),
+        },
+    )
+    await session.flush()
+    body = workflow_response(workflow).model_dump(mode="json")
+    if claim is not None:
+        await idempotency.complete(session, claim, status_code=201, body=body)
+    await session.commit()
+    logger.info(
+        "change project created",
+        extra={"workflow_id": str(workflow.id), "base_workflow_id": str(base.id)},
+    )
     return CreatedWorkflow(201, body, replayed=False)
 
 

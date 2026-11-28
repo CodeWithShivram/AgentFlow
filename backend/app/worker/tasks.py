@@ -307,6 +307,7 @@ def plan_workflow(event_id: str, workspace_id: str, workflow_id: str) -> str:
             event_id=uuid.UUID(event_id),
             workspace_id=uuid.UUID(workspace_id),
             workflow_id=uuid.UUID(workflow_id),
+            workspaces=ProjectWorkspaces(settings.project_workspace_root),
         )
     if isinstance(job, plan.Skipped):
         logger.info("plan generation skipped", extra={"event_id": event_id, "outcome": job.value})

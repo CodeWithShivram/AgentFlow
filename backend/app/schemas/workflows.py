@@ -82,6 +82,21 @@ class WorkflowCreateRequest(BaseModel):
         return value
 
 
+class ChangeRequest(BaseModel):
+    """A change to a completed software project (ADR-0059): what should be different."""
+
+    model_config = _FORBID
+
+    prompt: Annotated[str, StringConstraints(min_length=1, max_length=MAX_PROMPT_LENGTH)]
+
+    @field_validator("prompt")
+    @classmethod
+    def _prompt_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("prompt must not be blank")
+        return value
+
+
 class WorkflowTransitionRequest(BaseModel):
     model_config = _FORBID
 
@@ -231,6 +246,9 @@ class WorkflowResponse(BaseModel):
     paused_by_user_id: uuid.UUID | None = None
     paused_at: datetime | None = None
     pause_note: str | None = None
+    # Change projects (ADR-0059): the project this one changes and the commit it starts from.
+    base_workflow_id: uuid.UUID | None = None
+    base_head_sha: str | None = None
 
 
 class TaskResponse(BaseModel):

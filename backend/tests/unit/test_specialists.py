@@ -337,3 +337,22 @@ def test_the_guard_stops_an_agent_that_swallows_the_cancellation() -> None:
             is_current=is_current,
         )
     assert checks == [True, False]  # once stopped, it stays stopped without asking again
+
+
+def test_a_change_task_keeps_its_scope_files_and_is_told_the_scope_is_replaced() -> None:
+    # Step 9.12 (ADR-0059): a task of a change project sees its scope's current files.
+    submission, adapter, _, _ = _run(
+        DeveloperAgent,
+        required_skills=["code_generation"],
+        deliverables=["files"],
+        acceptance_criteria=[{"id": "c1", "description": "Documented."}],
+        file_scope=["README.md", "src/change/"],
+        stack_profile="python-3.12",
+        current_files=[{"path": "README.md", "content": "# Tool\n"}],
+        dependency_files=[{"path": "src/tool/core.py", "content": "VALUE = 1\n"}],
+    )
+    prompt = adapter.requests[0].messages[-1].content
+    assert "change_rule" in prompt and "replaced by exactly the files you propose" in prompt
+    files = {f["path"]: f["content"] for f in submission.outputs["proposed_files"]}
+    assert files["README.md"].startswith("# Tool\n") and "Changed by the mock" in files["README.md"]
+    assert "src/change/mock_module.py" in files

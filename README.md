@@ -427,6 +427,8 @@ Describe software in one prompt and AgentFlow plans it, builds it with agents, c
 
 **Websites** ([ADR-0057](docs/ADR/0057-web-ui-projects.md)): ask for a website and the planner picks `python-3.12-web`, a FastAPI API that serves a plain HTML/CSS/JS UI from `static/`, which the **Frontend Developer** agent builds. The sandbox loads the page in headless Chromium and fails it on console errors, broken requests or unlabelled form fields. Its screenshot appears on the project page and in the package (`AGENTFLOW_UI_PREVIEW.png`).
 
+**Changes** ([ADR-0059](docs/ADR/0059-change-projects.md)): on a completed project, **Request a change** (for example "add a checkout page") starts a new project from the verified code. The planner sees the current files and plans only the change, every check runs again on the whole project, and a new verified ZIP is produced. The original project and its downloads stay as they are. Admins can **delete** projects they no longer need ([ADR-0058](docs/ADR/0058-deleting-workflows.md)).
+
 The project page shows the phase, progress weighted by effort (only verified work counts), a time-remaining range with a confidence level, task and integration status, and the downloads ([ADR-0053](docs/ADR/0053-project-progress-and-ux.md)).
 
 **Additional requirements:**

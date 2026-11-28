@@ -164,6 +164,20 @@ class Workflow(Base):
         CheckConstraint(
             "project_spec IS NULL OR kind = 'SOFTWARE_PROJECT'", name="project_spec_for_projects"
         ),
+        # A change project (ADR-0059) names its base project and the verified commit it starts from.
+        CheckConstraint(
+            "(base_workflow_id IS NULL) = (base_head_sha IS NULL)", name="base_with_commit"
+        ),
+        CheckConstraint(
+            "base_workflow_id IS NULL OR kind = 'SOFTWARE_PROJECT'", name="base_for_projects"
+        ),
+        ForeignKeyConstraint(
+            ["workspace_id", "base_workflow_id"],
+            ["workflows.workspace_id", "workflows.id"],
+            ondelete="RESTRICT",
+            name="fk_workflows_base_workflow_same_workspace",
+        ),
+        Index("ix_workflows_base_workflow_id", "base_workflow_id"),
         # Only finished or never-started workflows are deleted (ADR-0058).
         CheckConstraint(
             "deleted_at IS NULL OR status IN ('PENDING', 'COMPLETED', 'FAILED', 'CANCELLED')",
@@ -239,6 +253,10 @@ class Workflow(Base):
     deleted_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT")
     )
+    # Change projects (ADR-0059): the completed project this one changes, and the commit of its
+    # latest passed integration, which the new workspace starts from.
+    base_workflow_id: Mapped[uuid.UUID | None]
+    base_head_sha: Mapped[str | None] = mapped_column(String(40))
 
 
 class WorkflowTask(Base):

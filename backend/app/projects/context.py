@@ -62,12 +62,17 @@ MAX_CURRENT_CHARS = 120_000
 def fix_context(
     session: Session, workflow: Workflow, task: WorkflowTask, workspaces: ProjectWorkspaces
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
-    """For an integration fix task (ADR-0056): the failed checks' output (already capped and
+    """For an integration fix task (ADR-0056), and any task of a change project (ADR-0059, no
+    feedback): the failed checks' output (already capped and
     redacted by the sandbox, capped again here), the current files of its scope, and the rest of
     the project's files as read-only context (a tests fix must see how the code it tests works)."""
-    if task.fixes_integration_id is None:
+    if task.fixes_integration_id is None and workflow.base_workflow_id is None:
         return [], [], []
-    integration = session.get(ProjectIntegration, task.fixes_integration_id)
+    integration = (
+        session.get(ProjectIntegration, task.fixes_integration_id)
+        if task.fixes_integration_id is not None
+        else None
+    )
     feedback: list[dict[str, Any]] = []
     used = 0
     for check in integration.checks if integration is not None else []:

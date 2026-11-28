@@ -143,6 +143,49 @@ class ProjectWorkspaces:
             self._git(project, "commit", "--quiet", "--allow-empty", "-m", "Start project")
         return project
 
+    def _write(self, project: Path, relative: str, content: str) -> int:
+        """Writes one file atomically with every path check; 0 when it already matches."""
+        target = self._target(project, relative)
+        data = content.encode("utf-8")
+        if target.is_file() and target.read_bytes() == data:
+            return 0
+        target.parent.mkdir(parents=True, exist_ok=True)
+        # Every folder between the project and the file is checked again after creation.
+        self._target(project, relative)
+        descriptor, temporary = tempfile.mkstemp(prefix=".write-", dir=target.parent)
+        try:
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(data)
+            os.replace(temporary, target)
+        except BaseException:
+            Path(temporary).unlink(missing_ok=True)
+            raise
+        return 1
+
+    def seed(
+        self,
+        workspace_id: uuid.UUID,
+        workflow_id: uuid.UUID,
+        files: Mapping[str, str],
+        *,
+        message: str,
+    ) -> str | None:
+        """Starts a change project's repository with its base project's files (ADR-0059), with
+        the same path checks as `apply`. Idempotent: a repository that already tracks files is
+        left alone (None). Returns the new head otherwise."""
+        project = self.ensure_repository(workspace_id, workflow_id)
+        if self.tracked_files(project):
+            return None
+        for content in files.values():
+            if len(content.encode("utf-8")) > MAX_FILE_BYTES:
+                raise WorkspaceError("FILE_TOO_LARGE")
+        for relative, content in sorted(files.items()):
+            self._write(project, relative, content)
+        self._git(project, "add", "--all", "--force", "--", ".")
+        if self._git(project, "status", "--porcelain"):
+            self._git(project, "commit", "--quiet", "-m", message[:200])
+        return self.head(project)
+
     def remove(self, workspace_id: uuid.UUID, workflow_id: uuid.UUID) -> bool:
         """Deletes a deleted workflow's project folder (ADR-0058). Refuses links like every other
         path; Git's read-only object files are made writable first. Returns whether it existed."""
@@ -241,22 +284,7 @@ class ProjectWorkspaces:
                 self._target(project, existing).unlink()
                 removed += 1
         for relative, content in sorted(files.items()):
-            target = self._target(project, relative)
-            data = content.encode("utf-8")
-            if target.is_file() and target.read_bytes() == data:
-                continue
-            target.parent.mkdir(parents=True, exist_ok=True)
-            # Every folder between the project and the file is checked again after creation.
-            self._target(project, relative)
-            descriptor, temporary = tempfile.mkstemp(prefix=".write-", dir=target.parent)
-            try:
-                with os.fdopen(descriptor, "wb") as handle:
-                    handle.write(data)
-                os.replace(temporary, target)
-            except BaseException:
-                Path(temporary).unlink(missing_ok=True)
-                raise
-            written += 1
+            written += self._write(project, relative, content)
         # --force: a project's own .gitignore must not hide files the platform wrote.
         self._git(project, "add", "--all", "--force", "--", ".")
         commit_sha = None

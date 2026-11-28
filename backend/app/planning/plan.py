@@ -48,7 +48,9 @@ from app.models import (
     WorkflowTask,
 )
 from app.planning.schema import MAX_TASKS, PlannedTask, PlanProposal, ProjectPlanProposal
+from app.projects import changes
 from app.projects.profiles import PROFILES
+from app.projects.workspace import ProjectWorkspaces, WorkspaceError
 from app.workflows import engine
 
 __all__ = [
@@ -80,6 +82,8 @@ REPLAN_PROMPT_VERSION = "replan/v2"
 # v4: the schema requires every task's file_scope and effort_points; v5: profiles carry their
 # layout conventions (live Gemini runs, ADR-0055).
 SOFTWARE_PROMPT_VERSION = "software_plan/v6"
+# A change to a completed project (ADR-0059).
+CHANGE_PROMPT_VERSION = "software_change/v1"
 # Workflows whose remaining work is replanned instead of planned (ADR-0033).
 REPLAN_STATUSES = frozenset({WorkflowStatus.PAUSED, WorkflowStatus.BLOCKED})
 CONSUMER = "plan_workflow"
@@ -134,6 +138,20 @@ This is a SOFTWARE PROJECT: plan a coherent, runnable, tested source-code projec
 - Choose python-3.12-web when the request asks for a website, web page or browser UI.
 - Include tests under the profile's test folders and a README with setup, run and test steps.
 - Never plan secrets, real credentials or files named .env; use .env.example placeholders."""
+
+
+# Change projects (ADR-0059): the plan changes the verified project in <current_project>.
+_CHANGE = """
+This is a CHANGE to an existing, verified project (in <current_project>: every committed path,
+and the content of as many files as fit). Plan only the work the user_request needs.
+- Keep the project's name and stack profile; `architecture` describes the project after the
+  change.
+- Plan tasks only for files to add, change or delete. Files outside every task's file_scope stay
+  exactly as they are, so do not plan tasks for unchanged files.
+- A task's file_scope is replaced by exactly the files the task proposes: prefer exact file
+  paths for existing files, and a folder only when the task owns everything in it.
+- The profile's shared files already exist; own one only if the change edits it.
+- Add or update tests for the changed behaviour, and the README when usage changes."""
 
 
 def _profiles_section(stack_profile: str | None) -> str:
@@ -232,6 +250,7 @@ def build_request(
     workflow: Workflow,
     replan: tuple[list[dict[str, Any]], list[dict[str, Any]]] | None = None,
     clarifications: list[dict[str, str]] | None = None,
+    current_project: dict[str, Any] | None = None,
 ) -> ModelRequest:
     if workflow.normalized_requirements is None:
         raise ValueError("a plan needs a ready analysis")
@@ -251,6 +270,9 @@ def build_request(
         system += _SOFTWARE
         # A confirmed project keeps its profile: replans see only that one.
         parts.append(_profiles_section(confirmed_profile(workflow)))
+    if current_project is not None:
+        system += _CHANGE
+        parts.append(_delimited("current_project", json.dumps(current_project, sort_keys=True)))
     if replan is not None:
         basis, unfinished = replan
         system += _REPLAN
@@ -360,6 +382,31 @@ def mock_software_plan(text: str) -> str:
     return json.dumps(plan)
 
 
+def mock_software_change(text: str) -> str:
+    """A version 2 change plan (ADR-0059): one task adding a module in a new folder, then one
+    updating the README, on the current project's profile and name."""
+    current = re.search(r"<current_project>\n(.*?)\n</current_project>", text, re.S)
+    project = json.loads(current.group(1)) if current else {}
+    profiles = _section("stack_profiles", text)
+    fallback = profiles[0]["id"] if profiles else "python-3.12"
+    plan = {
+        "schema_version": 2,
+        "summary": "Mock change plan",
+        "project": {
+            "name": project.get("name") or "mock-project",
+            "stack_profile": project.get("stack_profile") or fallback,
+            "architecture": "Unchanged, plus a new module for the change.",
+            "assumptions": ["Drafted by the mock model provider (no real model)."],
+        },
+        "tasks": [
+            _mock_task("t1", "Add the change", ["src/change/"], 2, []),
+            _mock_task("t2", "Document the change", ["README.md"], 1, ["t1"]),
+        ],
+        "risks": ["Change plan drafted by the mock model provider (no real model)."],
+    }
+    return json.dumps(plan)
+
+
 def mock_software_replan(text: str) -> str:
     """A version 2 replan: one task per unfinished task, each in its own folder."""
     profiles = _section("stack_profiles", text)
@@ -394,6 +441,8 @@ def mock_plan(request: ModelRequest) -> str:
     if "<stack_profiles>" in text:
         if "<unfinished_tasks>" in text:
             return mock_software_replan(text)
+        if "<current_project>" in text:
+            return mock_software_change(text)
         return mock_software_plan(text)
     if "<unfinished_tasks>" in text:
         return mock_replan(text)
@@ -455,6 +504,8 @@ register_default(PURPOSE, mock_plan)
 class Skipped(StrEnum):
     DUPLICATE = "duplicate"
     STALE = "stale"
+    # A change project's workspace could not start from its base (recorded as a plan failure).
+    FAILED = "failed"
 
 
 @dataclass(frozen=True)
@@ -469,6 +520,8 @@ class PlanJob:
     stack_profile: str | None = None
     # A replan's completed tasks (ADR-0033); None for a plan.
     basis: list[dict[str, Any]] | None = None
+    # A change project (ADR-0059): its shared files already exist in the seeded workspace.
+    change: bool = False
 
 
 @dataclass(frozen=True)
@@ -497,7 +550,12 @@ def _is_current(workflow: Workflow | None, request_id: uuid.UUID) -> bool:
 
 
 def claim(
-    session: Session, *, event_id: uuid.UUID, workspace_id: uuid.UUID, workflow_id: uuid.UUID
+    session: Session,
+    *,
+    event_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    workflow_id: uuid.UUID,
+    workspaces: ProjectWorkspaces | None = None,
 ) -> PlanJob | Skipped:
     if not outbox.record_consumed(session, event_id=event_id, consumer=CONSUMER):
         session.rollback()
@@ -516,13 +574,27 @@ def claim(
         if workflow.status in REPLAN_STATUSES
         else None
     )
+    current_project = None
+    if workflow.base_workflow_id is not None:
+        if workspaces is None:
+            raise ValueError("a change project's plan needs the project workspaces")
+        try:
+            changes.seed_change_workspace(workspaces, workflow)
+            current_project = changes.planner_context(workspaces, workflow)
+        except WorkspaceError as error:
+            record_failure(session, workflow, event_id, PlanFailure(code=error.code, attempts=0))
+            session.commit()
+            return Skipped.FAILED
     job = PlanJob(
         request_id=event_id,
         workspace_id=workflow.workspace_id,
         workflow_id=workflow.id,
         context=CallContext(workspace_id=workflow.workspace_id, workflow_id=workflow.id),
-        request=build_request(workflow, replan, answered_clarifications(session, workflow)),
+        request=build_request(
+            workflow, replan, answered_clarifications(session, workflow), current_project
+        ),
         basis=replan[0] if replan else None,
+        change=current_project is not None,
         kind=workflow.kind,
         stack_profile=confirmed_profile(workflow),
     )
@@ -545,7 +617,10 @@ def generate(
         if response.parsed is None:  # a response_format was requested, so this cannot happen
             raise RuntimeError("gateway returned no parsed output")
         issue = project_issue(
-            job.kind, job.stack_profile, response.parsed, replan=job.basis is not None
+            job.kind,
+            job.stack_profile,
+            response.parsed,
+            replan=job.basis is not None or job.change,
         )
         if issue is not None:
             last_code = issue  # invalid output: retried
@@ -593,6 +668,8 @@ def finish(session: Session, job: PlanJob, outcome: PlanProposal | PlanFailure) 
         prompt_version = (
             REPLAN_PROMPT_VERSION
             if replan
+            else CHANGE_PROMPT_VERSION
+            if job.change
             else SOFTWARE_PROMPT_VERSION
             if outcome.project is not None
             else PROMPT_VERSION

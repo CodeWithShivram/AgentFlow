@@ -21,12 +21,14 @@ import { latestPreview, UiPreview } from "./ui-preview";
 import { PACKAGEABLE_STATUSES, projectName } from "./phase";
 import { PhaseBadge, ProgressSummary } from "./project-progress";
 import { ProjectTasks } from "./project-tasks";
+import { BaseProjectLink, RequestChange } from "./request-change";
 import { useProject } from "./use-project";
 
 export function ProjectDetailView() {
   const workspace = useWorkspace();
   const { projectId } = useParams<{ projectId: string }>();
   const isAdmin = useCan("ADMIN");
+  const canChange = useCan("MEMBER");
   const { workflow, progress, tasks, integrations, packages, live, refresh } = useProject(workspace.id, projectId);
 
   if (workflow.isPending) return <PageSkeleton />;
@@ -51,6 +53,7 @@ export function ProjectDetailView() {
         </div>
         <h1 className="text-2xl font-semibold tracking-tight break-words">{name}</h1>
         <p className="text-sm break-words whitespace-pre-wrap text-muted-foreground">{wf.prompt}</p>
+        <BaseProjectLink workflow={wf} />
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" size="sm" asChild>
             <Link href={controlsHref}>
@@ -117,6 +120,19 @@ export function ProjectDetailView() {
           </CardHeader>
           <CardContent>
             <UiPreview workflowId={wf.id} runs={integrations.data} />
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {canChange && wf.status === "COMPLETED" ? (
+        <Card role="region" aria-label="Request a change">
+          <CardHeader>
+            <CardTitle>
+              <h2>Request a change</h2>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <RequestChange workflow={wf} />
           </CardContent>
         </Card>
       ) : null}

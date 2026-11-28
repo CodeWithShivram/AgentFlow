@@ -2,8 +2,27 @@
 
 ## Current position
 - Phase: 9 — Software project generation (ADR-0046; Phases 2–7 and Steps 8.1–8.2 complete; Phase 1 released as `v0.1.0`)
-- Last completed step: 9.11 — Delete projects (after 9.10 web UI projects; Phase 9 complete since 9.8)
+- Last completed step: 9.12 — Change projects (after 9.11 delete projects; Phase 9 complete since 9.8)
 - Next step: 8.4 — Safe workflow replay (then 8.5–8.7), or the Phase 9 follow-ups below; needs the owner's go-ahead
+
+## Step 9.12 — change projects (ADR-0059, 2026-11-28)
+- **Chosen as the most valuable next feature** (the owner said "go with the best feature you think"): follow-up changes to a completed project.
+- **Backend:**
+  - `POST …/workflows/{id}/changes` (MEMBER, idempotent) creates a PENDING project linked to a COMPLETED base whose latest integration PASSED (`base_workflow_id`, `base_head_sha`, migration 0038). It copies the base's settings and spec; the base is never modified.
+  - `app/projects/changes.py` seeds the new workspace from the base's files at that commit (plan job, and the apply job if needed; idempotent), refusing `BASE_CHANGED`, `BASE_UNAVAILABLE` and `BASE_TOO_LARGE`. It also builds the planner's `<current_project>` (every path, plus contents up to 60 files and 60k characters).
+  - Prompt `software_change/v1`; mock `mock_software_change`. Change plans need no owners for shared files (plan job and confirmation).
+  - Every change task gets `current_files`, the rest of the project as `dependency_files`, and a fixed `change_rule`.
+- **UI:** a "Request a change" card on completed projects (members). Change projects show "Changes the previous project at commit …" with a link to it.
+- **Tests:** `tests/integration/test_change_projects.py` (who can change what, idempotency, deleted base; seeding, planner context and profile, draft scopes, confirmation without shared owners, change-task context, base untouched; a moved base fails with BASE_CHANGED); a specialist unit test (change_rule and the mock keeps scope files); 2 frontend tests.
+- **Checks:**
+  - Backend gate: format, lint, `mypy app tests alembic` and `alembic check` clean; `uv run pytest` **1369 passed, 2 skipped** (21 min).
+  - Frontend: lint, typecheck and `npm test` 196/196 passed.
+- **Live run on Gemini:** a change to yesterday's verified mini-shop: "Add a checkout … POST /api/checkout … confirmation with the order number … tests".
+  - The plan had 3 tasks with exact file scopes: `store.py` and `main.py`; `index.html`, `styles.css` and `app.js`; `tests/test_api.py`.
+  - All were built and verified, and the **first integration passed** compile, tests (13 mentions of checkout), web and ui. **COMPLETED with a VERIFIED package** in about 2.7 minutes.
+  - Compared with the base ZIP: 6 files changed; `README.md`, `pyproject.toml`, `__init__.py` and `models.py` are byte-identical. The base project is unchanged.
+  - The screenshot shows the empty-cart start page: the new Checkout button and dialog only appear with items, and the UI check does not click through flows (a known limit).
+- **Environment:** the web dev server had stopped with Docker overnight; it was restarted with the API, worker and beat.
 
 ## Step 9.11 — delete projects (ADR-0058, 2026-11-28)
 - **Owner's request:** an option to delete projects.
