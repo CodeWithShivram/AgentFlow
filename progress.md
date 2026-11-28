@@ -2,8 +2,14 @@
 
 ## Current position
 - Phase: 9 — Software project generation (ADR-0046; Phases 2–7 and Steps 8.1–8.2 complete; Phase 1 released as `v0.1.0`)
-- Last completed step: 9.12 — Change projects (after 9.11 delete projects; Phase 9 complete since 9.8)
+- Last completed step: 9.13 — Delete any workflow (after 9.12 change projects; Phase 9 complete since 9.8)
 - Next step: 8.4 — Safe workflow replay (then 8.5–8.7), or the Phase 9 follow-ups below; needs the owner's go-ahead
+
+## Step 9.13 — delete any workflow (ADR-0058 amendment, 2026-11-28)
+- **Owner's request:** make workflows deletable too, not just projects.
+- **What changed:** the delete button moved to the shared `DeleteWorkflowAction` (`features/workflows/delete-workflow.tsx`). Admins now see **Delete workflow** (or **Cancel & delete**) on every workflow page, next to the workflow actions; afterwards the page returns to Workflows. The project page uses the same component. The API was already generic.
+- **Tests:** `delete-workflow.test.tsx` (deleting with confirmation and revision, then back to Workflows; Cancel & delete while running) plus the existing project page test.
+- **Checks:** frontend lint, typecheck, `npm test` **198/198** and `npm run build` passed. No backend change.
 
 ## Step 9.12 — change projects (ADR-0059, 2026-11-28)
 - **Chosen as the most valuable next feature** (the owner said "go with the best feature you think"): follow-up changes to a completed project.

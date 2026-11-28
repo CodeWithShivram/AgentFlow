@@ -39,12 +39,14 @@ import { NeedsInput } from "./needs-input";
 import { PauseBanner } from "./pause-banner";
 import { NextStepBanner } from "./next-step-banner";
 import { WorkflowActions } from "./workflow-actions";
+import { DeleteWorkflowAction } from "./delete-workflow";
 
 export function WorkflowDetailView() {
   const workspace = useWorkspace();
   const { workflowId } = useParams<{ workflowId: string }>();
   const queryClient = useQueryClient();
   const canEdit = useCan("MEMBER");
+  const isAdmin = useCan("ADMIN");
   const { workflow, tasks, events, live } = useWorkflow(workspace.id, workflowId);
   const errors = useActionErrors();
 
@@ -116,6 +118,7 @@ export function WorkflowDetailView() {
         {canEdit ? (
           <div className="flex flex-wrap gap-2">
             <WorkflowActions workflow={wf} onError={errors.handle} />
+            {isAdmin ? <DeleteWorkflowAction workflow={wf} /> : null}
           </div>
         ) : (
           <p className="text-sm text-muted-foreground">You have read-only access to this workflow.</p>

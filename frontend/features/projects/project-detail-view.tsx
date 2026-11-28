@@ -13,8 +13,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import type { ProjectProgress, Uuid } from "@/lib/api/types";
 import { workspacePath } from "@/lib/navigation";
 import { useCan, useWorkspace } from "@/lib/workspace";
+import { DeleteWorkflowAction } from "@/features/workflows/delete-workflow";
 
-import { DeleteProjectAction } from "./delete-project";
 import { Deliverables, PackageNowAction } from "./deliverables";
 import { IntegrationRuns } from "./integration-runs";
 import { latestPreview, UiPreview } from "./ui-preview";
@@ -61,7 +61,7 @@ export function ProjectDetailView() {
               Plan & controls
             </Link>
           </Button>
-          {isAdmin ? <DeleteProjectAction workflow={wf} /> : null}
+          {isAdmin ? <DeleteWorkflowAction workflow={wf} noun="project" /> : null}
         </div>
       </header>
 

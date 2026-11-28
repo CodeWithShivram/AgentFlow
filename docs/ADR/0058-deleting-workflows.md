@@ -20,6 +20,9 @@
 
   Failures leave unreachable files for the orphan sweep (ADR-0047). The package job ignores deleted workflows.
 
+### Amendment (Step 9.13, 2026-11-28): every workflow page
+- **The owner asked for general workflows to be deletable too.** The API already accepted any workflow; the workflow page now offers the same admin action. The project page's component became the shared `features/workflows/delete-workflow.tsx` (`DeleteWorkflowAction`, `noun` "workflow" or "project", returning to Workflows or Projects).
+
 ## Consequences
 - **Deleting cannot be undone from the UI.** The rows remain, so an operator could restore the metadata, but the files are gone.
 - **Workers keep running their claims as before.** A deleted workflow is terminal or never started, so no task, plan or integration job acts on it.
