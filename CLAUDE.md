@@ -232,6 +232,9 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   modified. `changes.seed_change_workspace` (plan job, apply job; idempotent) copies the base's files at that commit,
   refusing BASE_CHANGED/BASE_UNAVAILABLE/BASE_TOO_LARGE. The planner gets `<current_project>` (`software_change/v1`);
   shared files need no owner; every change task gets `current_files`, the rest of the project and a fixed `change_rule`.
+- Sample data (ADR-0060): data apps ship with startup sample records created only while the store is empty
+  (planner rule `software_plan/v7`, `software_change/v2`); the web `ui` check fails a first page whose `/api/` JSON
+  data responses are all empty, naming `src/<package>/main.py` so rework adds seeding.
 - Workflow events are append-only.
 
 ## Security

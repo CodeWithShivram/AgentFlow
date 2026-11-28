@@ -220,6 +220,7 @@ Inserted by the owner on 2026-11-26 from `docs/AgentFlow_Claude_Code_Master_Play
 | 9.11 | Delete projects: admin soft delete of idle workflows, worker purge of workspace and files | DONE (ADR-0058) |
 | 9.12 | Change projects: follow-up changes to a completed project from its verified code, re-verified end to end | DONE (ADR-0059) |
 | 9.13 | Delete any workflow from its page (shared delete action) | DONE (ADR-0058 amendment) |
+| 9.14 | Sample data: data apps seed records on first run; the web UI check fails an all-empty first page | DONE (ADR-0060) |
 
 Acceptance (phase): the playbook's §16 test passes with the mock provider. A project is COMPLETED only when every required task and the integration gate pass; otherwise it is shown as FAILED, BLOCKED or PARTIAL with reasons. Each step refines its acceptance criteria at its start.
 

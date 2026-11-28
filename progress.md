@@ -2,8 +2,21 @@
 
 ## Current position
 - Phase: 9 — Software project generation (ADR-0046; Phases 2–7 and Steps 8.1–8.2 complete; Phase 1 released as `v0.1.0`)
-- Last completed step: 9.13 — Delete any workflow (after 9.12 change projects; Phase 9 complete since 9.8)
+- Last completed step: 9.14 — Sample data in generated apps (after 9.13; Phase 9 complete since 9.8)
 - Next step: 8.4 — Safe workflow replay (then 8.5–8.7), or the Phase 9 follow-ups below; needs the owner's go-ahead
+
+## Step 9.14 — sample data in generated apps (ADR-0060, 2026-11-28)
+- **Owner's report:** their shop app showed no data. Its products table started empty, and the suggested fix was a startup step seeding about 6 products while the table is empty.
+- **Planner rule** (`software_plan/v7`; changes `software_change/v2`): apps that store or list data ship with 6 to 10 realistic sample records, created at startup only while the store is empty, with an acceptance criterion on the data-store task.
+- **Web `ui` check:** it records the page's `GET /api/...` JSON data responses on first load and fails when every one is empty (`[]`, or objects whose lists are all empty). The message names `src/<package>/main.py` and asks for startup sample records, so integration rework adds them. The image was rebuilt; there are no new dependencies.
+- **Tests:** sandbox tests (empty store fails with the hint; seeded products plus an empty cart pass) and a planner unit test.
+- **Live run on Gemini:** a "bookshelf" store on SQLite.
+  - `database.py` counts the books and inserts 7 sample books only when the table is empty (written from the start because of the planner rule).
+  - The first gate failed only on the usual doctype and static mount; one fix round later every check passed (compile, tests, web, ui including the data check). **COMPLETED and VERIFIED** in about 3 minutes.
+  - The screenshot shows the 7 books in the grid with search and Add New Book.
+- **Checks:**
+  - Backend gate: format, lint, `mypy app tests alembic` and `alembic check` clean; `uv run pytest` **1372 passed, 2 skipped** (10 min).
+  - An earlier `test_web_ui_checks.py` run took 17 minutes while the machine was loaded after the Docker restart. Re-run alone it took 6 minutes, then 37 s for the slowest test; it was not a regression.
 
 ## Step 9.13 — delete any workflow (ADR-0058 amendment, 2026-11-28)
 - **Owner's request:** make workflows deletable too, not just projects.

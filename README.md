@@ -425,7 +425,7 @@ Describe software in one prompt and AgentFlow plans it, builds it with agents, c
 
    Admins may explicitly ask for a **PARTIAL** package of a project that did not pass.
 
-**Websites** ([ADR-0057](docs/ADR/0057-web-ui-projects.md)): ask for a website and the planner picks `python-3.12-web`, a FastAPI API that serves a plain HTML/CSS/JS UI from `static/`, which the **Frontend Developer** agent builds. The sandbox loads the page in headless Chromium and fails it on console errors, broken requests or unlabelled form fields. Its screenshot appears on the project page and in the package (`AGENTFLOW_UI_PREVIEW.png`).
+**Websites** ([ADR-0057](docs/ADR/0057-web-ui-projects.md)): ask for a website and the planner picks `python-3.12-web`, a FastAPI API that serves a plain HTML/CSS/JS UI from `static/`, which the **Frontend Developer** agent builds. The sandbox loads the page in headless Chromium and fails it on console errors, broken requests or unlabelled form fields. Its screenshot appears on the project page and in the package (`AGENTFLOW_UI_PREVIEW.png`). Apps that store data ship with sample records, so the first run shows content; the browser check fails a page whose data APIs all return nothing ([ADR-0060](docs/ADR/0060-sample-data.md)).
 
 **Changes** ([ADR-0059](docs/ADR/0059-change-projects.md)): on a completed project, **Request a change** (for example "add a checkout page") starts a new project from the verified code. The planner sees the current files and plans only the change, every check runs again on the whole project, and a new verified ZIP is produced. The original project and its downloads stay as they are. Admins can **delete** projects they no longer need ([ADR-0058](docs/ADR/0058-deleting-workflows.md)).
 

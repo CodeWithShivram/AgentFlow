@@ -3,7 +3,8 @@
 Baked into the python-3.12-web sandbox image; generated code never supplies or changes it.
 Run in the project root (/work), offline. It starts the FastAPI app found at
 src/<package>/main.py (`app`) with uvicorn on 127.0.0.1, opens / in headless Chromium, and fails
-on JavaScript errors, failed requests or missing accessibility basics. It always tries to save a
+on JavaScript errors, failed requests, missing accessibility basics, or a first page whose data
+APIs all return nothing (projects ship with sample data, ADR-0060). It always tries to save a
 full-page screenshot to .agentflow/ui-preview.png for the platform to show. Messages name the
 files involved (static/... or src/...) so integration rework can reach the task that owns them.
 """
@@ -48,6 +49,31 @@ def source_for(url: str) -> str:
     return f"static/{path}" if candidate.is_file() else url
 
 
+def is_empty(value: object) -> bool:
+    """An empty list, or an object whose lists are all empty (`{"items": [], "total": 0}`).
+    Objects without lists (`{"status": "ok"}`) are not data and never count as empty."""
+    if isinstance(value, list):
+        return not value
+    if isinstance(value, dict):
+        lists = [v for v in value.values() if isinstance(v, list)]
+        return bool(lists) and not any(lists)
+    return False
+
+
+def empty_data(responses: list[object]) -> list[str]:
+    """The /api/ paths the page loaded with JSON data, when every one of them was empty."""
+    loaded: dict[str, bool] = {}
+    for response in responses:
+        path = urlparse(response.url).path  # type: ignore[attr-defined]
+        try:
+            body = response.json()  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001 (not JSON: not data)
+            continue
+        if isinstance(body, (list, dict)) and (isinstance(body, list) or any(isinstance(v, list) for v in body.values())):
+            loaded[path] = loaded.get(path, True) and is_empty(body)
+    return sorted(loaded) if loaded and all(loaded.values()) else []
+
+
 def wait_for_port(timeout: float) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -73,6 +99,7 @@ def main() -> int:
         text=True,
     )
     problems: list[str] = []
+    api_responses: list[object] = []
     try:
         if not wait_for_port(20):
             server.terminate()
@@ -106,6 +133,12 @@ def main() -> int:
                 if r.status >= 400 and not r.url.endswith("/favicon.ico")
                 else None,
             )
+            page.on(
+                "response",
+                lambda r: api_responses.append(r)
+                if r.request.method == "GET" and r.status == 200 and urlparse(r.url).path.startswith("/api/")
+                else None,
+            )
             response = page.goto(f"{BASE}/", wait_until="networkidle", timeout=20_000)
             if response is None or response.status != 200:
                 status = response.status if response else "no response"
@@ -117,6 +150,13 @@ def main() -> int:
                 problems.append("static/index.html: <html> has no lang attribute")
             for element in page.evaluate(LABEL_CHECK):
                 problems.append(f"static/index.html: form control without a label: {element}")
+            empty = empty_data(api_responses)
+            if empty:
+                problems.append(
+                    f"src/{module.split('.')[0]}/main.py: the page shows no data: every API it "
+                    f"loaded returned an empty list ({', '.join(empty)}). Create sample records at "
+                    "startup while the store is empty, so the first run shows content."
+                )
             SCREENSHOT.parent.mkdir(exist_ok=True)
             page.screenshot(path=str(SCREENSHOT), full_page=True)
             browser.close()
@@ -131,7 +171,10 @@ def main() -> int:
         for problem in dict.fromkeys(problems):
             print(f"  {problem}")
         return 1
-    print("OK the page loads without errors, has a title, a lang attribute and labelled controls.")
+    print(
+        "OK the page loads without errors, shows data, and has a title, a lang attribute and "
+        "labelled controls."
+    )
     return 0
 
 

@@ -159,3 +159,66 @@ def test_the_page_is_stored_as_a_ui_preview_and_packaged(
         assert zf.read(names[packaging.PREVIEW_NAME]) == shot.read_bytes()
         report = zf.read(names[packaging.REPORT_NAME]).decode()
     assert f"`{packaging.PREVIEW_NAME}`" in report
+
+
+_SHOP_APP = """from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+
+app = FastAPI()
+PRODUCTS: list[dict[str, object]] = {seed}
+
+
+@app.get("/api/health")
+def health() -> dict[str, str]:
+    return {{"status": "ok"}}
+
+
+@app.get("/api/products")
+def products() -> list[dict[str, object]]:
+    return PRODUCTS
+
+
+@app.get("/api/cart")
+def cart() -> dict[str, object]:
+    return {{"items": [], "total": 0}}
+
+
+app.mount("/", StaticFiles(directory="static", html=True), name="static")
+"""
+_SHOP_PAGE = _MOCK_INDEX_HTML.replace(
+    "</body>",
+    """<ul id="products"></ul>
+<script>
+Promise.all([fetch('/api/products'), fetch('/api/cart')]).then(async ([p]) => {
+  for (const item of await p.json()) {
+    const li = document.createElement('li'); li.textContent = item.name;
+    document.getElementById('products').append(li);
+  }
+});
+</script>
+</body>""",
+)
+
+
+@pytest.mark.parametrize(
+    ("seed", "passes"),
+    [("[]", False), ('[{"id": 1, "name": "Notebook"}, {"id": 2, "name": "Pen"}]', True)],
+)
+def test_a_first_page_without_any_data_fails_with_a_hint_to_seed_it(
+    tmp_path: Path, seed: str, passes: bool
+) -> None:
+    # Step 9.14 (ADR-0060): an app whose data APIs all return nothing shows an empty page; an
+    # empty cart next to seeded products is fine.
+    files = {
+        **GOOD,
+        "src/mock_app/main.py": _SHOP_APP.format(seed=seed),
+        "static/index.html": _SHOP_PAGE,
+    }
+    result = DockerSandbox().run(
+        WEB.image, _project(tmp_path, files), _check("ui"), [".agentflow/ui-preview.png"]
+    )
+    assert result.succeeded is passes, result.output
+    if not passes:
+        assert "src/mock_app/main.py: the page shows no data" in result.output
+        assert "/api/cart, /api/products" in result.output
+        assert "sample records at startup" in result.output

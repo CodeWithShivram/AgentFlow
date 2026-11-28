@@ -242,3 +242,20 @@ def test_plan_attempts_are_bounded() -> None:
 
     assert outcome == PlanFailure(code="MODEL_OUTPUT_INVALID", attempts=MAX_ATTEMPTS)
     assert len(recorder.records) == MAX_ATTEMPTS
+
+
+def test_software_plans_ask_for_sample_data_so_the_first_run_shows_content() -> None:
+    # Step 9.14 (ADR-0060): data apps ship with startup sample data, created only when empty.
+    from app.models import WorkflowKind
+    from app.planning.plan import CHANGE_PROMPT_VERSION, SOFTWARE_PROMPT_VERSION
+
+    workflow = _workflow(_analysis([("A shop", "must")]), prompt="Build a book shop website.")
+    workflow.kind = WorkflowKind.SOFTWARE_PROJECT
+    system = build_request(workflow).messages[0].content
+    assert "realistic\n  sample data" in system and "only while the store is empty" in system
+    change = build_request(workflow, current_project={"paths": []}).messages[0].content
+    assert "add startup sample data" in change
+    assert (SOFTWARE_PROMPT_VERSION, CHANGE_PROMPT_VERSION) == (
+        "software_plan/v7",
+        "software_change/v2",
+    )
