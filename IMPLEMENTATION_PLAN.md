@@ -223,6 +223,7 @@ Inserted by the owner on 2026-11-26 from `docs/AgentFlow_Claude_Code_Master_Play
 | 9.14 | Sample data: data apps seed records on first run; the web UI check fails an all-empty first page | DONE (ADR-0060) |
 | 9.15 | Starter files: new web code starts from the profile's working index.html and main.py (contract v6) | DONE (ADR-0061) |
 | 9.16 | Browser flow checks: planned user flows run in Chromium in the sandbox (contract v7) | DONE (ADR-0062) |
+| 9.17 | Build it for me: one-click client-side autopilot from prompt to running build | DONE (ADR-0063) |
 
 Acceptance (phase): the playbook's §16 test passes with the mock provider. A project is COMPLETED only when every required task and the integration gate pass; otherwise it is shown as FAILED, BLOCKED or PARTIAL with reasons. Each step refines its acceptance criteria at its start.
 

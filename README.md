@@ -408,7 +408,7 @@ How delivery behaves:
 
 Describe software in one prompt and AgentFlow plans it, builds it with agents, checks it in a sandbox and packages a ZIP ([ADR-0046](docs/ADR/0046-software-project-generation.md)).
 
-1. **New project** (web app, **Projects → New project**): one prompt, creating a workflow of kind `SOFTWARE_PROJECT`.
+1. **New project** (web app, **Projects → New project**): one prompt, creating a workflow of kind `SOFTWARE_PROJECT`. **Build it for me** on the project page then does steps 2–3 in one click: it plans, confirms the draft, approves it if you are an admin, and starts ([ADR-0063](docs/ADR/0063-build-for-me.md)).
 2. **Plan** ("Plan & controls" on the project page):
    - **Start planning:** the planner drafts a version 2 plan on a curated stack profile (`python-3.12`, `node-24-typescript`, or `python-3.12-web` for websites), where every task owns a file scope and an effort estimate ([ADR-0048](docs/ADR/0048-software-project-plans.md)).
    - **Confirm the draft:** the platform pre-assigns each task to the best eligible agent ([ADR-0054](docs/ADR/0054-automatic-pre-assignment.md)).

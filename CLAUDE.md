@@ -242,6 +242,9 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   ≤3 flows × 10 steps); tasks get them in contract v7; the integration job passes them as `.agentflow/ui-flows.json`
   via `DockerSandbox.run(inputs=)` (the copy's `.agentflow/` is emptied first); `ui_smoke.py` runs them after the
   screenshot and names the failing step against `static/index.html`.
+- Build it for me (ADR-0063): a client-side autopilot on the project page (`features/projects/build-for-me.tsx`,
+  pure `nextAutopilotStep`) using only existing endpoints and the person's session: plan, confirm the latest draft
+  (warnings accepted, errors stop), approve only for admins, start; it stops for questions and failed planning.
 - Workflow events are append-only.
 
 ## Security

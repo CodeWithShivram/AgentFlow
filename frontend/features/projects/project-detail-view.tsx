@@ -15,6 +15,7 @@ import { workspacePath } from "@/lib/navigation";
 import { useCan, useWorkspace } from "@/lib/workspace";
 import { DeleteWorkflowAction } from "@/features/workflows/delete-workflow";
 
+import { AUTOPILOT_STATUSES, BuildForMe } from "./build-for-me";
 import { Deliverables, PackageNowAction } from "./deliverables";
 import { IntegrationRuns } from "./integration-runs";
 import { latestPreview, UiPreview } from "./ui-preview";
@@ -63,6 +64,7 @@ export function ProjectDetailView() {
           </Button>
           {isAdmin ? <DeleteWorkflowAction workflow={wf} noun="project" /> : null}
         </div>
+        {canChange && AUTOPILOT_STATUSES.has(wf.status) ? <BuildForMe workflow={wf} /> : null}
       </header>
 
       {progress.data ? (

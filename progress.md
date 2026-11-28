@@ -2,8 +2,22 @@
 
 ## Current position
 - Phase: 9 — Software project generation (ADR-0046; Phases 2–7 and Steps 8.1–8.2 complete; Phase 1 released as `v0.1.0`)
-- Last completed step: 9.16 — Browser flow checks (Phase 9 complete since 9.8)
+- Last completed step: 9.17 — Build it for me (Phase 9 complete since 9.8)
 - Next step: 8.4 — Safe workflow replay (then 8.5–8.7), or the Phase 9 follow-ups below; needs the owner's go-ahead
+
+## Step 9.17 — Build it for me (ADR-0063, 2026-11-28)
+- **Why:** starting a project took five manual steps on Plan & controls, and every live run used a script for them.
+- **What:** **Build it for me** on the project page (members, while PENDING, PLANNING, AWAITING_APPROVAL or READY). After a confirmation, a client-side loop with the person's own session and the existing endpoints:
+  1. PENDING → PLANNING;
+  2. wait (3 s polls);
+  3. confirm the latest draft, accepting warnings (errors stop);
+  4. PLANNING → AWAITING_APPROVAL;
+  5. → READY for admins only (members stop at "Waiting for an admin");
+  6. start.
+
+  It stops for failed planning and for the planner's questions. The step choice is the pure `nextAutopilotStep`. There is no backend change.
+- **Tests:** `build-for-me.test.tsx`: every state × role; the full API sequence with revisions as an admin; it stops at plan errors without writing.
+- **Checks:** frontend lint, typecheck, `npm test` **211/211** and `npm run build` passed.
 
 ## Step 9.16 — browser flow checks (ADR-0062, 2026-11-28)
 - **Why:** the `ui` check only proved the first page loads. Features behind clicks, such as checkout in the change run, were never exercised.
