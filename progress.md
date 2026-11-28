@@ -5,6 +5,12 @@
 - Last completed step: 9.18 — One-command local stack (Phase 9 complete since 9.8)
 - Next step: 8.4 — Safe workflow replay (then 8.5–8.7), or the Phase 9 follow-ups below; needs the owner's go-ahead
 
+## Fix: "Build it for me" did nothing (2026-11-28)
+- **Owner's report:** clicking Build it for me on a new kanban project did nothing; the API log shows no write request after the project was created.
+- **Cause:** the component's "page still open" flag started true and was only cleared on unmount. React's development Strict Mode (`next dev`) mounts, unmounts and mounts again, so the flag stayed false and the loop ended before its first step, silently. The unit tests did not render in Strict Mode.
+- **Fix:** the flag is set on every mount. The API-sequence test now renders inside `<StrictMode>`; it failed before the fix and passes after.
+- **Checks:** frontend lint, typecheck and `npm test` 211/211.
+
 ## Re-verifying recipe-box on the current code; browser check fix (ADR-0062 amendment, 2026-11-28)
 - **Change request on the stack restarted with `dev.ps1`** (one worker, current code): "show Ingredients and Instructions in the detail view; a labelled Category field".
   - Gemini changed only `static/` and `tests/test_api.py`. The gate now **refused** the project (no false VERIFIED). After two fix rounds the same two steps still failed, and the project was BLOCKED.

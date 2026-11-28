@@ -1,6 +1,7 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Workflow, WorkspaceRole } from "@/lib/api/types";
@@ -69,12 +70,16 @@ describe("BuildForMe", () => {
       return json(sequence[index]);
     });
     vi.stubGlobal("fetch", fetchMock);
+    // Strict Mode, as in `next dev`: mount, unmount, mount again (a regression once stopped the
+    // loop before its first step there).
     render(
-      <QueryClientProvider client={createQueryClient()}>
-        <WorkspaceProvider value={{ id: "ws-1", name: "W", role: "ADMIN" }}>
-          <BuildForMe workflow={BASE} />
-        </WorkspaceProvider>
-      </QueryClientProvider>,
+      <StrictMode>
+        <QueryClientProvider client={createQueryClient()}>
+          <WorkspaceProvider value={{ id: "ws-1", name: "W", role: "ADMIN" }}>
+            <BuildForMe workflow={BASE} />
+          </WorkspaceProvider>
+        </QueryClientProvider>
+      </StrictMode>,
     );
 
     await userEvent.click(screen.getByRole("button", { name: "Build it for me" }));

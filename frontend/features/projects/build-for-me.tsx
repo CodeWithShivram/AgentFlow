@@ -75,13 +75,15 @@ export function BuildForMe({ workflow }: { workflow: Workflow }) {
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
-  const alive = useRef(true);
-  useEffect(
-    () => () => {
+  // False once the page is left, which ends the loop. Set on every mount: React's development
+  // Strict Mode mounts, unmounts and mounts again, and a flag only cleared would stay false.
+  const alive = useRef(false);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
       alive.current = false;
-    },
-    [],
-  );
+    };
+  }, []);
 
   async function confirmLatestDraft(current: Workflow): Promise<"confirmed" | string> {
     const { items } = await api.workflows.planDrafts(workspace.id, current.id);
