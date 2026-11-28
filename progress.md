@@ -14,7 +14,12 @@
 - **Checks:**
   - `status` ran and listed Docker, the processes, 14 AgentFlow processes started at 15:53 outside the script, readiness and sandbox images.
   - `up` refused with the list of those processes.
-  - **Not yet exercised:** the full `up` and `down` cycle, because it would stop the owner's running AgentFlow instance (started at 15:53). To be run by or with the owner.
+  - **Not yet exercised at first:** the full `up` and `down` cycle, because it would stop the owner's running AgentFlow instance (started at 15:53).
+- **Follow-up (owner approved the restart), with three fixes found by exercising it:**
+  1. **`down` aborted:** stopping a parent's tree had already ended a listed child, and the native `taskkill` error is terminating under `$ErrorActionPreference = 'Stop'` in Windows PowerShell 5.1. Stopping now goes through `cmd /c taskkill ... >nul 2>&1` (`Stop-Tree`).
+  2. **`up` never returned to a caller capturing its output:** `Start-Process -Redirect*` makes children inherit the caller's pipe. A WMI `Win32_Process.Create` attempt avoided that, but its processes were interrupted (`^C`) seconds after starting. The script now uses `Start-Process` without redirection (ShellExecute, no inherited handles), with `cmd /d /c "... > log 2> err"`.
+  3. **`status` listed the script's own descendants** (cmd → uv → python) as other processes; it now excludes the whole tree.
+  - **Verified:** `restart` stopped the owner's 15:53 instance (14 processes); `down` stopped everything and infra (ports free); `up` returned in 55 s with API ready (HTTP 200), worker, Beat and web (HTTP 200) running, and a clean `status` minutes later.
 
 ## Step 9.17 — Build it for me (ADR-0063, 2026-11-28)
 - **Why:** starting a project took five manual steps on Plan & controls, and every live run used a script for them.

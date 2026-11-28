@@ -71,6 +71,11 @@ function Test-Port([int]$Port) {
     return [bool](Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
 }
 
+function Stop-Tree([int]$ProcessId) {
+    # Through cmd, so a process that already exited (killed with its parent) is not an error.
+    & cmd.exe /c "taskkill /PID $ProcessId /T /F >nul 2>&1"
+}
+
 function Get-AgentFlowProcesses {
     # The API, worker, Beat (uv and python launchers) and web dev server of this repository.
     $patterns = @('app.main:create_app', 'app.worker.celery_app')
@@ -91,11 +96,15 @@ function Invoke-Checked([string]$FilePath, [string[]]$Arguments, [string]$Direct
     } finally { Pop-Location }
 }
 
-function Start-Background([string]$Name, [string]$FilePath, [string[]]$Arguments, [string]$Directory) {
+function Start-Background([string]$Name, [string]$Command, [string]$Directory, [hashtable]$Environment = @{}) {
+    # Start-Process without -Redirect* uses ShellExecute, so the process inherits no handles from
+    # this script (callers capturing its output never wait on it); cmd.exe writes the logs.
     $out = Join-Path $state "$Name.log"
     $err = Join-Path $state "$Name.err.log"
-    $process = Start-Process -FilePath $FilePath -ArgumentList $Arguments -WorkingDirectory $Directory `
-        -PassThru -WindowStyle Hidden -RedirectStandardOutput $out -RedirectStandardError $err
+    foreach ($key in $Environment.Keys) { Set-Item -Path "env:$key" -Value $Environment[$key] }
+    $arguments = "/d /c ""$Command > ""$out"" 2> ""$err"""""
+    $process = Start-Process -FilePath 'cmd.exe' -ArgumentList $arguments -WorkingDirectory $Directory `
+        -WindowStyle Hidden -PassThru
     return $process.Id
 }
 
@@ -103,14 +112,14 @@ function Stop-Stack {
     $pids = Read-Pids
     foreach ($name in $pids.Keys) {
         if (Test-Alive $pids[$name]) {
-            & taskkill /PID $pids[$name] /T /F *> $null
+            Stop-Tree $pids[$name]
             Write-Host "stopped $name (pid $($pids[$name]))"
         }
     }
     if (Test-Path $pidFile) { Remove-Item $pidFile -Force }
     foreach ($process in @(Get-AgentFlowProcesses)) {
         if (Test-Alive $process.ProcessId) {
-            & taskkill /PID $process.ProcessId /T /F *> $null
+            Stop-Tree $process.ProcessId
             Write-Host "stopped other AgentFlow process $($process.ProcessId) (started $($process.CreationDate))"
         }
     }
@@ -144,11 +153,10 @@ function Start-Stack {
     Invoke-Checked $uv @('run', 'python', '-m', 'app.llm.pricing', 'load') $backend
 
     $pids = @{}
-    $pids.api = Start-Background 'api' $uv @('run', 'uvicorn', 'app.main:create_app', '--factory', '--port', "$ApiPort", '--loop', 'asyncio:SelectorEventLoop') $backend
-    $pids.worker = Start-Background 'worker' $uv @('run', 'celery', '-A', 'app.worker.celery_app', 'worker', '--pool=solo', '-Q', 'execution,maintenance', '--loglevel=INFO') $backend
-    $pids.beat = Start-Background 'beat' $uv @('run', 'celery', '-A', 'app.worker.celery_app', 'beat', "--schedule=$(Join-Path $state 'celerybeat-schedule')", '--loglevel=INFO') $backend
-    $env:NEXT_PUBLIC_API_BASE_URL = "http://localhost:$ApiPort"
-    $pids.web = Start-Background 'web' 'cmd.exe' @('/c', 'npm', 'run', 'dev', '--', '--port', "$WebPort") $frontend
+    $pids.api = Start-Background 'api' """$uv"" run uvicorn app.main:create_app --factory --port $ApiPort --loop asyncio:SelectorEventLoop" $backend
+    $pids.worker = Start-Background 'worker' """$uv"" run celery -A app.worker.celery_app worker --pool=solo -Q execution,maintenance --loglevel=INFO" $backend
+    $pids.beat = Start-Background 'beat' """$uv"" run celery -A app.worker.celery_app beat ""--schedule=$(Join-Path $state 'celerybeat-schedule')"" --loglevel=INFO" $backend
+    $pids.web = Start-Background 'web' "npm run dev -- --port $WebPort" $frontend @{ NEXT_PUBLIC_API_BASE_URL = "http://localhost:$ApiPort" }
     $pids | ConvertTo-Json | Set-Content -Encoding utf8 $pidFile
 
     $ready = $false
@@ -169,8 +177,17 @@ function Show-Status {
         $state_ = if ($pids.ContainsKey($name) -and (Test-Alive $pids[$name])) { "running (pid $($pids[$name]))" } else { 'stopped' }
         Write-Host ("{0,-12} {1}" -f "${name}:", $state_)
     }
-    $tracked = @($pids.Values)
-    $others = @(Get-AgentFlowProcesses | Where-Object { $tracked -notcontains $_.ProcessId -and $tracked -notcontains $_.ParentProcessId })
+    # Everything descending from the tracked launchers (cmd -> uv -> python, cmd -> npm -> node).
+    $all = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
+    $ours = New-Object 'System.Collections.Generic.HashSet[int]'
+    foreach ($id in $pids.Values) { [void]$ours.Add([int]$id) }
+    do {
+        $added = 0
+        foreach ($process in $all) {
+            if ($ours.Contains([int]$process.ParentProcessId) -and $ours.Add([int]$process.ProcessId)) { $added++ }
+        }
+    } while ($added -gt 0)
+    $others = @(Get-AgentFlowProcesses | Where-Object { -not $ours.Contains([int]$_.ProcessId) })
     if ($others.Count -gt 0) {
         Write-Host "Other:       $($others.Count) AgentFlow process(es) not started by this script (pids $((@($others | ForEach-Object { $_.ProcessId })) -join ', '))"
     }
