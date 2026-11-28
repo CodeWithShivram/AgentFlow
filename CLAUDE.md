@@ -258,6 +258,8 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   `cd backend; uv sync` creates `backend\.venv`; run tools with `uv run <tool>`. Add deps with `uv add` (never edit `uv.lock` by hand).
 - Node 24 / npm 11. Use npm, not pnpm. `frontend/.npmrc` saves exact versions; use `npm ci` for clean installs.
 - Next.js 16 differs from older versions: read `frontend/node_modules/next/dist/docs/` before writing Next code (see `frontend/AGENTS.md`).
+- Run the whole stack: `powershell -ExecutionPolicy Bypass -File scripts/dev.ps1 up|down|status|logs` (API on 8010, ADR-0064);
+  never run a second worker on other code against the same broker (`up` refuses while other AgentFlow processes run).
 - Run all gates: `powershell -ExecutionPolicy Bypass -File scripts/check.ps1` (backend integration tests need `scripts/infra.ps1 up`).
 - Run API: `cd backend; uv run uvicorn app.main:create_app --factory --reload --port 8000 --loop asyncio:SelectorEventLoop`.
   The `--loop` option is mandatory on Windows (async psycopg; ADR-0005). There is no module-level `app`; use the factory.

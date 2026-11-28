@@ -35,3 +35,6 @@ Thumbs.db
 
 # Celery Beat state
 celerybeat-schedule*
+
+# Local dev stack state (scripts/dev.ps1)
+.agentflow-dev/

@@ -2,8 +2,19 @@
 
 ## Current position
 - Phase: 9 — Software project generation (ADR-0046; Phases 2–7 and Steps 8.1–8.2 complete; Phase 1 released as `v0.1.0`)
-- Last completed step: 9.17 — Build it for me (Phase 9 complete since 9.8)
+- Last completed step: 9.18 — One-command local stack (Phase 9 complete since 9.8)
 - Next step: 8.4 — Safe workflow replay (then 8.5–8.7), or the Phase 9 follow-ups below; needs the owner's go-ahead
+
+## Step 9.18 — one-command local stack (ADR-0064, 2026-11-28)
+- **Why:** five processes started by hand; Docker stopping overnight went unnoticed; AgentFlow's API on 8000 clashed with generated apps; and in Step 9.16 an older worker started separately took some of the jobs.
+- **What:** `scripts/dev.ps1 up|down|restart|status|logs [-ApiPort 8010] [-WebPort 3000]`.
+  - **up:** starts Docker Desktop if needed, then infra, migrations, roles, agents and prices (idempotent), then the API on **8010**, worker, Beat and `next dev` with `NEXT_PUBLIC_API_BASE_URL`. Pids and logs go to `.agentflow-dev/` (gitignored). It waits for readiness.
+  - **up refuses** busy ports and any other AgentFlow process of this repository (API, worker, Beat, web).
+  - **down** stops all of them and infra; data is kept.
+- **Checks:**
+  - `status` ran and listed Docker, the processes, 14 AgentFlow processes started at 15:53 outside the script, readiness and sandbox images.
+  - `up` refused with the list of those processes.
+  - **Not yet exercised:** the full `up` and `down` cycle, because it would stop the owner's running AgentFlow instance (started at 15:53). To be run by or with the owner.
 
 ## Step 9.17 — Build it for me (ADR-0063, 2026-11-28)
 - **Why:** starting a project took five manual steps on Plan & controls, and every live run used a script for them.

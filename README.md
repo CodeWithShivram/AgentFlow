@@ -40,6 +40,19 @@ Exact dependency versions are locked in `backend/uv.lock` and `frontend/package-
 2. Node.js 24 with npm.
 3. Docker Desktop (required from Step 1.2 for PostgreSQL and Redis).
 
+## Run everything with one command
+
+After the one-time setup below (`.env`, `uv sync`, `npm ci`, `scripts/sandbox.ps1 build`), start the whole stack with one command: Docker, PostgreSQL and Redis, migrations, roles, agents and prices, then the API, worker, Beat and web app ([ADR-0064](docs/ADR/0064-dev-stack-script.md)):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/dev.ps1 up        # web http://localhost:3000, API http://localhost:8010
+powershell -ExecutionPolicy Bypass -File scripts/dev.ps1 status    # processes, API readiness, Docker, sandbox images
+powershell -ExecutionPolicy Bypass -File scripts/dev.ps1 logs      # last lines of each process log
+powershell -ExecutionPolicy Bypass -File scripts/dev.ps1 down      # stop everything (data kept)
+```
+
+The API uses port 8010, so the projects AgentFlow generates can run on uvicorn's default port 8000. `up` refuses to start while another AgentFlow API, worker or web process of this repository is running: a second worker on older code would take some of the jobs.
+
 ## Local infrastructure (PostgreSQL, Redis)
 
 PostgreSQL 18.6 and Redis 8.10.3 run in Docker Compose (`infrastructure/docker/docker-compose.yml`), bound to `127.0.0.1` only, with named volumes and health checks.
