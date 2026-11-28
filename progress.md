@@ -2,8 +2,19 @@
 
 ## Current position
 - Phase: 9 — Software project generation (ADR-0046; Phases 2–7 and Steps 8.1–8.2 complete; Phase 1 released as `v0.1.0`)
-- Last completed step: 9.10 — Web UI projects (after 9.9 integration rework; Phase 9 complete since 9.8)
+- Last completed step: 9.11 — Delete projects (after 9.10 web UI projects; Phase 9 complete since 9.8)
 - Next step: 8.4 — Safe workflow replay (then 8.5–8.7), or the Phase 9 follow-ups below; needs the owner's go-ahead
+
+## Step 9.11 — delete projects (ADR-0058, 2026-11-28)
+- **Owner's request:** an option to delete projects.
+- **Soft delete:** a hard delete would break append-only history and spend analytics.
+  - `DELETE …/workflows/{id}?revision=N` (ADMIN) works only on idle workflows (PENDING, COMPLETED, FAILED, CANCELLED); anything else gets 409 `WORKFLOW_ACTIVE`, and the check constraint `deleted_only_when_idle` enforces the same rule.
+  - It sets `deleted_at` and `deleted_by_user_id` (migration 0037), records `WORKFLOW_DELETED` and writes `workflow.purge`.
+  - The workflow repository hides deleted rows, so every workflow route returns 404 for them; the interventions inbox hides their requests. Usage analytics and the approval audit keep their records.
+- **Purge job** (`app/projects/purge_job.py`, idempotent): marks AVAILABLE artifacts DELETED, then removes their bytes and the Git workspace (`ProjectWorkspaces.remove`, which refuses links). The package job ignores deleted workflows.
+- **UI:** admins get **Delete project** on the project page, or **Cancel & delete** while the project is active (a cancel transition, then the delete, behind one confirmation). Afterwards the page returns to Projects.
+- **Checks:** a full backend gate. Format, lint, `mypy app tests alembic` and `alembic check` clean; `uv run pytest` **1365 passed, 2 skipped** (18 min). Frontend: lint, typecheck and `npm test` 194/194 passed.
+- **Environment:** Docker Desktop had stopped overnight (database connection timeouts). It was restarted with `scripts/infra.ps1 up`; volumes and images were intact.
 
 ## Live run: mini-shop website on Gemini (2026-11-27)
 - **Run 1:** Gemini chose `python-3.12-web` and gave `static/` its own task, but asked for `ui_development` *and* `code_generation`. No agent has both, so the UI task stayed READY without an agent (NEEDS_ATTENTION).

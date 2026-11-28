@@ -224,6 +224,9 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
   Frontend Developer (`builtin://frontend/v1`). The `ui` screenshot comes back via `DockerSandbox.run(collect=...)`, is
   stored as a `UI_PREVIEW` artifact linked from its check, shown on the project page and packaged as
   `AGENTFLOW_UI_PREVIEW.png`. Losing the picture never changes a run's result.
+- Deleting (ADR-0058): soft delete only (`workflows.deleted_at`, ADMIN, idle statuses only, check constraint);
+  the workflow repository hides deleted rows from every API read; history (events, usage, audits) stays; a
+  `workflow.purge` worker job removes artifacts' bytes (rows become DELETED) and the workspace. Never hard-delete.
 - Workflow events are append-only.
 
 ## Security

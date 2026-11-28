@@ -34,7 +34,7 @@ async def list_workflows(
     offset: int,
     kind: WorkflowKind | None = None,
 ) -> tuple[list[Workflow], int]:
-    filters: list[Any] = [Workflow.workspace_id == workspace_id]
+    filters: list[Any] = [Workflow.workspace_id == workspace_id, Workflow.deleted_at.is_(None)]
     if status is not None:
         filters.append(Workflow.status == status)
     if kind is not None:
@@ -54,7 +54,9 @@ async def get_workflow(
     session: AsyncSession, *, workspace_id: uuid.UUID, workflow_id: uuid.UUID
 ) -> Workflow | None:
     statement = select(Workflow).where(
-        Workflow.id == workflow_id, Workflow.workspace_id == workspace_id
+        Workflow.id == workflow_id,
+        Workflow.workspace_id == workspace_id,
+        Workflow.deleted_at.is_(None),  # deleted workflows are gone for the API (ADR-0058)
     )
     return (await session.execute(statement)).scalar_one_or_none()
 
@@ -65,7 +67,11 @@ async def lock_workflow(
     """Row lock serializing every change to a workflow, its tasks and its DAG."""
     statement = (
         select(Workflow)
-        .where(Workflow.id == workflow_id, Workflow.workspace_id == workspace_id)
+        .where(
+            Workflow.id == workflow_id,
+            Workflow.workspace_id == workspace_id,
+            Workflow.deleted_at.is_(None),
+        )
         .with_for_update()
         .execution_options(populate_existing=True)
     )

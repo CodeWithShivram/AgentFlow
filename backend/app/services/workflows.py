@@ -8,11 +8,13 @@ handoff separates approval permission from execution permission.
 import logging
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError
+from app.execution import outbox
 from app.models import (
     AnalysisStatus,
     InterventionStatus,
@@ -58,6 +60,18 @@ class WorkflowNotFoundError(AppError):
     status_code = 404
     code = "WORKFLOW_NOT_FOUND"
     message = "Workflow not found."
+
+
+class WorkflowActiveError(AppError):
+    status_code = 409
+    code = "WORKFLOW_ACTIVE"
+    message = (
+        "Only finished, cancelled or not yet started workflows can be deleted. Cancel it first."
+    )
+
+
+# Statuses without any work in flight (ADR-0058); a check constraint enforces the same.
+DELETABLE_STATUSES = frozenset({W.PENDING, W.COMPLETED, W.FAILED, W.CANCELLED})
 
 
 class WorkflowRevisionConflictError(AppError):
@@ -256,6 +270,34 @@ async def user_transition(
     )
     await session.commit()
     return workflow
+
+
+async def delete_workflow(
+    session: AsyncSession, access: WorkspaceAccess, workflow_id: uuid.UUID, *, revision: int
+) -> None:
+    """Soft-deletes an idle workflow (ADR-0058, ADMIN): it disappears from every API read, its
+    history rows stay, and a worker purges its workspace and stored files."""
+    workflow = await lock_for_change(session, access, workflow_id, revision)
+    if workflow.status not in DELETABLE_STATUSES:
+        raise WorkflowActiveError(details={"status": workflow.status.value})
+    workflow.deleted_at = datetime.now(UTC)
+    workflow.deleted_by_user_id = access.user_id
+    workflow.revision += 1
+    engine.record_event(
+        session,
+        workflow,
+        WorkflowEventType.WORKFLOW_DELETED,
+        payload={"user_id": str(access.user_id)},
+    )
+    outbox.enqueue(
+        session,
+        outbox.WORKFLOW_PURGE,
+        workspace_id=workflow.workspace_id,
+        workflow_id=workflow.id,
+        payload={"workspace_id": str(workflow.workspace_id), "workflow_id": str(workflow.id)},
+    )
+    await session.commit()
+    logger.info("workflow deleted", extra={"workflow_id": str(workflow.id)})
 
 
 async def list_events(

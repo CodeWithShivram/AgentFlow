@@ -93,7 +93,12 @@ def run(
     ).scalar_one_or_none()
     spec = (workflow.project_spec or {}) if workflow is not None else {}
     profile = PROFILES.get(str(spec.get("stack_profile")))
-    if workflow is None or workflow.kind != WorkflowKind.SOFTWARE_PROJECT or profile is None:
+    if (
+        workflow is None
+        or workflow.deleted_at is not None  # ADR-0058: deleted projects are not packaged
+        or workflow.kind != WorkflowKind.SOFTWARE_PROJECT
+        or profile is None
+    ):
         session.commit()
         return "stale"
     try:

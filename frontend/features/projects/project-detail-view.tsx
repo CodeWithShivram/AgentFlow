@@ -14,6 +14,7 @@ import type { ProjectProgress, Uuid } from "@/lib/api/types";
 import { workspacePath } from "@/lib/navigation";
 import { useCan, useWorkspace } from "@/lib/workspace";
 
+import { DeleteProjectAction } from "./delete-project";
 import { Deliverables, PackageNowAction } from "./deliverables";
 import { IntegrationRuns } from "./integration-runs";
 import { latestPreview, UiPreview } from "./ui-preview";
@@ -50,12 +51,15 @@ export function ProjectDetailView() {
         </div>
         <h1 className="text-2xl font-semibold tracking-tight break-words">{name}</h1>
         <p className="text-sm break-words whitespace-pre-wrap text-muted-foreground">{wf.prompt}</p>
-        <Button variant="outline" size="sm" asChild>
-          <Link href={controlsHref}>
-            <SlidersHorizontalIcon data-icon="inline-start" />
-            Plan & controls
-          </Link>
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" size="sm" asChild>
+            <Link href={controlsHref}>
+              <SlidersHorizontalIcon data-icon="inline-start" />
+              Plan & controls
+            </Link>
+          </Button>
+          {isAdmin ? <DeleteProjectAction workflow={wf} /> : null}
+        </div>
       </header>
 
       {progress.data ? (

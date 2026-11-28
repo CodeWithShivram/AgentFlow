@@ -143,6 +143,20 @@ class ProjectWorkspaces:
             self._git(project, "commit", "--quiet", "--allow-empty", "-m", "Start project")
         return project
 
+    def remove(self, workspace_id: uuid.UUID, workflow_id: uuid.UUID) -> bool:
+        """Deletes a deleted workflow's project folder (ADR-0058). Refuses links like every other
+        path; Git's read-only object files are made writable first. Returns whether it existed."""
+        project = self.project_path(workspace_id, workflow_id)
+        if not project.exists():
+            return False
+
+        def _writable_then_retry(function, path, _error):  # type: ignore[no-untyped-def]
+            os.chmod(path, 0o700)
+            function(path)
+
+        shutil.rmtree(project, onexc=_writable_then_retry)
+        return True
+
     def tracked_files(self, project: Path) -> list[str]:
         """The files committed at HEAD (relative, `/`-separated)."""
         output = self._git(project, "ls-files", "-z")

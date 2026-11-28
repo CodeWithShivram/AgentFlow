@@ -217,6 +217,7 @@ Inserted by the owner on 2026-11-26 from `docs/AgentFlow_Claude_Code_Master_Play
 | 9.8 | End-to-end prompt → ZIP journey (mock provider); release v0.2.0 | DONE (ADR-0054); local tag `v0.2.0` |
 | 9.9 | Integration rework: fix tasks for the owners of failing files, bounded rounds | DONE (ADR-0056) |
 | 9.10 | Web UI projects: `python-3.12-web` profile, Frontend Developer, static and headless-browser checks, page preview | DONE (ADR-0057) |
+| 9.11 | Delete projects: admin soft delete of idle workflows, worker purge of workspace and files | DONE (ADR-0058) |
 
 Acceptance (phase): the playbook's §16 test passes with the mock provider. A project is COMPLETED only when every required task and the integration gate pass; otherwise it is shown as FAILED, BLOCKED or PARTIAL with reasons. Each step refines its acceptance criteria at its start.
 

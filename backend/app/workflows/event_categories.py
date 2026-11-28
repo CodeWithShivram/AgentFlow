@@ -14,6 +14,7 @@ CATEGORIES: dict[E, EventCategory] = {
     E.WORKFLOW_COMPLETED: "status",
     E.WORKFLOW_FAILED: "status",
     E.WORKFLOW_CANCELLED: "status",
+    E.WORKFLOW_DELETED: "status",
     E.TASK_CREATED: "status",
     E.TASK_UPDATED: "status",
     E.TASK_REMOVED: "status",

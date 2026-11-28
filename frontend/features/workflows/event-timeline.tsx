@@ -41,6 +41,7 @@ const BY_TYPE: Record<string, EventCategory> = {
   BACKGROUND_JOB_RETRIED: "recovery",
 };
 
+// WORKFLOW_DELETED (ADR-0058) and the other lifecycle events fall back to "status".
 export function eventCategory(eventType: string): EventCategory {
   return BY_TYPE[eventType] ?? "status";
 }

@@ -139,6 +139,9 @@ export function createEndpoints(client: ApiClient) {
         /** `reason` is kept as the pause note when pausing (ADR-0036). */
         body: { to_status: WorkflowStatus; revision: number; reason?: string },
       ) => client.post<Workflow>(`${wf(workspaceId, workflowId)}/transitions`, body),
+      /** Deletes a finished, cancelled or never-started workflow (ADMIN, ADR-0058). */
+      remove: (workspaceId: Uuid, workflowId: Uuid, revision: number) =>
+        client.delete<void>(wf(workspaceId, workflowId), { query: { revision } }),
       /** Requests the prompt analysis again after it failed; it runs in a worker. */
       retryAnalysis: (workspaceId: Uuid, workflowId: Uuid) =>
         client.post<Workflow>(`${wf(workspaceId, workflowId)}/analysis`),

@@ -372,6 +372,33 @@ describe("ProjectDetailView", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "Todo API" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Package current state (partial)" })).toBeNull();
     expect(screen.queryByText(/waiting for a person/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /delete/i })).toBeNull();
+  });
+
+  it("lets admins cancel and delete an active project, then returns to the list", async () => {
+    const fetchMock = stubApi(PROGRESS);
+    const base = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation(async (url, init) => {
+      const path = new URL(url).pathname;
+      if (path.endsWith("/transitions")) return json(200, { ...WORKFLOW, status: "CANCELLED", revision: 5 });
+      if (init?.method === "DELETE") return new Response(null, { status: 204 });
+      return base(url, init);
+    });
+    renderWith(<ProjectDetailView />, "ADMIN");
+
+    // BLOCKED is still at work, so the action cancels first.
+    await userEvent.click(await screen.findByRole("button", { name: "Cancel & delete" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveTextContent("cancels its work, then deletes it");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel & delete" }));
+
+    await waitFor(() => expect(router.replace).toHaveBeenCalledWith("/w/ws-1/projects"));
+    const calls = fetchMock.mock.calls.filter(([, init]) => init?.method && init.method !== "GET");
+    expect(calls.map(([url, init]) => [init?.method, new URL(url).pathname + new URL(url).search])).toEqual([
+      ["POST", "/api/v1/workspaces/ws-1/workflows/wf-1/transitions"],
+      ["DELETE", "/api/v1/workspaces/ws-1/workflows/wf-1?revision=5"],
+    ]);
+    expect(JSON.parse(String(calls[0][1]?.body))).toEqual({ to_status: "CANCELLED", revision: 4 });
   });
 });
 

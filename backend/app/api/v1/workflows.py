@@ -363,6 +363,19 @@ async def update_task(
     return await _task_response(session, access, workflow_id, task)
 
 
+@router.delete("/{workflow_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_workflow(
+    workflow_id: uuid.UUID,
+    access: Admin,
+    session: DbSession,
+    revision: Annotated[int, Query(ge=1)],
+) -> Response:
+    """Deletes a finished, cancelled or never-started workflow (ADR-0058). Its files are purged
+    by a worker; usage and audit history stay."""
+    await service.delete_workflow(session, access, workflow_id, revision=revision)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.delete("/{workflow_id}/tasks/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def remove_task(
     workflow_id: uuid.UUID,

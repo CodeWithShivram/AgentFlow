@@ -143,6 +143,8 @@ class WorkflowEventType(StrEnum):
     BACKGROUND_JOB_RETRIED = "BACKGROUND_JOB_RETRIED"
     INTERVENTION_OPENED = "INTERVENTION_OPENED"
     INTERVENTION_RESOLVED = "INTERVENTION_RESOLVED"
+    # Added in Step 9.11: a person deleted the workflow (soft delete, ADR-0058).
+    WORKFLOW_DELETED = "WORKFLOW_DELETED"
 
 
 class Workflow(Base):
@@ -161,6 +163,11 @@ class Workflow(Base):
         ),
         CheckConstraint(
             "project_spec IS NULL OR kind = 'SOFTWARE_PROJECT'", name="project_spec_for_projects"
+        ),
+        # Only finished or never-started workflows are deleted (ADR-0058).
+        CheckConstraint(
+            "deleted_at IS NULL OR status IN ('PENDING', 'COMPLETED', 'FAILED', 'CANCELLED')",
+            name="deleted_only_when_idle",
         ),
         Index("ix_workflows_workspace_id_created_at", "workspace_id", "created_at"),
         Index("ix_workflows_workspace_id_status", "workspace_id", "status"),
@@ -227,6 +234,11 @@ class Workflow(Base):
     )
     paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     pause_note: Mapped[str | None] = mapped_column(Text)
+    # Soft delete (ADR-0058): hidden from every API read; history rows stay, files are purged.
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT")
+    )
 
 
 class WorkflowTask(Base):

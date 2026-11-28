@@ -112,7 +112,8 @@ def _with_records() -> Any:
         .join(
             Workflow,
             (Workflow.id == HumanIntervention.workflow_id)
-            & (Workflow.workspace_id == HumanIntervention.workspace_id),
+            & (Workflow.workspace_id == HumanIntervention.workspace_id)
+            & Workflow.deleted_at.is_(None),  # ADR-0058; the approval audit keeps them
         )
         .outerjoin(
             ApprovalDecision,
