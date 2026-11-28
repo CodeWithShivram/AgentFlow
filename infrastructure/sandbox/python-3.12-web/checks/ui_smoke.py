@@ -79,6 +79,18 @@ def empty_data(responses: list[object]) -> list[str]:
     return sorted(loaded) if loaded and all(loaded.values()) else []
 
 
+DIALOG = "dialog[open], [role=dialog], [aria-modal=true]"
+
+
+def pick(page: object, matches: object) -> object:
+    """The element a person would use: a visible match, inside an open dialog when there is one
+    (a form in a modal next to a page filter with the same label). Waits up to the step timeout."""
+    visible = matches.filter(visible=True)  # type: ignore[attr-defined]
+    visible.first.wait_for(state="visible", timeout=STEP_TIMEOUT_MS)
+    in_dialog = page.locator(DIALOG).filter(visible=True).locator(visible)  # type: ignore[attr-defined]
+    return in_dialog.first if in_dialog.count() else visible.first
+
+
 def run_flow(browser: object, flow: dict, watch: object) -> list[str]:
     """Runs one planned flow on a fresh page; returns its problems (the first failing step)."""
     page = browser.new_page(viewport={"width": 1280, "height": 800})  # type: ignore[attr-defined]
@@ -91,20 +103,41 @@ def run_flow(browser: object, flow: dict, watch: object) -> list[str]:
             where = f"static/index.html: UI flow '{name}' step {number} ({action} '{target}')"
             try:
                 if action == "click":
-                    control = page.get_by_role("button", name=target).or_(
-                        page.get_by_role("link", name=target)
+                    control = pick(
+                        page,
+                        page.get_by_role("button", name=target).or_(
+                            page.get_by_role("link", name=target)
+                        ),
                     )
-                    control.first.click(timeout=STEP_TIMEOUT_MS)
+                    control.click(timeout=STEP_TIMEOUT_MS)
                     try:
                         page.wait_for_load_state("networkidle", timeout=STEP_TIMEOUT_MS)
                     except Exception:  # noqa: BLE001 (a page that keeps polling still continues)
                         pass
                 elif action == "fill":
-                    page.get_by_label(target).first.fill(
-                        str(step.get("value", "")), timeout=STEP_TIMEOUT_MS
-                    )
+                    field = pick(page, page.get_by_label(target))
+                    value = str(step.get("value", ""))
+                    if field.evaluate("e => e.tagName") == "SELECT":
+                        # A dropdown: choose the option by its text or value, else say which exist.
+                        options = field.evaluate(
+                            "e => Array.from(e.options).map(o => [o.text.trim(), o.value])"
+                        )
+                        chosen = next(
+                            (v for t, v in options if value.lower() in (t.lower(), v.lower())), None
+                        )
+                        if chosen is None:
+                            names = ", ".join(t for t, v in options if v) or "none"
+                            return [
+                                f"{where}: the dropdown labelled '{target}' has no option "
+                                f"'{value}' (options: {names})"
+                            ]
+                        field.select_option(value=chosen, timeout=STEP_TIMEOUT_MS)
+                    else:
+                        field.fill(value, timeout=STEP_TIMEOUT_MS)
                 elif action == "expect_text":
-                    page.get_by_text(target).first.wait_for(state="visible", timeout=STEP_TIMEOUT_MS)
+                    page.get_by_text(target).filter(visible=True).first.wait_for(
+                        state="visible", timeout=STEP_TIMEOUT_MS
+                    )
                 else:
                     return [f"{where}: unknown action"]
             except Exception:  # noqa: BLE001 (Playwright timeouts and missing elements)

@@ -269,3 +269,56 @@ def test_a_project_cannot_supply_the_platforms_files(tmp_path: Path) -> None:
     assert result.succeeded and "['ui-flows.json']" in result.output
     with pytest.raises(ValueError, match="directly in .agentflow/"):
         DockerSandbox().run(WEB.image, tmp_path, listing, (), {"src/x.py": b""})
+
+
+_DIALOG_PAGE = _MOCK_INDEX_HTML.replace(
+    "</body>",
+    """<label for="filter">Category</label>
+<select id="filter"><option value="">All</option><option>Lunch</option></select>
+<form hidden>
+  <label for="hidden-notes">Ingredients</label><textarea id="hidden-notes"></textarea>
+</form>
+<button type="button" onclick="document.getElementById('details').hidden = false">Pancakes</button>
+<section id="details" hidden><h2>Ingredients</h2></section>
+<button type="button" onclick="document.getElementById('add').showModal()">Add Recipe</button>
+<dialog id="add">
+  <label for="category">Category</label>
+  <select id="category">
+    <option value="">Pick one</option><option value="b">Breakfast</option>
+  </select>
+</dialog>
+</body>""",
+)
+
+
+def test_flows_use_the_element_a_person_would(tmp_path: Path) -> None:
+    # Live recipe-box run: a hidden form label and a page filter with the same label as a field
+    # in the open dialog made correct pages fail. Visible matches win, dialogs first, and
+    # dropdowns are chosen by option text or value.
+    project = _project(tmp_path, {**GOOD, "static/index.html": _DIALOG_PAGE})
+
+    def flow(*steps: dict[str, str]) -> dict[str, bytes]:
+        return _flows({"name": "Recipes", "steps": list(steps)})
+
+    ok = DockerSandbox().run(
+        WEB.image, project, _check("ui"), (),
+        flow(
+            {"action": "click", "target": "Pancakes"},
+            {"action": "expect_text", "target": "Ingredients"},
+            {"action": "click", "target": "Add Recipe"},
+            {"action": "fill", "target": "Category", "value": "Breakfast"},
+        ),
+    )  # fmt: skip
+    assert ok.succeeded, ok.output
+    missing = DockerSandbox().run(
+        WEB.image, project, _check("ui"), (),
+        flow(
+            {"action": "click", "target": "Add Recipe"},
+            {"action": "fill", "target": "Category", "value": "Snack"},
+        ),
+    )  # fmt: skip
+    assert not missing.succeeded
+    assert (
+        "step 2 (fill 'Category'): the dropdown labelled 'Category' has no option 'Snack' "
+        "(options: Breakfast)"
+    ) in missing.output

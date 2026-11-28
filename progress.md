@@ -5,6 +5,20 @@
 - Last completed step: 9.18 — One-command local stack (Phase 9 complete since 9.8)
 - Next step: 8.4 — Safe workflow replay (then 8.5–8.7), or the Phase 9 follow-ups below; needs the owner's go-ahead
 
+## Re-verifying recipe-box on the current code; browser check fix (ADR-0062 amendment, 2026-11-28)
+- **Change request on the stack restarted with `dev.ps1`** (one worker, current code): "show Ingredients and Instructions in the detail view; a labelled Category field".
+  - Gemini changed only `static/` and `tests/test_api.py`. The gate now **refused** the project (no false VERIFIED). After two fix rounds the same two steps still failed, and the project was BLOCKED.
+  - **Cause: the check, not the page.** `expect_text 'Ingredients'` waited for the first match, a hidden form label. `fill 'Category'` took the first labelled field, the page's filter dropdown, not the dialog's field, and `fill` cannot set dropdowns.
+- **Fix** (`ui_smoke.py`; the image was rebuilt):
+  - visible matches only, preferring an open dialog's;
+  - dropdowns chosen by option text or value;
+  - a missing option is named: "the dropdown labelled 'Category' has no option 'Snack' (options: Breakfast, Lunch, Dinner, Dessert)".
+  - A sandbox regression test covers the hidden duplicate text, the duplicate labels and both dropdown cases.
+- **Resumed the blocked project:** the first gate failed only on the real problem (no "Snack" option, clearly named). One fix round added it, and the second gate **passed all four checks with "2 planned user flow(s) passed"**. **COMPLETED and VERIFIED.**
+- **Checks:**
+  - `test_web_ui_checks.py` 9/9.
+  - Backend gate: format, lint, mypy and alembic clean; `uv run pytest` 1388 passed, 2 skipped, 1 failed. `test_the_mock_project_passes_its_real_sandbox_checks` failed once on a workspace apply (Git) under load; it passed alone, and `test_project_integration.py` with `test_project_workspace.py` passed 3/3 in a row. This change touches no backend app code (only the check script, a test and docs).
+
 ## Step 9.18 — one-command local stack (ADR-0064, 2026-11-28)
 - **Why:** five processes started by hand; Docker stopping overnight went unnoticed; AgentFlow's API on 8000 clashed with generated apps; and in Step 9.16 an older worker started separately took some of the jobs.
 - **What:** `scripts/dev.ps1 up|down|restart|status|logs [-ApiPort 8010] [-WebPort 3000]`.

@@ -24,6 +24,15 @@
   - A failing step is reported as `static/index.html: UI flow '<name>' step N (<action> '<target>'): no visible button or link named '…'` (or "no field labelled", or "the text … did not appear"), so integration rework (ADR-0056) reaches the UI's owner.
 - **The mock web plan** includes a flow for the mock page (`MOCK_UI_FLOWS`).
 
+### Amendment (2026-11-28): the element a person would use
+- **Found by the recipe-box change run:** correct pages failed, and two fix rounds were wasted.
+  - `expect_text 'Ingredients'` waited for the *first* match, a label in a hidden form, instead of the visible detail heading.
+  - `fill 'Category'` took the *first* labelled field, the page's filter dropdown, instead of the field in the open add-recipe dialog. `fill` cannot set a dropdown at all.
+- **Now:**
+  - Steps use only **visible** matches, preferring those inside an open dialog (`dialog[open]`, `[role=dialog]`, `[aria-modal=true]`).
+  - Dropdowns are chosen by option text or value. A missing option is reported as such: "the dropdown labelled 'Category' has no option 'Snack' (options: …)", not as a missing field.
+  - A sandbox regression test reproduces all three cases.
+
 ## Consequences
 - **Verified web projects did their main journeys in a real browser,** not only "the page loads".
 - **Matching is loose by design.** Name matching is Playwright's default (case-insensitive substring), and flows share one server, so earlier flows may change data later ones see. Planned names that the UI words differently fail the check and go to rework.
