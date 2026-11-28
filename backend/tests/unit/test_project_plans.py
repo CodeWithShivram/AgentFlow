@@ -295,3 +295,42 @@ def test_the_mock_web_plan_gives_the_page_to_the_frontend_developer() -> None:
     proposal = PlanProposal.model_validate_json(plan.mock_plan(_request(section)))
     ui = [t for t in proposal.tasks if "ui_development" in t.required_skills]
     assert len(ui) == 1 and ui[0].file_scope == ["static/"]
+
+
+def _web_plan(**project: Any) -> dict[str, Any]:
+    return _plan(project={**VALID["project"], "stack_profile": "python-3.12-web", **project})
+
+
+def test_web_projects_may_plan_browser_flows() -> None:
+    # Step 9.16 (ADR-0062): flows the browser check runs on the finished page.
+    flow = {
+        "name": "Buy a book",
+        "steps": [
+            {"action": "click", "target": "Add to cart"},
+            {"action": "fill", "target": "Email", "value": "ada@example.com"},
+            {"action": "expect_text", "target": "Order confirmed"},
+        ],
+    }
+    proposal = PlanProposal.model_validate(_web_plan(ui_flows=[flow]))
+    assert proposal.project is not None and proposal.project.ui_flows[0].steps[1].value == (
+        "ada@example.com"
+    )
+    with pytest.raises(ValidationError, match="ui_flows need a web stack profile"):
+        PlanProposal.model_validate(_plan(project={**VALID["project"], "ui_flows": [flow]}))
+    no_value = {"name": "x", "steps": [{"action": "fill", "target": "Email"}]}
+    with pytest.raises(ValidationError, match="a fill step needs a value"):
+        PlanProposal.model_validate(_web_plan(ui_flows=[no_value]))
+    stray = {"name": "x", "steps": [{"action": "click", "target": "Go", "value": "1"}]}
+    with pytest.raises(ValidationError, match="only a fill step has one"):
+        PlanProposal.model_validate(_web_plan(ui_flows=[stray]))
+    with pytest.raises(ValidationError):
+        PlanProposal.model_validate(_web_plan(ui_flows=[flow] * 4))
+
+
+def test_the_mock_web_plan_plans_a_flow_for_its_page() -> None:
+    section = plan._profiles_section("python-3.12-web")
+    proposal = PlanProposal.model_validate_json(plan.mock_plan(_request(section)))
+    assert proposal.project is not None
+    assert [f.model_dump(exclude_none=True) for f in proposal.project.ui_flows] == (
+        plan.MOCK_UI_FLOWS
+    )

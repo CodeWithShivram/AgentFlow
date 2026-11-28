@@ -4,11 +4,14 @@ Baked into the python-3.12-web sandbox image; generated code never supplies or c
 Run in the project root (/work), offline. It starts the FastAPI app found at
 src/<package>/main.py (`app`) with uvicorn on 127.0.0.1, opens / in headless Chromium, and fails
 on JavaScript errors, failed requests, missing accessibility basics, or a first page whose data
-APIs all return nothing (projects ship with sample data, ADR-0060). It always tries to save a
+APIs all return nothing (projects ship with sample data, ADR-0060). Then it runs the planned
+user flows from .agentflow/ui-flows.json, written by the platform (ADR-0062): click a button or
+link by its visible name, fill a field by its label, expect a visible text. It always tries to save a
 full-page screenshot to .agentflow/ui-preview.png for the platform to show. Messages name the
 files involved (static/... or src/...) so integration rework can reach the task that owns them.
 """
 
+import json
 import os
 import socket
 import subprocess
@@ -23,6 +26,8 @@ ROOT = Path.cwd()
 PORT = 8123
 BASE = f"http://127.0.0.1:{PORT}"
 SCREENSHOT = ROOT / ".agentflow" / "ui-preview.png"
+FLOWS = ROOT / ".agentflow" / "ui-flows.json"
+STEP_TIMEOUT_MS = 5_000
 LABEL_CHECK = """
 () => Array.from(document.querySelectorAll('input, select, textarea'))
   .filter(el => !['hidden', 'submit', 'button', 'reset', 'image'].includes((el.type || '').toLowerCase()))
@@ -74,6 +79,46 @@ def empty_data(responses: list[object]) -> list[str]:
     return sorted(loaded) if loaded and all(loaded.values()) else []
 
 
+def run_flow(browser: object, flow: dict, watch: object) -> list[str]:
+    """Runs one planned flow on a fresh page; returns its problems (the first failing step)."""
+    page = browser.new_page(viewport={"width": 1280, "height": 800})  # type: ignore[attr-defined]
+    watch(page)  # type: ignore[operator]
+    name = str(flow.get("name", "flow"))[:100]
+    try:
+        page.goto(f"{BASE}/", wait_until="networkidle", timeout=20_000)
+        for number, step in enumerate(flow.get("steps", []), start=1):
+            action, target = step.get("action"), str(step.get("target", ""))
+            where = f"static/index.html: UI flow '{name}' step {number} ({action} '{target}')"
+            try:
+                if action == "click":
+                    control = page.get_by_role("button", name=target).or_(
+                        page.get_by_role("link", name=target)
+                    )
+                    control.first.click(timeout=STEP_TIMEOUT_MS)
+                    try:
+                        page.wait_for_load_state("networkidle", timeout=STEP_TIMEOUT_MS)
+                    except Exception:  # noqa: BLE001 (a page that keeps polling still continues)
+                        pass
+                elif action == "fill":
+                    page.get_by_label(target).first.fill(
+                        str(step.get("value", "")), timeout=STEP_TIMEOUT_MS
+                    )
+                elif action == "expect_text":
+                    page.get_by_text(target).first.wait_for(state="visible", timeout=STEP_TIMEOUT_MS)
+                else:
+                    return [f"{where}: unknown action"]
+            except Exception:  # noqa: BLE001 (Playwright timeouts and missing elements)
+                missing = {
+                    "click": f"no visible button or link named '{target}'",
+                    "fill": f"no field labelled '{target}'",
+                    "expect_text": f"the text '{target}' did not appear",
+                }
+                return [f"{where}: {missing.get(str(action), 'step failed')}"]
+        return []
+    finally:
+        page.close()
+
+
 def wait_for_port(timeout: float) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -100,6 +145,7 @@ def main() -> int:
     )
     problems: list[str] = []
     api_responses: list[object] = []
+    ran = 0
     try:
         if not wait_for_port(20):
             server.terminate()
@@ -112,31 +158,42 @@ def main() -> int:
             browser = playwright.chromium.launch(
                 args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
             )
-            page = browser.new_page(viewport={"width": 1280, "height": 800})
-            page.on(
-                "console",
-                lambda m: problems.append(
-                    f"{source_for(m.location.get('url', ''))}:{m.location.get('lineNumber', 0) + 1}:"
-                    f" console error: {m.text[:300]}"
+
+            def watch(page: object) -> None:
+                """Reports JavaScript errors, failed requests and HTTP errors of a page."""
+                page.on(  # type: ignore[attr-defined]
+                    "console",
+                    lambda m: problems.append(
+                        f"{source_for(m.location.get('url', ''))}:"
+                        f"{m.location.get('lineNumber', 0) + 1}: console error: {m.text[:300]}"
+                    )
+                    if m.type == "error"
+                    else None,
                 )
-                if m.type == "error"
-                else None,
-            )
-            page.on("pageerror", lambda e: problems.append(f"page JavaScript error: {str(e)[:300]}"))
-            page.on(
-                "requestfailed",
-                lambda r: problems.append(f"{source_for(r.url)}: request failed ({r.failure})"),
-            )
-            page.on(
-                "response",
-                lambda r: problems.append(f"{source_for(r.url)}: HTTP {r.status} for {urlparse(r.url).path}")
-                if r.status >= 400 and not r.url.endswith("/favicon.ico")
-                else None,
-            )
+                page.on(  # type: ignore[attr-defined]
+                    "pageerror", lambda e: problems.append(f"page JavaScript error: {str(e)[:300]}")
+                )
+                page.on(  # type: ignore[attr-defined]
+                    "requestfailed",
+                    lambda r: problems.append(f"{source_for(r.url)}: request failed ({r.failure})"),
+                )
+                page.on(  # type: ignore[attr-defined]
+                    "response",
+                    lambda r: problems.append(
+                        f"{source_for(r.url)}: HTTP {r.status} for {urlparse(r.url).path}"
+                    )
+                    if r.status >= 400 and not r.url.endswith("/favicon.ico")
+                    else None,
+                )
+
+            page = browser.new_page(viewport={"width": 1280, "height": 800})
+            watch(page)
             page.on(
                 "response",
                 lambda r: api_responses.append(r)
-                if r.request.method == "GET" and r.status == 200 and urlparse(r.url).path.startswith("/api/")
+                if r.request.method == "GET"
+                and r.status == 200
+                and urlparse(r.url).path.startswith("/api/")
                 else None,
             )
             response = page.goto(f"{BASE}/", wait_until="networkidle", timeout=20_000)
@@ -157,8 +214,14 @@ def main() -> int:
                     f"loaded returned an empty list ({', '.join(empty)}). Create sample records at "
                     "startup while the store is empty, so the first run shows content."
                 )
+            # The preview shows the first page as people meet it, before any flow changes data.
             SCREENSHOT.parent.mkdir(exist_ok=True)
             page.screenshot(path=str(SCREENSHOT), full_page=True)
+            page.close()
+            flows = json.loads(FLOWS.read_text(encoding="utf-8")) if FLOWS.is_file() else []
+            for flow in flows:
+                problems.extend(run_flow(browser, flow, watch))
+            ran = len(flows)
             browser.close()
     finally:
         server.terminate()
@@ -173,7 +236,7 @@ def main() -> int:
         return 1
     print(
         "OK the page loads without errors, shows data, and has a title, a lang attribute and "
-        "labelled controls."
+        f"labelled controls; {ran} planned user flow(s) passed."
     )
     return 0
 

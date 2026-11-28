@@ -17,9 +17,10 @@ or replan its work (ADR-0033).
 """
 
 import io
+import json
 import logging
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -58,6 +59,10 @@ CONSUMER = "integrate_project"
 STALE_AFTER = timedelta(minutes=30)
 
 
+# Where the browser check reads the planned flows (ADR-0062).
+UI_FLOWS_INPUT = ".agentflow/ui-flows.json"
+
+
 @dataclass(frozen=True)
 class IntegrationJob:
     integration_id: uuid.UUID
@@ -66,6 +71,8 @@ class IntegrationJob:
     head_sha: str
     stack_profile: str
     project_path: Path
+    # Web profiles (ADR-0062): the planned browser flows, run by the preview check.
+    ui_flows: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -188,6 +195,7 @@ def claim(
         head_sha=head,
         stack_profile=str(profile),
         project_path=project,
+        ui_flows=list((workflow.project_spec or {}).get("ui_flows") or []),
     )
 
 
@@ -198,9 +206,13 @@ def execute(sandbox: DockerSandbox, job: IntegrationJob) -> IntegrationOutcome:
     checks: list[dict[str, Any]] = []
     preview: bytes | None = None
     for name, command in profile.checks:
-        collect = [profile.preview[1]] if profile.preview and profile.preview[0] == name else []
+        browser = profile.preview is not None and profile.preview[0] == name
+        collect = [profile.preview[1]] if browser and profile.preview else []
+        inputs = (
+            {UI_FLOWS_INPUT: json.dumps(job.ui_flows).encode()} if browser and job.ui_flows else {}
+        )
         try:
-            result = sandbox.run(profile.image, job.project_path, list(command), collect)
+            result = sandbox.run(profile.image, job.project_path, list(command), collect, inputs)
         except SandboxUnavailableError as error:
             checks.append({"name": name, "outcome": "not_run"})
             return IntegrationOutcome(IntegrationStatus.NOT_RUN, checks, error.code)

@@ -81,9 +81,9 @@ REPLAN_PROMPT_VERSION = "replan/v2"
 # v2: project tasks may only require the Developer's skills; v3: the schema requires the project
 # v4: the schema requires every task's file_scope and effort_points; v5: profiles carry their
 # layout conventions (live Gemini runs, ADR-0055).
-SOFTWARE_PROMPT_VERSION = "software_plan/v7"
+SOFTWARE_PROMPT_VERSION = "software_plan/v8"
 # A change to a completed project (ADR-0059).
-CHANGE_PROMPT_VERSION = "software_change/v2"
+CHANGE_PROMPT_VERSION = "software_change/v3"
 # Workflows whose remaining work is replanned instead of planned (ADR-0033).
 REPLAN_STATUSES = frozenset({WorkflowStatus.PAUSED, WorkflowStatus.BLOCKED})
 CONSUMER = "plan_workflow"
@@ -135,7 +135,11 @@ This is a SOFTWARE PROJECT: plan a coherent, runnable, tested source-code projec
 - Every task produces files, so required_skills may only be code_generation, implementation or
   debugging, plus a profile's extra_task_skills for the tasks they fit (ui_development for the
   web UI). Tests, README and configuration are written by these tasks too (in their scope).
-- Choose python-3.12-web when the request asks for a website, web page or browser UI.
+- Choose python-3.12-web when the request asks for a website, web page or browser UI. Then add
+  `project.ui_flows`: 1 to 3 short user flows of the main features (up to 10 steps each) that a
+  browser runs on the finished page: `click` a button or link by its visible name, `fill` a field
+  by its label (with a `value`), `expect_text` a visible text. Flows run in order on one server
+  started with the sample data; name the buttons, labels and texts the UI task must use.
 - Include tests under the profile's test folders and a README with setup, run and test steps.
 - If the application stores or lists data (products, books, tasks, ...), it ships with realistic
   sample data: about 6 to 10 records created at startup only while the store is empty (never
@@ -157,7 +161,9 @@ and the content of as many files as fit). Plan only the work the user_request ne
 - The profile's shared files already exist; own one only if the change edits it.
 - Add or update tests for the changed behaviour, and the README when usage changes.
 - If the project stores or lists data and starts empty, add startup sample data (only while the
-  store is empty) so the first run shows content."""
+  store is empty) so the first run shows content.
+- For a web project, return `project.ui_flows` for the project after the change: keep the
+  current flows that still apply and add one for the changed behaviour."""
 
 
 def _profiles_section(stack_profile: str | None) -> str:
@@ -358,6 +364,19 @@ def _mock_task(
     }
 
 
+# The mock web page's flow (ADR-0062): see app.agents.specialists._MOCK_INDEX_HTML.
+MOCK_UI_FLOWS = [
+    {
+        "name": "Fill in the form",
+        "steps": [
+            {"action": "expect_text", "target": "Mock project"},
+            {"action": "fill", "target": "Name", "value": "Ada"},
+            {"action": "click", "target": "Save"},
+        ],
+    }
+]
+
+
 def mock_software_plan(text: str) -> str:
     """A deterministic version 2 plan on the first offered profile: setup (owning the shared
     files), the application code, then its tests."""
@@ -372,6 +391,7 @@ def mock_software_plan(text: str) -> str:
             "stack_profile": profile["id"],
             "architecture": "A small application module with automated tests.",
             "assumptions": ["Drafted by the mock model provider (no real model)."],
+            **({"ui_flows": MOCK_UI_FLOWS} if profile["id"] == "python-3.12-web" else {}),
         },
         "tasks": [
             _mock_task("t1", "Set up the project", [*shared, ".env.example"], 2, []),

@@ -238,6 +238,10 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
 - Starter files (ADR-0061): `StackProfile.starter_files` (web: `static/index.html`, `src/<package>/main.py` with the
   static mount last) reach new-code tasks whose scope covers them via contract v6 `starter_files` + a fixed
   `starter_rule` (`app/projects/starters.py`, pure); fix and change tasks get none.
+- Browser flows (ADR-0062): web plans carry `project.ui_flows` (click/fill/expect_text by visible name, label, text;
+  ≤3 flows × 10 steps); tasks get them in contract v7; the integration job passes them as `.agentflow/ui-flows.json`
+  via `DockerSandbox.run(inputs=)` (the copy's `.agentflow/` is emptied first); `ui_smoke.py` runs them after the
+  screenshot and names the failing step against `static/index.html`.
 - Workflow events are append-only.
 
 ## Security

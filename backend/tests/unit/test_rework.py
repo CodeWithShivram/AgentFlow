@@ -96,7 +96,7 @@ def test_model_agents_get_the_instructions_as_a_platform_message_after_the_contr
 
     messages = build_request(instruction, contract, configuration).messages
 
-    assert contract.contract_version == 6
+    assert contract.contract_version == 7
     assert messages[1].content.startswith("<task_contract>")
     assert "rework_instructions" not in messages[1].content  # not inside the delimited data
     assert messages[2].content == (

@@ -22,7 +22,7 @@ import subprocess
 import tempfile
 import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -117,6 +117,24 @@ def _make_writable(root: Path) -> None:
         path.chmod(0o777 if path.is_dir() else 0o666)
 
 
+PLATFORM_FOLDER = ".agentflow"
+
+
+def _write_inputs(work: Path, inputs: Mapping[str, bytes]) -> None:
+    """Replaces the copy's `.agentflow/` folder with the platform's input files only."""
+    folder = work / PLATFORM_FOLDER
+    if folder.is_symlink() or folder.is_file():
+        folder.unlink()
+    elif folder.exists():
+        shutil.rmtree(folder)
+    for relative, data in inputs.items():
+        parts = relative.split("/")
+        if parts[0] != PLATFORM_FOLDER or len(parts) != 2 or parts[1] in ("", ".", ".."):
+            raise ValueError("sandbox inputs go directly in .agentflow/")
+        folder.mkdir(exist_ok=True)
+        (folder / parts[1]).write_bytes(data)
+
+
 class DockerSandbox:
     def __init__(self, limits: SandboxLimits | None = None) -> None:
         self.limits = limits or SandboxLimits()
@@ -153,9 +171,13 @@ class DockerSandbox:
         project: Path,
         command: Sequence[str],
         collect: Sequence[str] = (),
+        inputs: Mapping[str, bytes] | None = None,
     ) -> SandboxResult:
         """Runs `command` (a fixed platform command) in a fresh container on a copy of
-        `project`. Raises SandboxUnavailableError when it cannot run at all."""
+        `project`. Raises SandboxUnavailableError when it cannot run at all.
+
+        `inputs` are platform files written into the copy's `.agentflow/` folder (ADR-0062),
+        which is emptied first: a project never supplies the platform's inputs or outputs."""
         self.ensure_image(image)
         limits = self.limits
         name = f"agentflow-sbx-{uuid.uuid4().hex[:16]}"
@@ -167,6 +189,7 @@ class DockerSandbox:
             work.mkdir()
             copy_tree(project, work)
             _make_writable(work)
+            _write_inputs(work, inputs or {})
             arguments = [
                 self._docker(), "run", "--rm", "--name", name,
                 "--network", "none",

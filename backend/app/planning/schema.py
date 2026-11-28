@@ -48,6 +48,39 @@ def _known_profile(value: str) -> str:
     return value
 
 
+UiTarget = Annotated[
+    SafeText, StringConstraints(min_length=1, max_length=200, strip_whitespace=True)
+]
+MAX_UI_FLOWS = 3
+MAX_UI_STEPS = 10
+
+
+class UiStep(BaseModel):
+    """One step of a browser flow (ADR-0062): click a button or link by its visible name, fill a
+    field by its label, or expect a visible text."""
+
+    model_config = _STRICT
+
+    action: Literal["click", "fill", "expect_text"]
+    target: UiTarget
+    value: UiTarget | None = None
+
+    @model_validator(mode="after")
+    def _value_only_for_fill(self) -> "UiStep":
+        if (self.action == "fill") != (self.value is not None):
+            raise ValueError("a fill step needs a value, and only a fill step has one")
+        return self
+
+
+class UiFlow(BaseModel):
+    """A short user journey the web profile's browser check runs on the finished page."""
+
+    model_config = _STRICT
+
+    name: UiTarget
+    steps: Annotated[list[UiStep], Field(min_length=1, max_length=MAX_UI_STEPS)]
+
+
 class ProjectSpec(BaseModel):
     """The software project a version 2 plan builds (ADR-0048)."""
 
@@ -57,6 +90,14 @@ class ProjectSpec(BaseModel):
     stack_profile: Annotated[str, AfterValidator(_known_profile)]
     architecture: Text
     assumptions: Annotated[list[Text], Field(max_length=10)] = []
+    # Web profiles only (ADR-0062): flows the browser check runs on the finished page.
+    ui_flows: Annotated[list[UiFlow], Field(max_length=MAX_UI_FLOWS)] = []
+
+    @model_validator(mode="after")
+    def _flows_need_a_browser_check(self) -> "ProjectSpec":
+        if self.ui_flows and PROFILES[self.stack_profile].preview is None:
+            raise ValueError("ui_flows need a web stack profile")
+        return self
 
 
 class PlannedTask(BaseModel):

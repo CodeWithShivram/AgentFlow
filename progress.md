@@ -2,8 +2,26 @@
 
 ## Current position
 - Phase: 9 — Software project generation (ADR-0046; Phases 2–7 and Steps 8.1–8.2 complete; Phase 1 released as `v0.1.0`)
-- Last completed step: 9.15 — Starter files for new web code (Phase 9 complete since 9.8)
+- Last completed step: 9.16 — Browser flow checks (Phase 9 complete since 9.8)
 - Next step: 8.4 — Safe workflow replay (then 8.5–8.7), or the Phase 9 follow-ups below; needs the owner's go-ahead
+
+## Step 9.16 — browser flow checks (ADR-0062, 2026-11-28)
+- **Why:** the `ui` check only proved the first page loads. Features behind clicks, such as checkout in the change run, were never exercised.
+- **What:**
+  - **Plan:** web plans carry `project.ui_flows` (≤3 flows × 10 steps: `click` by visible name, `fill` by label with a value, `expect_text`), with prompts `software_plan/v8` and `software_change/v3`. Change plans see the current flows in `<current_project>`; the mock web plan has `MOCK_UI_FLOWS`.
+  - **Contract v7** gives tasks the `ui_flows` with a fixed `ui_flows_rule`.
+  - **Sandbox:** `DockerSandbox.run(inputs=)` writes platform files into the copy's `.agentflow/` folder after emptying it (projects cannot plant flows or a fake screenshot). The integration job passes `.agentflow/ui-flows.json` to the preview check, and `ui_smoke.py` runs each flow on a fresh page after the first-page screenshot, naming the failing step against `static/index.html`. The web image was rebuilt.
+- **Tests:**
+  - Unit: flow schema rules; flows only on web profiles; fill needs a value and only fill has one; the mock web flow; the prompt carries the flows.
+  - Sandbox: the mock flow passes in Chromium; a missing Checkout button fails with the exact step message; a project's own `.agentflow/` files are replaced; the integration run reports "1 planned user flow(s) passed".
+  - Contract version assertions updated to 7.
+- **Checks:** backend gate. Format, lint, `mypy app tests alembic` and `alembic check` clean; `uv run pytest` **1388 passed, 2 skipped** (13 min). An earlier gate start was stopped because mypy found 3 test-typing errors, now fixed.
+- **Live run on Gemini** (recipe-box; backend on port 8010):
+  - The plan had 2 flows (browse, search, open a recipe, expect "Ingredients"; add a recipe through labelled fields).
+  - **Starter files worked:** the first gate's `web` check passed (no doctype or mount problems).
+  - **Flows worked:** the first gate failed on 2 real UI gaps (no "Ingredients" in the detail view, no field labelled "Category") and on a broken test file. Fix tasks were created.
+  - **The second gate was taken by another Celery worker:** one started at 15:53 outside this session (not by this session's script), still on the pre-9.16 code, sharing the broker. It ran no flows (it reported 0) and passed.
+  - Re-running the `ui` check with the flows on the final code still fails both, so that project's VERIFIED package is **not** flow-verified. Lesson: never run workers on different code versions against one broker; Step 9.18's dev script refuses to start next to other AgentFlow processes.
 
 ## Step 9.15 — starter files for new web code (ADR-0061, 2026-11-28)
 - **Why:** in 3 of 4 live web runs, the first gate failed on structure (no doctype, lang or title; GET / 404 because static files were not mounted), which cost a fix round each time.

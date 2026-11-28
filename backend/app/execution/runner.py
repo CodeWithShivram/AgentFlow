@@ -130,6 +130,7 @@ class Claim:
     integration_feedback: list[dict[str, Any]] = field(default_factory=list)
     current_files: list[dict[str, Any]] = field(default_factory=list)
     starter_files: list[dict[str, Any]] = field(default_factory=list)
+    ui_flows: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -347,6 +348,9 @@ def claim(
             if task.fixes_integration_id is None and workflow.base_workflow_id is None
             else []
         ),
+        ui_flows=list((workflow.project_spec or {}).get("ui_flows") or [])
+        if task.file_scope
+        else [],
     )
     session.commit()
     return claimed
@@ -390,6 +394,7 @@ def build_contract(
             "integration_feedback": claim.integration_feedback,
             "current_files": claim.current_files,
             "starter_files": claim.starter_files,
+            "ui_flows": claim.ui_flows,
         }
     )
 

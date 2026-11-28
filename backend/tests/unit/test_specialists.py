@@ -375,3 +375,19 @@ def test_new_web_code_starts_from_the_profiles_starter_files() -> None:
     prompt = adapter.requests[0].messages[-1].content
     assert "starter_rule" in prompt and "create every file they reference" in prompt
     assert "<!DOCTYPE html>" in prompt and "change_rule" not in prompt
+
+
+def test_web_tasks_are_told_the_planned_browser_flows() -> None:
+    # Step 9.16 (ADR-0062): the names the browser check will look for reach the model.
+    flows = [{"name": "Buy", "steps": [{"action": "click", "target": "Checkout"}]}]
+    _, adapter, _, _ = _run(
+        DeveloperAgent,
+        required_skills=["code_generation"],
+        deliverables=["files"],
+        acceptance_criteria=[{"id": "c1", "description": "The page works."}],
+        file_scope=["static/"],
+        stack_profile="python-3.12-web",
+        ui_flows=flows,
+    )
+    prompt = adapter.requests[0].messages[-1].content
+    assert "ui_flows_rule" in prompt and '"target": "Checkout"' in prompt

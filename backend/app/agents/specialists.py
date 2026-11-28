@@ -87,6 +87,14 @@ def _contract_json(contract: TaskContract) -> str:
                 "requested feature on them, with real names instead of placeholders. They are "
                 "not complete: create every file they reference."
             )
+        if contract.ui_flows:
+            data["ui_flows"] = contract.ui_flows
+            data["ui_flows_rule"] = (
+                "ui_flows are browser checks the platform runs on the finished page, in order, "
+                "on a server started with the sample data: buttons and links are found by their "
+                "visible name, fields by their label, texts by what is visible. Use exactly "
+                "these names, labels and texts wherever your files render or serve them."
+            )
         if contract.integration_feedback:
             data["integration_feedback"] = [f.model_dump() for f in contract.integration_feedback]
             data["current_files"] = [f.model_dump() for f in contract.current_files]

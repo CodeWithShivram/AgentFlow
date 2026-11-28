@@ -56,6 +56,7 @@ def planner_context(workspaces: ProjectWorkspaces, workflow: Workflow) -> dict[s
         "name": spec.get("name"),
         "stack_profile": spec.get("stack_profile"),
         "architecture": spec.get("architecture"),
+        "ui_flows": spec.get("ui_flows") or [],
         "paths": paths,
         "files": [{"path": path, "content": contents[path]} for path in sorted(contents)],
         "files_left_out": [path for path in paths if path not in contents],

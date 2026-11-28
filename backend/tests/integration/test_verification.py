@@ -716,7 +716,7 @@ def test_a_failed_verification_is_retried_with_corrective_instructions(
     assert claim.attempt_number == 2 and claim.rework_instructions == expected
     configuration = AgentConfiguration.model_validate(CONFIG)
     contract = runner.build_contract(claim, configuration)
-    assert contract.contract_version == 6 and contract.rework_instructions == expected
+    assert contract.contract_version == 7 and contract.rework_instructions == expected
     with session_scope(admin_factory) as s:
         stored = s.execute(
             select(AgentExecution.attempt_number, AgentExecution.rework_instructions).order_by(

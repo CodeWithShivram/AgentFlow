@@ -256,6 +256,6 @@ def test_software_plans_ask_for_sample_data_so_the_first_run_shows_content() -> 
     change = build_request(workflow, current_project={"paths": []}).messages[0].content
     assert "add startup sample data" in change
     assert (SOFTWARE_PROMPT_VERSION, CHANGE_PROMPT_VERSION) == (
-        "software_plan/v7",
-        "software_change/v2",
+        "software_plan/v8",
+        "software_change/v3",
     )

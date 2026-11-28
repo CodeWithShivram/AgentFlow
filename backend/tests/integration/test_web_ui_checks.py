@@ -5,8 +5,10 @@ in the VERIFIED package.
 Needs Docker and the image from `scripts/sandbox.ps1 build`; skipped otherwise (CI builds it).
 """
 
+import json
 import zipfile
 from pathlib import Path
+from typing import Any
 
 import pytest
 from sqlalchemy import select
@@ -17,6 +19,7 @@ from app.artifacts.storage import LocalArtifactStorage
 from app.db.sync_session import session_scope
 from app.execution import outbox
 from app.models import Artifact, ArtifactKind, IntegrationStatus, ProjectIntegration, Workflow
+from app.planning.plan import MOCK_UI_FLOWS
 from app.projects import integration_job, packaging
 from app.projects.profiles import PROFILES
 from app.projects.workspace import ProjectWorkspaces
@@ -115,7 +118,11 @@ def test_the_page_is_stored_as_a_ui_preview_and_packaged(
     with session_scope(admin_factory) as s:
         workflow = s.get(Workflow, graph.workflow_id)
         assert workflow is not None and workflow.project_spec is not None
-        workflow.project_spec = {**workflow.project_spec, "stack_profile": "python-3.12-web"}
+        workflow.project_spec = {
+            **workflow.project_spec,
+            "stack_profile": "python-3.12-web",
+            "ui_flows": MOCK_UI_FLOWS,
+        }
         s.commit()
 
     event = _events(admin_factory, graph, outbox.PROJECT_INTEGRATE)[-1]
@@ -136,6 +143,7 @@ def test_the_page_is_stored_as_a_ui_preview_and_packaged(
         assert run.status == IntegrationStatus.PASSED
         assert [c["name"] for c in run.checks] == ["compile", "tests", "web", "ui"]
         ui = run.checks[-1]
+        assert "1 planned user flow(s) passed" in ui["output"]  # ADR-0062
         artifact = s.get(Artifact, ui["preview_artifact_id"])
         assert artifact is not None and artifact.kind == ArtifactKind.UI_PREVIEW
         assert artifact.media_type == "image/png" and artifact.size_bytes > 1000
@@ -222,3 +230,42 @@ def test_a_first_page_without_any_data_fails_with_a_hint_to_seed_it(
         assert "src/mock_app/main.py: the page shows no data" in result.output
         assert "/api/cart, /api/products" in result.output
         assert "sample records at startup" in result.output
+
+
+def _flows(*flows: Any) -> dict[str, bytes]:
+    return {".agentflow/ui-flows.json": json.dumps(list(flows)).encode()}
+
+
+def test_planned_flows_run_in_the_browser_and_name_the_failing_step(tmp_path: Path) -> None:
+    # Step 9.16 (ADR-0062): the planned flows click, fill and expect on the real page.
+    project = _project(tmp_path, GOOD)
+    passing = DockerSandbox().run(WEB.image, project, _check("ui"), (), _flows(*MOCK_UI_FLOWS))
+    assert passing.succeeded, passing.output
+    assert "1 planned user flow(s) passed" in passing.output
+
+    broken = {
+        "name": "Check out",
+        "steps": [
+            {"action": "fill", "target": "Name", "value": "Ada"},
+            {"action": "click", "target": "Checkout"},
+            {"action": "expect_text", "target": "Order confirmed"},
+        ],
+    }
+    failing = DockerSandbox().run(WEB.image, project, _check("ui"), (), _flows(broken))
+    assert not failing.succeeded
+    assert (
+        "static/index.html: UI flow 'Check out' step 2 (click 'Checkout'): "
+        "no visible button or link named 'Checkout'"
+    ) in failing.output
+
+
+def test_a_project_cannot_supply_the_platforms_files(tmp_path: Path) -> None:
+    # The copy's .agentflow/ folder is replaced by the platform's inputs only (ADR-0062).
+    files = {**GOOD, ".agentflow/ui-flows.json": "[]", ".agentflow/ui-preview.png": "fake"}
+    listing = ["python", "-c", "import os; print(sorted(os.listdir('.agentflow')))"]
+    result = DockerSandbox().run(
+        WEB.image, _project(tmp_path, files), listing, (), _flows(*MOCK_UI_FLOWS)
+    )
+    assert result.succeeded and "['ui-flows.json']" in result.output
+    with pytest.raises(ValueError, match="directly in .agentflow/"):
+        DockerSandbox().run(WEB.image, tmp_path, listing, (), {"src/x.py": b""})
