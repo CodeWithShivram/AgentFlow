@@ -33,12 +33,51 @@ class StackProfile:
     preview: tuple[str, str] | None = None
     # Capabilities project tasks of this profile may require (besides the Developer's).
     extra_task_skills: tuple[str, ...] = ()
+    # Minimal working versions of key files (ADR-0061), given to the tasks whose scope covers
+    # them. `<package>` stands for the project's package folder under src/.
+    starter_files: tuple[tuple[str, str], ...] = ()
 
 
 # The image's preinstalled dependencies, linked into the throwaway copy of the project.
 _LINK_DEPS = "ln -sfn /opt/deps/node_modules node_modules"
 
 _PYTEST_COMMAND = "PYTHONPATH=src:. python -m pytest -q -p no:cacheprovider --import-mode=importlib"
+
+
+# Starter files of the web profile (ADR-0061): the structure the web and ui checks need.
+_WEB_STARTER_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>App name</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header><h1>App name</h1></header>
+  <main id="app" aria-live="polite"><p>Loading...</p></main>
+</body>
+</html>
+"""
+_WEB_STARTER_MAIN = """from pathlib import Path
+
+from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+
+app = FastAPI(title="App name")
+# src/<package>/main.py -> the project root, whatever the working directory is.
+STATIC_DIR = Path(__file__).resolve().parents[2] / "static"
+
+
+@app.get("/api/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+# Define every /api route above this line: the static mount catches all other paths.
+app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
+"""
 
 PROFILES: dict[str, StackProfile] = {
     profile.id: profile
@@ -98,6 +137,10 @@ PROFILES: dict[str, StackProfile] = {
             ),
             preview=("ui", ".agentflow/ui-preview.png"),
             extra_task_skills=("ui_development",),
+            starter_files=(
+                ("static/index.html", _WEB_STARTER_HTML),
+                ("src/<package>/main.py", _WEB_STARTER_MAIN),
+            ),
         ),
         StackProfile(
             id="node-24-typescript",

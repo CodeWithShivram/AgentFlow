@@ -59,6 +59,7 @@ from app.models import (
     WorkspaceRole,
 )
 from app.projects.context import dependency_files, fix_context
+from app.projects.starters import starters_for
 from app.projects.workspace import ProjectWorkspaces
 from app.schemas.agents import AgentConfiguration
 from app.services.usage import record_tool_invocation
@@ -128,6 +129,7 @@ class Claim:
     # Integration fix tasks (ADR-0056).
     integration_feedback: list[dict[str, Any]] = field(default_factory=list)
     current_files: list[dict[str, Any]] = field(default_factory=list)
+    starter_files: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -339,6 +341,12 @@ def claim(
         dependency_files=project_files,
         integration_feedback=feedback,
         current_files=current_files,
+        # New code only: fix and change tasks build on the project's current files instead.
+        starter_files=(
+            starters_for((workflow.project_spec or {}).get("stack_profile"), list(task.file_scope))
+            if task.fixes_integration_id is None and workflow.base_workflow_id is None
+            else []
+        ),
     )
     session.commit()
     return claimed
@@ -381,6 +389,7 @@ def build_contract(
             "dependency_files": claim.dependency_files,
             "integration_feedback": claim.integration_feedback,
             "current_files": claim.current_files,
+            "starter_files": claim.starter_files,
         }
     )
 

@@ -235,6 +235,9 @@ Current state: `progress.md`. Step list and status: `IMPLEMENTATION_PLAN.md`.
 - Sample data (ADR-0060): data apps ship with startup sample records created only while the store is empty
   (planner rule `software_plan/v7`, `software_change/v2`); the web `ui` check fails a first page whose `/api/` JSON
   data responses are all empty, naming `src/<package>/main.py` so rework adds seeding.
+- Starter files (ADR-0061): `StackProfile.starter_files` (web: `static/index.html`, `src/<package>/main.py` with the
+  static mount last) reach new-code tasks whose scope covers them via contract v6 `starter_files` + a fixed
+  `starter_rule` (`app/projects/starters.py`, pure); fix and change tasks get none.
 - Workflow events are append-only.
 
 ## Security

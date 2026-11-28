@@ -77,7 +77,8 @@ class TaskContract(BaseModel):
     # v2 (ADR-0032): adds `rework_instructions`. v3 (ADR-0035): adds `approved_actions`.
     # v4 (ADR-0049): adds `file_scope`, `stack_profile` and `dependency_files`.
     # v5 (ADR-0056): adds `integration_feedback` and `current_files` for integration fix tasks.
-    contract_version: Literal[5] = 5
+    # v6 (ADR-0061): adds `starter_files`.
+    contract_version: Literal[6] = 6
     workspace_id: uuid.UUID
     workflow_id: uuid.UUID
     task_id: uuid.UUID
@@ -112,6 +113,9 @@ class TaskContract(BaseModel):
     # data) and the current content of this task's scope in the project workspace.
     integration_feedback: list[IntegrationFeedback] = []
     current_files: list[DependencyFile] = []
+    # The profile's minimal working versions of files in this task's scope (ADR-0061): platform
+    # templates to build on, never agent or model text.
+    starter_files: list[DependencyFile] = []
 
 
 class CriterionStatus(StrEnum):

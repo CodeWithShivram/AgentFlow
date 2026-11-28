@@ -2,8 +2,17 @@
 
 ## Current position
 - Phase: 9 — Software project generation (ADR-0046; Phases 2–7 and Steps 8.1–8.2 complete; Phase 1 released as `v0.1.0`)
-- Last completed step: 9.14 — Sample data in generated apps (after 9.13; Phase 9 complete since 9.8)
+- Last completed step: 9.15 — Starter files for new web code (Phase 9 complete since 9.8)
 - Next step: 8.4 — Safe workflow replay (then 8.5–8.7), or the Phase 9 follow-ups below; needs the owner's go-ahead
+
+## Step 9.15 — starter files for new web code (ADR-0061, 2026-11-28)
+- **Why:** in 3 of 4 live web runs, the first gate failed on structure (no doctype, lang or title; GET / 404 because static files were not mounted), which cost a fix round each time.
+- **What:**
+  - `StackProfile.starter_files`; the web profile has `static/index.html` (doctype, lang, charset, viewport, title, stylesheet, deferred script) and `src/<package>/main.py` (FastAPI, `/api/health`, then the static mount last from `Path(__file__).parents[2] / "static"`).
+  - `app/projects/starters.starters_for` (pure) picks the starters a scope covers, filling in the package from a `src/<pkg>/` scope entry.
+  - The runner puts them in contract **v6** `starter_files` for new-code tasks only (not fix or change tasks), with a fixed `starter_rule` in the prompt.
+- **Tests:** `tests/unit/test_starters.py` (scope selection; starters have the structure the checks need) and a specialist prompt test. Contract version assertions updated to 6.
+- **Checks:** backend gate. Format, lint, `mypy app tests alembic` and `alembic check` clean; `uv run pytest` **1383 passed, 2 skipped** (14 min). The live effect is measured with Step 9.16's run.
 
 ## Step 9.14 — sample data in generated apps (ADR-0060, 2026-11-28)
 - **Owner's report:** their shop app showed no data. Its products table started empty, and the suggested fix was a startup step seeding about 6 products while the table is empty.

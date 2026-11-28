@@ -78,6 +78,15 @@ def _contract_json(contract: TaskContract) -> str:
         )
         data["stack_profile"] = contract.stack_profile
         data["dependency_files"] = [f.model_dump() for f in contract.dependency_files]
+        if contract.starter_files:
+            data["starter_files"] = [f.model_dump() for f in contract.starter_files]
+            data["starter_rule"] = (
+                "starter_files are the platform's minimal working versions of files in your "
+                "file_scope. Keep their structure (the doctype, lang, title and viewport; every "
+                "/api route defined before the static mount, which comes last) and build the "
+                "requested feature on them, with real names instead of placeholders. They are "
+                "not complete: create every file they reference."
+            )
         if contract.integration_feedback:
             data["integration_feedback"] = [f.model_dump() for f in contract.integration_feedback]
             data["current_files"] = [f.model_dump() for f in contract.current_files]

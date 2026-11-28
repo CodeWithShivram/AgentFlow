@@ -356,3 +356,22 @@ def test_a_change_task_keeps_its_scope_files_and_is_told_the_scope_is_replaced()
     files = {f["path"]: f["content"] for f in submission.outputs["proposed_files"]}
     assert files["README.md"].startswith("# Tool\n") and "Changed by the mock" in files["README.md"]
     assert "src/change/mock_module.py" in files
+
+
+def test_new_web_code_starts_from_the_profiles_starter_files() -> None:
+    # Step 9.15 (ADR-0061): the starter files of the task's scope reach the model, with a rule.
+    from app.projects.starters import starters_for
+
+    starters = starters_for("python-3.12-web", ["static/"])
+    _, adapter, _, _ = _run(
+        DeveloperAgent,
+        required_skills=["code_generation"],
+        deliverables=["files"],
+        acceptance_criteria=[{"id": "c1", "description": "The page works."}],
+        file_scope=["static/"],
+        stack_profile="python-3.12-web",
+        starter_files=starters,
+    )
+    prompt = adapter.requests[0].messages[-1].content
+    assert "starter_rule" in prompt and "create every file they reference" in prompt
+    assert "<!DOCTYPE html>" in prompt and "change_rule" not in prompt
